@@ -1,0 +1,87 @@
+services:
+  web:
+    container_name: web
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile.dev
+    env_file:
+      - ./src/.env
+    volumes:
+      - staticfiles:/app/src/staticfiles
+      - ./src/.env:/app/src/.env
+    command: >
+      sh -c "python /app/src/manage.py wait_for_db &&
+             python /app/src/manage.py collectstatic --no-input &&
+             PYTHONPATH=/app/src gunicorn --workers 2 --bind 0.0.0.0:8000 relister.wsgi:application"
+    networks:
+      - internal_network
+    depends_on:
+      - redis
+
+  redis:
+    container_name: redis
+    restart: unless-stopped
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --appendonly yes --databases 2
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      retries: 3
+      timeout: 5s
+    networks:
+      - internal_network
+
+  beat-scheduler:
+    container_name: beat-scheduler
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile.dev
+    volumes:
+      - log_files:/app/logs
+      - ./src/.env:/app/src/.env
+      - ./bot-accounts.json:/app/bot-accounts.json
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - redis
+      - web
+    command: >
+      sh -c "python /app/src/manage.py wait_for_db &&
+             python /app/src/manage.py migrate &&
+             celery -A relister beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    networks:
+      - internal_network
+
+ 
+  nginx:
+    container_name: nginx
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    ports:
+      - "8000:80"
+    volumes:
+      - staticfiles:/staticfiles
+    networks:
+      - internal_network
+    depends_on:
+      - web
+
+
+volumes:
+  staticfiles:
+  log_files:
+
+networks:
+  internal_network:
+    driver: overlay
+    external: true

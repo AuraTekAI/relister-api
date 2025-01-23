@@ -1,0 +1,88 @@
+services:
+  web:
+    container_name: web
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    command: >
+      sh -c "python /app/src/manage.py wait_for_db &&
+             python /app/src/manage.py runserver 0.0.0.0:8000"
+    networks:
+      - internal_network
+    depends_on:
+      - db
+      - redis
+
+  redis:
+    container_name: redis
+    restart: unless-stopped
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --databases 2
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      retries: 3
+      timeout: 5s
+    networks:
+      - internal_network
+
+  db:
+    container_name: db
+    restart: unless-stopped
+    image: postgres:16-alpine
+    ports:
+      - "15432:5432"
+    volumes:
+      - local-db-data:/var/lib/postgresql/data
+    env_file:
+      - ./src/.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal_network
+
+  beat-scheduler:
+    container_name: beat-scheduler
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - db
+      - redis
+      - web
+    command: >
+      sh -c "python /app/src/manage.py wait_for_db &&
+         python /app/src/manage.py migrate &&
+         celery -A relister beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler &
+         celery -A relister worker --loglevel=info --hostname=relister_worker@%h -Q scheduling_queue,error_handler_queue,generic_email_queue, -E --concurrency=10"
+    networks:
+      - internal_network
+
+
+volumes:
+  local-db-data:
+
+networks:
+  internal_network:
+    driver: bridge
