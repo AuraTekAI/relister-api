@@ -3,8 +3,8 @@
 
 
 ## Run docker version:
-- Ensure you have copied the `.env` file inside the `src` directory at(`ConTXT/contxt/src`). This can be done by running `cp .env.sample .env` in the `src` directory and customise the `.env` file as required.
-- Also for running docker version on local for testing make sure that you have docker and docker compose installed on your system. Run the below command inside `ConTXT/contxt` directory:
+- Ensure you have copied the `.env` file inside the `src` directory . This can be done by running `cp .env.sample .env` in the `src` directory and customise the `.env` file as required.
+
 
     - `docker compose up -d --build`
 
