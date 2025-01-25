@@ -18,4 +18,3 @@ setuptools==75.1.0
 beautifulsoup4==4.12.3
 djangorestframework_simplejwt==5.4.0
 django-filter==23.2
-django-cors-headers==4.2.0

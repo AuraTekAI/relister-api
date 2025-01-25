@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import os
@@ -38,18 +37,15 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
 
     # User defined apps
-
     'accounts',
-    # Third part apps
+
+    # Third party apps
     "django_celery_beat",
     "rest_framework",
     "corsheaders",
     "drf_yasg",
     'rest_framework_simplejwt',
     'django_filters',
-    'corsheaders',
-
-
 ]
 
 MIDDLEWARE = [
@@ -217,6 +213,45 @@ REDIS_PORT = env('REDIS_PORT')
 REDIS_DB = env('REDIS_DB')
 REDIS_PASSWORD = env('REDIS_PASSWORD')
 REDIS_URL = env('REDIS_URL')
+
+
+
+
+
+
+
+
+
+# CORS Settings
+CORS_ALLOW_ALL_ORIGINS = True  # Only use this for development
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # React default port
+    "http://127.0.0.1:3000",
+]
+
+# Optional: If you need to allow specific HTTP methods
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+# Optional: If you need to allow specific headers
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
 
 
 

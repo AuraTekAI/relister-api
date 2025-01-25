@@ -4,12 +4,13 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework import status, generics
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import smart_bytes
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from accounts.models import User
-from accounts.serializers import SetNewPasswordSerializer
+from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -51,4 +52,33 @@ class SetNewPasswordAPIView(generics.GenericAPIView):
             serializer.is_valid(raise_exception=True)
             return Response({'success': True, 'message': 'Password reset success'}, status=status.HTTP_200_OK)
         return Response({'Failed': 'Link has been expired'}, status=status.HTTP_404_NOT_FOUND)
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = UserRegistrationSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response({
+                'success': True,
+                'message': 'Registration successful',
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'name': user.name,
+                    'phone': user.phone,
+                    'address': user.address
+                }
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            response.data['status'] = 200
+        return response
     
