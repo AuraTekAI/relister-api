@@ -38,6 +38,7 @@ INSTALLED_APPS = [
 
     # User defined apps
     'accounts',
+    'VehicleListing',
 
     # Third party apps
     "django_celery_beat",
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
     "drf_yasg",
     'rest_framework_simplejwt',
     'django_filters',
+    
 ]
 
 MIDDLEWARE = [
