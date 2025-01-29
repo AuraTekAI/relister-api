@@ -12,7 +12,9 @@ images_folder = "/home/stem-digital/Desktop/relister-api/src/static/images"
 # Ensure the images folder exists
 os.makedirs(images_folder, exist_ok=True)
 
-def get_listings(url):
+
+
+def get_listings(url,user):
     
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
@@ -24,6 +26,8 @@ def get_listings(url):
         try:
             response = client.get(base_url)
             response_data = response.json()
+            if not response_data:
+                return response_data["error"] 
             title=response_data["adHeadingData"]["title"]
             price=response_data["adPriceData"]["amount"]
             description=response_data["description"]
@@ -55,6 +59,7 @@ def get_listings(url):
                 raise HTTPException(status_code=500, detail=f"Error downloading the image: {e}")
 
             vehicle_listing=VehicleListing.objects.create(
+                user=user,
                 list_id=list_id,
                 year=year,
                 body_type=body_type,
@@ -82,8 +87,6 @@ def get_listings(url):
         except Exception as e:
             error_detail = getattr(e, "response", {}).get("data", str(e))
             return error_detail
-            raise HTTPException(status_code=500, detail={
-                "error": str(e),
-                "details": error_detail
-            })
+    
+
 

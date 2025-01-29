@@ -5,6 +5,7 @@ from accounts.models import User
 
 
 class VehicleListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     list_id = models.CharField(max_length=255)
     year = models.CharField(max_length=255)
     body_type = models.CharField(max_length=255)
@@ -24,8 +25,8 @@ class VehicleListing(models.Model):
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
-class import_listing_from_url(models.Model):
-    # user = models.ForeignKey(User, on_delete=models.CASCADE)
+class ListingUrl(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

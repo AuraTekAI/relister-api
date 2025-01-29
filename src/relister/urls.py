@@ -2,7 +2,6 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
-
 from rest_framework import permissions
 
 from drf_yasg.views import get_schema_view
@@ -25,7 +24,10 @@ urlpatterns = [
     # Admin routes
     path("admin/", admin.site.urls),
     path('api/', include('accounts.urls')),
-
+    # path('import-url/', import_url, name='import_url'),
+    path('api/vehicle-listing/',include('VehicleListing.urls')),
+    path('api/all-vehicle-listing/',include('VehicleListing.urls')),
+    path('api/all-urls/',include('VehicleListing.urls')),
 
 ]
 if settings.ENVIRONMENT == 'DEVELOPMENT' or settings.ENVIRONMENT == 'LOCAL':
