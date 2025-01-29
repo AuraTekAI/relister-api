@@ -26,8 +26,6 @@ urlpatterns = [
     path('api/', include('accounts.urls')),
     # path('import-url/', import_url, name='import_url'),
     path('api/vehicle-listing/',include('VehicleListing.urls')),
-    path('api/all-vehicle-listing/',include('VehicleListing.urls')),
-    path('api/all-urls/',include('VehicleListing.urls')),
 
 ]
 if settings.ENVIRONMENT == 'DEVELOPMENT' or settings.ENVIRONMENT == 'LOCAL':

@@ -5,17 +5,10 @@ import requests
 import os
 
 API_KEY = "4fa8ea3f06670db603cdf3d47d50e0b5346b90e3"
-
-# Define the path to the images folder
-images_folder = "/home/stem-digital/Desktop/relister-api/src/static/images"
-
-# Ensure the images folder exists
+images_folder = "/home/rana-usama/Documents/Relister Project/relister-api/src/static/images"
 os.makedirs(images_folder, exist_ok=True)
-
-
-
 def get_listings(url,user):
-    
+    print(f"url: {url}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
     list_id = url.split('/')[-1]  # Extract the last part of the URL
@@ -24,29 +17,33 @@ def get_listings(url,user):
         base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
 
         try:
+            dict_data = {}
             response = client.get(base_url)
             response_data = response.json()
             if not response_data:
-                return response_data["error"] 
+                return response_data["error"]
+            print(len(response_data["categoryInfo"]))
+            for current_data in response_data["categoryInfo"]:
+                dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
             price=response_data["adPriceData"]["amount"]
             description=response_data["description"]
             image=response_data["images"][0]["baseurl"]
             location=response_data["adLocationData"]["suburb"]
-            body_type=response_data["categoryInfo"][0]["value"]
-            fuel_type=response_data["categoryInfo"][7]["value"]
-            color=response_data["categoryInfo"][8]["value"]
-            variant=response_data["categoryInfo"][9]["value"]
-            year=response_data["categoryInfo"][11]["value"]
-            model=response_data["categoryInfo"][12]["value"]
-            make=response_data["categoryInfo"][5]["value"]
-            mileage=response_data["categoryInfo"][6]["value"]
+            body_type=dict_data["Body Type"]
+            fuel_type=dict_data["Fuel Type"]
+            color=dict_data["Colour"]
+            variant=dict_data["Variant"]
+            year=dict_data["Year"]
+            model=dict_data["Model"]
+            make=dict_data["Make"]
+            mileage=dict_data["Odometer"]
 
 
             # Download the image and save it locally    
-            image_name = os.path.basename(image)  # Get image name from the URL
-            image_extension = os.path.splitext(image_name)[1]  # Extract the image extension
-            new_image_name = f"{list_id}_image{image_extension}"  # Construct new image name
+            image_name = os.path.basename(image)
+            image_extension = os.path.splitext(image_name)[1] 
+            new_image_name = f"{list_id}_image{image_extension}"  
             local_image_path = os.path.join(images_folder, new_image_name)
 
             try:
@@ -75,18 +72,9 @@ def get_listings(url,user):
                 url=url,
                 location=location
             )
-            # category=response_data["categoryName"]
-            # logging.info(f"CATEGORY : {category}")
-            # logging.info(f"TITLE : {title}")
-            # logging.info(f"PRICE : {price}")
-            # logging.info(f"DESCRIPTION : {description}")
-            # logging.info(f"IMAGE_URL : {image}")
-            # logging.info(f"LOCATION DETAILS : {location['suburb']}, {location['state']}, {location['postcode']}")
+            # print(f"vehicle_listing object: {vehicle_listing}")
             return vehicle_listing
 
         except Exception as e:
             error_detail = getattr(e, "response", {}).get("data", str(e))
             return error_detail
-    
-
-

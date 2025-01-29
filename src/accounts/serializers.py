@@ -11,7 +11,11 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 
         
-
+class UserListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'name', 'is_superuser']
+        read_only_fields = fields
 
 class SetNewPasswordSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
@@ -50,17 +54,15 @@ class SetNewPasswordSerializer(serializers.Serializer):
 
 # Add this new serializer
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password = serializers.CharField(write_only=True, required=True)
     confirm_password = serializers.CharField(write_only=True, required=True)
 
     class Meta:
         model = User
-        fields = ('email', 'password', 'confirm_password', 'name', 'address', 'phone')
+        fields = ('email', 'password', 'confirm_password', 'name')
         extra_kwargs = {
             'name': {'required': True},
-            'email': {'required': True},
-            'phone': {'required': True},
-            'address': {'required': True}
+            'email': {'required': True}
         }
 
     def validate(self, attrs):
@@ -83,8 +85,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'id': user.id,
                 'email': user.email,
                 'name': user.name,
-                'phone': user.phone,
-                'address': user.address,
                 'is_superuser': user.is_superuser,
             },
             'status': 200

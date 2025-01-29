@@ -25,6 +25,8 @@ class VehicleListing(models.Model):
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
+    
+    
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField()

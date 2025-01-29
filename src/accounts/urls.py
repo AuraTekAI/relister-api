@@ -1,5 +1,5 @@
 from rest_framework_simplejwt import views as jwt_views
-from accounts.views import RegisterView, LogoutView, SetNewPasswordAPIView, CustomTokenObtainPairView
+from accounts.views import RegisterView, LogoutView, SetNewPasswordAPIView, CustomTokenObtainPairView, UserListview
 from django.urls import path
 
 urlpatterns = [
@@ -8,4 +8,5 @@ urlpatterns = [
     path("refresh-token/", jwt_views.TokenRefreshView.as_view(), name="refresh_token"),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('password_reset_confirm/', SetNewPasswordAPIView.as_view(), name='password-reset-confirm'),
+    path('users/', UserListview.as_view(), name='users'),
 ]

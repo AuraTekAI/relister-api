@@ -2,7 +2,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import IsAuthenticated,AllowAny
+from rest_framework.permissions import IsAuthenticated,AllowAny , IsAdminUser
 from rest_framework import status, generics
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -10,7 +10,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import smart_bytes
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from accounts.models import User
-from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer
+from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer, UserListSerializer
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -60,6 +60,10 @@ class RegisterView(APIView):
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+            
+            # Generate tokens for automatic login
+            refresh = RefreshToken.for_user(user)
+            
             return Response({
                 'success': True,
                 'message': 'Registration successful',
@@ -67,8 +71,10 @@ class RegisterView(APIView):
                     'id': user.id,
                     'email': user.email,
                     'name': user.name,
-                    'phone': user.phone,
-                    'address': user.address
+                },
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
                 }
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -82,3 +88,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             response.data['status'] = 200
         return response
     
+class UserListview(generics.ListAPIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    serializer_class = UserListSerializer
+    queryset = User.objects.all()
