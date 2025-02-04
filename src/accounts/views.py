@@ -5,7 +5,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated,AllowAny , IsAdminUser
 from rest_framework import status, generics
 from rest_framework_simplejwt.views import TokenObtainPairView
-
+from rest_framework.viewsets import ModelViewSet
+from rest_framework import filters
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import smart_bytes
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -88,7 +89,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             response.data['status'] = 200
         return response
     
-class UserListview(generics.ListAPIView):
-    permission_classes = [IsAuthenticated, IsAdminUser]
-    serializer_class = UserListSerializer
+class UserListview(ModelViewSet):
     queryset = User.objects.all()
+    serializer_class = UserListSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'email']
+    ordering_fields = ['name', 'email']
+    ordering = ['name', 'email']

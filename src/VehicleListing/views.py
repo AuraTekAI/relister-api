@@ -16,9 +16,9 @@ from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
-from .serilizers import VehicleListingSerializer, ListingUrlSerializer
+from .serilizers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials
 import json
 
 # Global variable to store the driver instance
@@ -131,6 +131,24 @@ class VehicleListingViewSet(ModelViewSet):
             return VehicleListing.objects.all().order_by('-updated_at')
         else:
             return VehicleListing.objects.filter(user=user).order_by('-updated_at') 
+        
+class FacebookUserCredentialsViewSet(ModelViewSet):
+    queryset = FacebookUserCredentials.objects.all()
+    serializer_class = FacebookUserCredentialsSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['email']
+    filterset_fields = ['email']
+    ordering_fields = ['email']
+    ordering = ['email']
+    
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return FacebookUserCredentials.objects.all()
+        else:
+            return FacebookUserCredentials.objects.filter(user=user)
         
     
 # def import_url(request):
