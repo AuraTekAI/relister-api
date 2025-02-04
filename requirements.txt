@@ -21,3 +21,4 @@ django-filter==23.2
 requests==2.31.0
 zenrows==1.0.0
 fastapi==0.95.0
+playwright==1.49.1

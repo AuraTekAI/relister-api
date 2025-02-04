@@ -1,12 +1,8 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
 from .models import VehicleListing
-import requests
-import os
 
 API_KEY = "4fa8ea3f06670db603cdf3d47d50e0b5346b90e3"
-images_folder = "/home/rana-usama/Documents/Relister Project/relister-api/src/static/images"
-os.makedirs(images_folder, exist_ok=True)
 def get_listings(url,user):
     print(f"url: {url}")
     if not API_KEY:
@@ -22,7 +18,7 @@ def get_listings(url,user):
             response_data = response.json()
             if not response_data:
                 return response_data["error"]
-            print(len(response_data["categoryInfo"]))
+            # print(len(response_data["categoryInfo"]))
             for current_data in response_data["categoryInfo"]:
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
@@ -38,22 +34,7 @@ def get_listings(url,user):
             model=dict_data["Model"]
             make=dict_data["Make"]
             mileage=dict_data["Odometer"]
-
-
-            # Download the image and save it locally    
-            image_name = os.path.basename(image)
-            image_extension = os.path.splitext(image_name)[1] 
-            new_image_name = f"{list_id}_image{image_extension}"  
-            local_image_path = os.path.join(images_folder, new_image_name)
-
-            try:
-                # Download the image
-                image_response = requests.get(image)
-                image_response.raise_for_status()
-                with open(local_image_path, "wb") as file:
-                    file.write(image_response.content)
-            except requests.exceptions.RequestException as e:
-                raise HTTPException(status_code=500, detail=f"Error downloading the image: {e}")
+            category=response_data["categoryName"]
 
             vehicle_listing=VehicleListing.objects.create(
                 user=user,
@@ -65,12 +46,14 @@ def get_listings(url,user):
                 variant=variant,
                 make=make,
                 mileage=mileage,
+                # category=category,
                 model=model,
                 price=str(price),
                 description=description,
-                images=local_image_path,
+                images=image,
                 url=url,
-                location=location
+                location=location,
+                status="pending"
             )
             # print(f"vehicle_listing object: {vehicle_listing}")
             return vehicle_listing

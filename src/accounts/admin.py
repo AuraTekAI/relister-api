@@ -1,7 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from accounts.models import User
-
+from accounts.models import User, FacebookCredentials
 
 
 class UserAdmin(UserAdmin):
@@ -41,5 +40,10 @@ class UserAdmin(UserAdmin):
         )
     exclude = ('username',)
 
+class FacebookCredentialsAdmin(admin.ModelAdmin):
+    list_display = ('email', 'user','session_cookie' ,'created_at','updated_at')
+    search_fields = ('email', 'user__email')
+    list_filter = ('user',)
 
 admin.site.register(User, UserAdmin)
+admin.site.register(FacebookCredentials, FacebookCredentialsAdmin)
