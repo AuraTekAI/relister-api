@@ -3,9 +3,9 @@ from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer
 from accounts.models import User,FacebookCredentials
-from .models import VehicleListing, ListingUrl, FacebookListing
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing
 import json
 from .facebook_listing import create_marketplace_listing,login_to_facebook
 
@@ -121,6 +121,25 @@ class VehicleListingViewSet(ModelViewSet):
             return VehicleListing.objects.all().order_by('-updated_at')
         else:
             return VehicleListing.objects.filter(user=user).order_by('-updated_at') 
+
+class FacebookUserCredentialsViewSet(ModelViewSet):
+    queryset = FacebookUserCredentials.objects.all()
+    serializer_class = FacebookUserCredentialsSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['email']
+    filterset_fields = ['email']
+    ordering_fields = ['email']
+    ordering = ['email']
+    
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return FacebookUserCredentials.objects.all()
+        else:
+            return FacebookUserCredentials.objects.filter(user=user)
+
     
 
 
