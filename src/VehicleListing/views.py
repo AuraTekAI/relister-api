@@ -4,13 +4,14 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer
-from accounts.models import User,FacebookCredentials
+from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook
-
+from .facebook_listing import create_marketplace_listing,login_to_facebook, search_and_delete
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+
+
 @csrf_exempt
 def import_url_from_gumtree(request):
     if request.method == 'POST':
@@ -39,25 +40,27 @@ def import_url_from_gumtree(request):
         listing_url = ListingUrl.objects.create(url=url, user=user , status='Completed')
 
         vls = VehicleListingSerializer(vehicle_listing)
-        vls.save()
+        # vls.save()
 
         if vehicle_listing:
             print(f"vehicle_listing: {vehicle_listing}")
-            result, message = create_facebook_listing(vehicle_listing)
-            if result:
+            response = create_facebook_listing(vehicle_listing)
+            print(f"response: {response}")
+
+            if response:
                 # Prepare user related listing data
                 user_data = {
                     'url': url,
-                    'message': message
+                    'message': response[1]
                 }
                 return JsonResponse(user_data, status=200)
             else:
-                return JsonResponse({'error': message}, status=200)
+                return JsonResponse({'error': response[1]}, status=200)
         else:
             return JsonResponse({'error': 'Failed to extract data from URL'}, status=400)
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
-from django.views.decorators.csrf import csrf_exempt
+
 @csrf_exempt
 def all_vehicle_listing(request):
     if request.method == 'POST':
@@ -76,17 +79,39 @@ def all_vehicle_listing(request):
             return JsonResponse({'error': 'No vehicle listings found'}, status=200)
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
-from django.views.decorators.csrf import csrf_exempt
 @csrf_exempt
 def all_urls(request):
     if request.method == 'POST':
         email = request.POST.get('email')
         user = User.objects.get(email=email).first()
         if not user:
-            return JsonResponse({'error': 'User not found'}, status=404)
+            return JsonResponse({'error': 'User not found'}, status=200)
         all_urls = ListingUrl.objects.filter(user=user)
         return JsonResponse(all_urls, status=200)
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
+    return JsonResponse({'error': 'Invalid request method'}, status=200)
+
+
+@csrf_exempt
+def delete_facebook_listing(request):
+    if request.method == 'POST':
+        listing_id=request.POST.get("id")
+        vehicle_listing=VehicleListing.objects.filter(id=listing_id).first()
+        if vehicle_listing:
+            if vehicle_listing.status == "pending" or vehicle_listing.status == "failed":
+                vehicle_listing.delete()
+                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+            else:
+                search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
+                credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
+                response = search_and_delete(search_query,credentials.session_cookie)
+                if response[0]:
+                    vehicle_listing.delete()
+                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+                else:
+                    return JsonResponse({'error': response[1]}, status=200)
+        else:
+            return JsonResponse({'error': 'Listing not found'}, status=200)
+    return JsonResponse({'error': 'Invalid request method'}, status=200)
 
 class ListingUrlViewSet(ModelViewSet):
     queryset = ListingUrl.objects.all()
@@ -140,17 +165,13 @@ class FacebookUserCredentialsViewSet(ModelViewSet):
         else:
             return FacebookUserCredentials.objects.filter(user=user)
 
-    
-
-
-
 
 
 
 
 def create_facebook_listing(vehicle_listing):
     try:
-        credentials = FacebookCredentials.objects.filter(user=vehicle_listing.user).first()
+        credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         print(credentials.email)
         if credentials and credentials.session_cookie:
             listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
@@ -163,11 +184,13 @@ def create_facebook_listing(vehicle_listing):
                     vehicle_listing.save()
                     return True, "Listing created successfully"
                 else:
-                    FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                    vehicle_listing.status="failed"
-                    vehicle_listing.save()
-                    return False, message
-            elif credentials and not credentials.session_cookie:
+                    return False, "Listing already exists"
+            else:
+                FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
+                vehicle_listing.status="failed"
+                vehicle_listing.save()
+                return False, message
+        elif credentials and not credentials.session_cookie:
                 session_cookie =login_to_facebook(credentials.email, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
@@ -182,14 +205,16 @@ def create_facebook_listing(vehicle_listing):
                             vehicle_listing.save()
                             return True, "Listing created successfully"
                         else:
-                            FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                            vehicle_listing.status="failed"
-                            vehicle_listing.save()
-                            return False, message
+                            return False, "Listing already exists"
                     else:
-                        return False, "Login failed."
+                        FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
+                        vehicle_listing.status="failed"
+                        vehicle_listing.save()
+                        return False, message
                 else:
-                    return False, "No credentials found for the user"
+                    return False, "Login failed."
+        else:
+            return False, "No credentials found for the user"
              
     except Exception as e:
         vehicle_listing.status="failed"

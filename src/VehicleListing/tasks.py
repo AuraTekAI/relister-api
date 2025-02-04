@@ -2,7 +2,7 @@ from relister.celery import CustomExceptionHandler
 from celery import shared_task
 from VehicleListing.facebook_listing import create_marketplace_listing,login_to_facebook
 from VehicleListing.models import VehicleListing, FacebookListing
-from accounts.models import FacebookCredentials
+from accounts.models import FacebookUserCredentials
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def create_facebook_marketplace_listing_task(self):
@@ -10,7 +10,7 @@ def create_facebook_marketplace_listing_task(self):
     for listing in pending_listings:
         try:
             print(listing.user)
-            credentials = FacebookCredentials.objects.filter(user=listing.user).first()
+            credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
             print(credentials.email)
             if credentials and credentials.session_cookie:
                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)

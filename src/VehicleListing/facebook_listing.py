@@ -98,11 +98,11 @@ def select_vehicle_type(page):
         logging.error(f"Error selecting vehicle type: {e}")
         raise
 
-def create_marketplace_listing(listing,session_cookie):
+def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
 
@@ -113,35 +113,35 @@ def create_marketplace_listing(listing,session_cookie):
 
             # Vehicle details
             vehicle_details = {
-                "Year": listing.year,
-                "Make": listing.make,
-                "Model": listing.model,
-                "Price": str(listing.price),
-                "Location": listing.location,
-                "Mileage": str(listing.mileage),
-                "Description": listing.description
+                "Year": vehicle_listing.year,
+                "Make": vehicle_listing.make,
+                "Model": vehicle_listing.model,
+                "Price": str(vehicle_listing.price),
+                "Location": vehicle_listing.location,
+                "Mileage": str(vehicle_listing.mileage),
+                "Description": vehicle_listing.description
             }
 
             # Select vehicle type
             select_vehicle_type(page)
 
             # Download the image and save it locally    
-            image_name = os.path.basename(listing.images)
+            image_name = os.path.basename(vehicle_listing.images)
             image_extension = os.path.splitext(image_name)[1] 
-            new_image_name = f"{listing.list_id}_image{image_extension}"  
+            new_image_name = f"{vehicle_listing.list_id}_image{image_extension}"  
             local_image_path = os.path.join(images_folder, new_image_name)
 
             try:
                 # Download the image
-                image_response = requests.get(listing.images)
+                image_response = requests.get(vehicle_listing.images)
                 image_response.raise_for_status()
                 with open(local_image_path, "wb") as file:
                     file.write(image_response.content)
             except requests.exceptions.RequestException as e:
-                raise HTTPException(status_code=500, detail=f"Error downloading the image: {e}")
+                    return False, f"Error downloading the image: {e}"
                         # Check if the image was downloaded successfully
             if not os.path.exists(local_image_path):
-                raise Exception("Image download failed, file does not exist.")
+                return False, "Image download failed, file does not exist."
 
             # Upload images
             image_input = page.locator("//input[@type='file']").first
@@ -197,30 +197,32 @@ def create_marketplace_listing(listing,session_cookie):
                 )
 
             # Select dropdowns
-            select_dropdown_option(page, "Body style", "Sedan")
-            select_dropdown_option(page, "Fuel type", listing.fuel_type)
-            select_dropdown_option(page, "Vehicle condition", "Excellent")
+            # select_dropdown_option(page, "Body style", "Sedan")
+            # select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
+            # select_dropdown_option(page, "Vehicle condition", "Excellent")
 
-            #            # Select dropdowns
-            # if listing.body_style not in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
-            #     select_dropdown_option(page, "Body style", "Other")
-            # else:
-            #     select_dropdown_option(page, "Body style", listing.body_style)
+            # Select dropdowns
+            if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
+                select_dropdown_option(page, "Body style", vehicle_listing.variant)
+            else:
+                select_dropdown_option(page, "Body style", "Other")
             
-            # if listing.fuel_type not in ["Petrol - Premium Unleaded", "Petrol - Regular Unleaded", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
-            #     select_dropdown_option(page, "Fuel type", "Other")
-            # else:
-            #     select_dropdown_option(page, "Fuel type", listing.fuel_type)
+            if vehicle_listing.fuel_type in ["Petrol", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
+                select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
+            elif vehicle_listing.fuel_type == "Petrol - Premium Unleaded":
+                select_dropdown_option(page, "Fuel type", "Petrol")
+            elif vehicle_listing.fuel_type == "Petrol - Regular Unleaded":
+                select_dropdown_option(page, "Fuel type", "Petrol")
+            else:
+                select_dropdown_option(page, "Fuel type", "Other")
             
-            # if listing.vehicle_condition not in ["Excellent", "Good", "Fair", "Poor"]:
-            #     select_dropdown_option(page, "Vehicle condition", "Other")
-            # else:
-            #     select_dropdown_option(page, "Vehicle condition", listing.vehicle_condition)
             
-            # if listing.transmission not in ["Automatic Transmission", "Manual Transmission"]:
-            #     select_dropdown_option(page, "Transmission", "Other")
+            select_dropdown_option(page, "Vehicle condition", "Excellent")
+            
+            # if vehicle_listing.transmission in ["Automatic Transmission", "Manual Transmission"]:
+            #     select_dropdown_option(page, "Transmission", vehicle_listing.transmission)
             # else:
-            #     select_dropdown_option(page, "Transmission", listing.transmission)
+            #     select_dropdown_option(page, "Transmission", "Automatic Transmission")
 
             # Submit form
             for button_text in ["Next", "Publish"]:
@@ -235,7 +237,7 @@ def create_marketplace_listing(listing,session_cookie):
                     random_sleep(3, 5)  # Random delay after clicking the button
                 except Exception as e:
                     logging.error(f"Failed to click {button_text} button: {e}")
-                    raise
+                    return False, "Failed to click button"
 
             # Close browser
             browser.close()
@@ -251,7 +253,7 @@ def login_to_facebook( email, password,session_cookie=None):
     """Log in to Facebook automatically."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
             # Navigate to Facebook login page
@@ -317,3 +319,94 @@ def handle_cookie_consent(page):
             logging.info("Cookie consent handled.")
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
+
+
+
+def search_and_delete(search_query,session_cookie):
+    """
+    Searches for a specific product listing and deletes it if found.
+    :param search_query: The title of the listing to search and delete.
+    """
+    try:
+        with sync_playwright() as p:
+            # Launch the browser
+            browser = p.chromium.launch(headless=True)  # Use headless=True for silent mode
+            context = browser.new_context(storage_state=session_cookie)
+            page = context.new_page()
+
+            # Navigate to the selling page
+            logging.info("Navigating to selling page...")
+            page.goto("https://www.facebook.com/marketplace/you/selling")
+            page.wait_for_timeout(5000)
+
+            # Perform search
+            logging.info(f"Searching for listing: {search_query}")
+            search_input = page.locator(
+                "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+            ).first
+
+            if search_input:
+                search_input.fill(search_query)
+                search_input.press("Enter")
+                time.sleep(5)  # Wait for results to load
+
+                # Check if any matching listings exist
+                matches = page.locator(f"//*[contains(text(), '{search_query}')]").all()
+                if matches:
+                    logging.info(f"Found {len(matches)} matching listing(s). Proceeding to delete...")
+                
+                # Open the "More options" menu
+                more_options = page.locator(
+                    "//div[contains(@class, 'x1n2onr6')]//div[contains(@class, 'x1ja2u2z')]//div[@aria-label and contains(@aria-label, 'More options')]"
+                ).first
+                more_options.click()
+                page.wait_for_timeout(2000)
+
+                # Select "Delete listing" from the menu
+                delete_option = page.wait_for_selector(
+                    "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
+                    state="visible",
+                )
+                delete_option.click()
+                page.wait_for_timeout(2000)
+
+                # Confirm deletion
+                logging.info("Confirming deletion...")
+                confirm_delete = page.wait_for_selector(
+                    "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
+                    state="visible",
+                )
+                confirm_delete.click()
+                page.wait_for_timeout(3000)
+
+                 # Handle post-deletion actions
+                logging.info("Clicking 'I'd rather not answer'...")
+                not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                if not_answer_button:
+                    not_answer_button.click()
+                    page.wait_for_timeout(2000)
+                else:
+                    logging.warning("'I'd rather not answer' button not found.")
+                    return False, "I'd rather not answer' button not found."
+
+                logging.info("Clicking 'Next'...")
+                next_button = page.locator("//*[text()='Next']").first
+                if next_button and next_button.is_visible():
+                    next_button.click()
+                    page.wait_for_timeout(2000)
+                    browser.close()
+                    logging.info("Process completed successfully.")
+                    return True, "Successfully deleted the  listing"
+                else:
+                    logging.warning("'Next' button not found.")
+                    return False, "'Next' button not found."
+
+            else:
+                logging.warning("Search input not found.")
+                browser.close()
+                logging.info("Process completed successfully.")
+                return False, "Search input not found."
+            
+    except Exception as e:
+        logging.error(f"Error in search_and_delete: {e}")
+        return False, str(e)

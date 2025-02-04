@@ -15,7 +15,6 @@ class VehicleListing(models.Model):
     model = models.CharField(max_length=100)
     price = models.CharField(max_length=255)
     mileage = models.IntegerField()
-    # category = models.CharField(max_length=255)
     description = models.TextField()
     images = models.URLField()  # Store image URLs as JSON
     location = models.CharField(max_length=255)
@@ -42,6 +41,7 @@ class FacebookUserCredentials(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     email = models.EmailField(unique=True , null=True)
     password = models.CharField(max_length=255)
+    session_cookie = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
