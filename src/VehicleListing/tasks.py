@@ -1,8 +1,7 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
 from VehicleListing.facebook_listing import create_marketplace_listing,login_to_facebook
-from VehicleListing.models import VehicleListing, FacebookListing
-from accounts.models import FacebookUserCredentials
+from VehicleListing.models import VehicleListing, FacebookListing,FacebookUserCredentials
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def create_facebook_marketplace_listing_task(self):
