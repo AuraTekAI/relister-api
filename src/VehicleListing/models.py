@@ -1,10 +1,10 @@
 from django.db import models
 from accounts.models import User
+# from django.conf import settings
 # Create your models here.
 
-
-
 class VehicleListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     list_id = models.CharField(max_length=255)
     year = models.CharField(max_length=255)
     body_type = models.CharField(max_length=255)
@@ -19,13 +19,16 @@ class VehicleListing(models.Model):
     images = models.URLField()  # Store image URLs as JSON
     location = models.CharField(max_length=255)
     url = models.URLField()
+    status = models.CharField(max_length=255, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
-class import_listing_from_url(models.Model):
-    # user = models.ForeignKey(User, on_delete=models.CASCADE)
+    
+    
+class ListingUrl(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -33,4 +36,22 @@ class import_listing_from_url(models.Model):
     error_message = models.TextField(null=True)
     def __str__(self):
         return f"{self.url}"
+    
+class FacebookUserCredentials(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    email = models.EmailField(unique=True , null=True)
+    password = models.CharField(max_length=255)
+    session_cookie = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
+
+class FacebookListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
+    status = models.CharField(max_length=255, null=True)
+    error_message = models.TextField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"{self.listing.make} {self.listing.model}"
