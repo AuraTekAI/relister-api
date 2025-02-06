@@ -35,6 +35,7 @@ def get_listings(url,user):
             make=dict_data["Make"]
             mileage=dict_data["Odometer"]
             category=response_data["categoryName"]
+            
 
             vehicle_listing=VehicleListing.objects.create(
                 user=user,

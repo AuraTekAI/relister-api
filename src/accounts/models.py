@@ -75,14 +75,4 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
     
 
-class FacebookCredentials(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    email = models.EmailField(verbose_name="email", max_length=60, unique=True)
-    password = models.CharField(max_length=255)
-    session_cookie=models.JSONField(null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):  
-        return self.email
 

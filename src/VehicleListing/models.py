@@ -16,9 +16,11 @@ class VehicleListing(models.Model):
     price = models.CharField(max_length=255)
     mileage = models.IntegerField()
     description = models.TextField()
+    # transmission=models.CharField(max_length=255)
     images = models.URLField()  # Store image URLs as JSON
     location = models.CharField(max_length=255)
     url = models.URLField()
+
     status = models.CharField(max_length=255, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
