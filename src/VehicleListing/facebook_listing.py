@@ -14,8 +14,8 @@ images_folder = os.path.join(os.path.dirname(__file__), '..', 'static', 'images'
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
-        element.type(char, delay=random.uniform(10, 20))  
-        time.sleep(random.uniform(0.005, 0.0005))
+        element.type(char, delay=random.uniform(5, 10))  
+        time.sleep(random.uniform(0.0005, 0.005))
 
 def random_sleep(min_seconds, max_seconds):
     """Sleep for a random amount of time."""
@@ -100,9 +100,9 @@ def select_vehicle_type(page):
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
-    try:
+    try:    
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
 
@@ -118,6 +118,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Model": vehicle_listing.model,
                 "Price": str(vehicle_listing.price),
                 "Location": vehicle_listing.location,
+                # "Location" : "Karachi,Pakistan",
                 "Mileage": str(vehicle_listing.mileage),
                 "Description": vehicle_listing.description
             }
@@ -219,10 +220,13 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             
             select_dropdown_option(page, "Vehicle condition", "Excellent")
             
-            # if vehicle_listing.transmission in ["Automatic Transmission", "Manual Transmission"]:
-            #     select_dropdown_option(page, "Transmission", vehicle_listing.transmission)
-            # else:
-            #     select_dropdown_option(page, "Transmission", "Automatic Transmission")
+            if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
+                select_dropdown_option(page, "Transmission", "Automatic transmission")
+            elif vehicle_listing.transmission in ["Manual Transmission", "Manual"]:
+                select_dropdown_option(page, "Transmission", "Manual transmission")
+
+            else:
+                select_dropdown_option(page, "Transmission", "Automatic transmission")
 
             # Submit form
             for button_text in ["Next", "Publish"]:
@@ -257,7 +261,7 @@ def login_to_facebook( email, password,session_cookie=None):
             context = browser.new_context()
             page = context.new_page()
             # Navigate to Facebook login page
-            page.goto("https://www.facebook.com/login", timeout=10000)
+            page.goto("https://www.facebook.com/login", timeout=30000)
             logging.info("Navigated to Facebook login page.")
             random_sleep(2, 3)  # Random delay after page load
 
@@ -269,19 +273,21 @@ def login_to_facebook( email, password,session_cookie=None):
             email_field.scroll_into_view_if_needed()
             human_like_typing(email_field, email)
             logging.info("Email filled successfully.")
+            random_sleep(2,5)
 
             # Fill password field
             password_field = page.locator('input[name="pass"]').first
             password_field.scroll_into_view_if_needed()
             human_like_typing(password_field, password)
             logging.info("Password filled successfully.")
+            random_sleep(2,5)
 
             # Click login button
             login_button = page.locator('button[name="login"]').first
             login_button.scroll_into_view_if_needed()
             login_button.click()
             logging.info("Login button clicked.")
-            random_sleep(3, 5)
+            random_sleep(2, 5)
 
             # Verify login success
             if is_logged_in(page):
@@ -302,7 +308,7 @@ def login_to_facebook( email, password,session_cookie=None):
 def is_logged_in(page):
     """Check if the user is logged in."""
     try:
-        page.wait_for_selector("//div[@aria-label='Facebook' or @aria-label='Home' or contains(@class, 'x1qhmfi1')]", timeout=10000)
+        page.wait_for_selector("//div[@aria-label='Facebook' or @aria-label='Home' or contains(@class, 'x1qhmfi1')]", timeout=30000)
         return True
     except:
         return False
@@ -410,3 +416,4 @@ def search_and_delete(search_query,session_cookie):
     except Exception as e:
         logging.error(f"Error in search_and_delete: {e}")
         return False, str(e)
+        
