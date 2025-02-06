@@ -34,7 +34,7 @@ def get_listings(url,user):
             model=dict_data["Model"]
             make=dict_data["Make"]
             mileage=dict_data["Odometer"]
-            category=response_data["categoryName"]
+            transmission=dict_data["Transmission"]
             
 
             vehicle_listing=VehicleListing.objects.create(
@@ -47,9 +47,9 @@ def get_listings(url,user):
                 variant=variant,
                 make=make,
                 mileage=mileage,
-                # category=category,
                 model=model,
                 price=str(price),
+                transmission=transmission,
                 description=description,
                 images=image,
                 url=url,

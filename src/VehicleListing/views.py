@@ -10,6 +10,10 @@ import json
 from .facebook_listing import create_marketplace_listing,login_to_facebook, search_and_delete
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.exceptions import NotFound
+from rest_framework import viewsets
 
 
 @csrf_exempt
@@ -58,6 +62,7 @@ def import_url_from_gumtree(request):
                 return JsonResponse({'error': response[1]}, status=200)
         else:
             return JsonResponse({'error': 'Failed to extract data from URL'}, status=400)
+
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 
@@ -91,27 +96,30 @@ def all_urls(request):
     return JsonResponse({'error': 'Invalid request method'}, status=200)
 
 
-@csrf_exempt
-def delete_facebook_listing(request):
-    if request.method == 'POST':
-        listing_id=request.POST.get("id")
-        vehicle_listing=VehicleListing.objects.filter(id=listing_id).first()
-        if vehicle_listing:
-            if vehicle_listing.status == "pending" or vehicle_listing.status == "failed":
-                vehicle_listing.delete()
-                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-            else:
-                search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
-                credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
-                response = search_and_delete(search_query,credentials.session_cookie)
-                if response[0]:
-                    vehicle_listing.delete()
-                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-                else:
-                    return JsonResponse({'error': response[1]}, status=200)
-        else:
-            return JsonResponse({'error': 'Listing not found'}, status=200)
-    return JsonResponse({'error': 'Invalid request method'}, status=200)
+# @csrf_exempt
+# def delete_facebook_listing(request):
+#     if request.method == 'POST':
+#         data = json.loads(request.body)
+#         print(data)
+#         listing_id=data["id"]
+#         print(listing_id)
+#         vehicle_listing=VehicleListing.objects.filter(id=listing_id).first()
+#         if vehicle_listing:
+#             if vehicle_listing.status == "pending" or vehicle_listing.status == "failed":
+#                 vehicle_listing.delete()
+#                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+#             else:
+#                 search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
+#                 credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
+#                 response = search_and_delete(search_query,credentials.session_cookie)
+#                 if response[0]:
+#                     vehicle_listing.delete()
+#                     return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+#                 else:
+#                     return JsonResponse({'error': response[1]}, status=200)
+#         else:
+#             return JsonResponse({'error': 'Listing not found'}, status=200)
+#     return JsonResponse({'error': 'Invalid request method'}, status=200)
 
 class ListingUrlViewSet(ModelViewSet):
     queryset = ListingUrl.objects.all()
@@ -145,7 +153,24 @@ class VehicleListingViewSet(ModelViewSet):
         if user.is_superuser:
             return VehicleListing.objects.all().order_by('-updated_at')
         else:
-            return VehicleListing.objects.filter(user=user).order_by('-updated_at') 
+            return VehicleListing.objects.filter(user=user).order_by('-updated_at')
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        print(f"instance: {instance}")
+        # Proceed with deletion
+        vehicle_listing=VehicleListing.objects.filter(id=instance.id).first()
+        search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
+        credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
+        response = search_and_delete(search_query,credentials.session_cookie)
+        if response[0]:
+            vehicle_listing.delete()
+            return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+        else:
+            return JsonResponse({'error': response[1]}, status=200)
+
+
+        
 
 class FacebookUserCredentialsViewSet(ModelViewSet):
     queryset = FacebookUserCredentials.objects.all()
@@ -173,7 +198,7 @@ def create_facebook_listing(vehicle_listing):
     try:
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         print(credentials.email)
-        if credentials and credentials.session_cookie:
+        if credentials and credentials.session_cookie != {}:
             listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
             if listing_created:
                 print(message)
@@ -190,7 +215,7 @@ def create_facebook_listing(vehicle_listing):
                 vehicle_listing.status="failed"
                 vehicle_listing.save()
                 return False, message
-        elif credentials and not credentials.session_cookie:
+        elif credentials and credentials.session_cookie == {}:
                 session_cookie =login_to_facebook(credentials.email, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
