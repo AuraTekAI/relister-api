@@ -14,8 +14,8 @@ images_folder = os.path.join(os.path.dirname(__file__), '..', 'static', 'images'
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
-        element.type(char, delay=random.uniform(50, 100))  
-        time.sleep(random.uniform(0.05, 0.1))
+        element.type(char, delay=random.uniform(10, 20))  
+        time.sleep(random.uniform(0.005, 0.0005))
 
 def random_sleep(min_seconds, max_seconds):
     """Sleep for a random amount of time."""
@@ -102,7 +102,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
 
