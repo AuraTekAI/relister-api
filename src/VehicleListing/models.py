@@ -25,7 +25,7 @@ class VehicleListing(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
+    def _str_(self):
         return f"{self.year} {self.make} {self.model}"
     
     
@@ -36,7 +36,7 @@ class ListingUrl(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=255, null=True)
     error_message = models.TextField(null=True)
-    def __str__(self):
+    def _str_(self):
         return f"{self.url}"
     
 class FacebookUserCredentials(models.Model):
@@ -55,5 +55,5 @@ class FacebookListing(models.Model):
     error_message = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    def __str__(self):
+    def _str_(self):
         return f"{self.listing.make} {self.listing.model}"

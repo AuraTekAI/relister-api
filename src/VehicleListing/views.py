@@ -96,30 +96,27 @@ def all_urls(request):
     return JsonResponse({'error': 'Invalid request method'}, status=200)
 
 
-# @csrf_exempt
-# def delete_facebook_listing(request):
-#     if request.method == 'POST':
-#         data = json.loads(request.body)
-#         print(data)
-#         listing_id=data["id"]
-#         print(listing_id)
-#         vehicle_listing=VehicleListing.objects.filter(id=listing_id).first()
-#         if vehicle_listing:
-#             if vehicle_listing.status == "pending" or vehicle_listing.status == "failed":
-#                 vehicle_listing.delete()
-#                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-#             else:
-#                 search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
-#                 credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
-#                 response = search_and_delete(search_query,credentials.session_cookie)
-#                 if response[0]:
-#                     vehicle_listing.delete()
-#                     return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-#                 else:
-#                     return JsonResponse({'error': response[1]}, status=200)
-#         else:
-#             return JsonResponse({'error': 'Listing not found'}, status=200)
-#     return JsonResponse({'error': 'Invalid request method'}, status=200)
+@csrf_exempt
+def delete_facebook_listing(request):
+    if request.method == 'POST':
+        listing_id=request.POST.get("id")
+        vehicle_listing=VehicleListing.objects.filter(id=listing_id).first()
+        if vehicle_listing:
+            if vehicle_listing.status == "pending" or vehicle_listing.status == "failed":
+                vehicle_listing.delete()
+                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+            else:
+                search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
+                credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
+                response = search_and_delete(search_query,credentials.session_cookie)
+                if response[0]:
+                    vehicle_listing.delete()
+                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+                else:
+                    return JsonResponse({'error': response[1]}, status=200)
+        else:
+            return JsonResponse({'error': 'Listing not found'}, status=200)
+    return JsonResponse({'error': 'Invalid request method'}, status=200)
 
 class ListingUrlViewSet(ModelViewSet):
     queryset = ListingUrl.objects.all()
@@ -245,7 +242,3 @@ def create_facebook_listing(vehicle_listing):
         vehicle_listing.status="failed"
         vehicle_listing.save()
         return False, "Failed to create listing"
-            
-        
-
-

@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import import_url_from_gumtree, all_vehicle_listing, all_urls, VehicleListingViewSet, ListingUrlViewSet,delete_facebook_listing,FacebookUserCredentialsViewSet
+from .views import import_url_from_gumtree, all_vehicle_listing, all_urls, VehicleListingViewSet, ListingUrlViewSet, FacebookUserCredentialsViewSet
 
 urlpatterns = [
     path('import/', import_url_from_gumtree, name='import_url_from_gumtree'),
