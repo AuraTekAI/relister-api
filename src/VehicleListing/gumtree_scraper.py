@@ -1,10 +1,15 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
 from .models import VehicleListing
+import logging
 
+
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 API_KEY = "4fa8ea3f06670db603cdf3d47d50e0b5346b90e3"
 def get_listings(url,user):
-    print(f"url: {url}")
+    logging.info(f"url: {url}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
     list_id = url.split('/')[-1]  # Extract the last part of the URL
@@ -56,9 +61,10 @@ def get_listings(url,user):
                 location=location,
                 status="pending"
             )
-            # print(f"vehicle_listing object: {vehicle_listing}")
+            logging.info(f"vehicle_listing: {vehicle_listing}")
             return vehicle_listing
 
         except Exception as e:
             error_detail = getattr(e, "response", {}).get("data", str(e))
+            logging.error(f"Error in get_listings: {error_detail}")
             return error_detail

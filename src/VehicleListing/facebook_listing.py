@@ -4,17 +4,16 @@ import time
 from playwright.sync_api import sync_playwright
 import os
 import requests
-from fastapi import HTTPException
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 images_folder = os.path.join(os.path.dirname(__file__), '..', 'static', 'images')
 
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
-        element.type(char, delay=random.uniform(5, 10))  
+        element.type(char, delay=random.uniform(2, 5))  
         time.sleep(random.uniform(0.0005, 0.005))
 
 def random_sleep(min_seconds, max_seconds):
@@ -324,42 +323,86 @@ def handle_cookie_consent(page):
             logging.info("Cookie consent handled.")
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
+        
 
 
-
-def search_and_delete(search_query,session_cookie):
-    """
-    Searches for a specific product listing and deletes it if found.
-    :param search_query: The title of the listing to search and delete.
-    """
+def perform_search_and_delete(search_for,session_cookie):
     try:
         with sync_playwright() as p:
-            # Launch the browser
-            browser = p.chromium.launch(headless=False)  # Use headless=True for silent mode
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
-
-            # Navigate to the selling page
-            logging.info("Navigating to selling page...")
             page.goto("https://www.facebook.com/marketplace/you/selling")
             page.wait_for_timeout(5000)
+            logging.info("Navigated to Facebook Marketplace vehicle listing page.")
+            random_sleep(3, 5)
+            if not search_for.strip():
+                return False, "Search value is required"
+            
 
-            # Perform search
-            logging.info(f"Searching for listing: {search_query}")
-            search_input = page.locator(
-                "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+            input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+            input_element = page.locator(input_locator).first
+
+            if not input_element.is_visible():
+                return False, "Search input not found"
+
+            logging.info(f"Your Listings: Search: {search_for}")
+            input_element.click()
+            input_element.fill(search_for)
+            page.wait_for_timeout(5000)  # Wait for 5 seconds
+
+            matches_found = get_count_of_elements_with_text(search_for,page)
+            if matches_found > 0:
+                logging.info(f"Success (Attempt 1): Found ({matches_found}) matches for ({search_for})")
+                # Open the "More options" menu
+                more_options = page.locator(
+                "//div[contains(@class, 'x1n2onr6')]//div[contains(@class, 'x1ja2u2z')]//div[@aria-label and contains(@aria-label, 'More options')]"
             ).first
+                more_options.click()
+                page.wait_for_timeout(2000)
 
-            if search_input:
-                search_input.fill(search_query)
-                search_input.press("Enter")
-                time.sleep(5)  # Wait for results to load
+                # Select "Delete listing" from the menu
+                delete_option = page.wait_for_selector(
+                    "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
+                    state="visible",
+                )
+                delete_option.click()
+                page.wait_for_timeout(2000)
 
-                # Check if any matching listings exist
-                matches = page.locator(f"//*[contains(text(), '{search_query}')]").all()
-                if matches:
-                    logging.info(f"Found {len(matches)} matching listing(s). Proceeding to delete...")
-                
+                # Confirm deletion
+                logging.info("Confirming deletion...")
+                confirm_delete = page.wait_for_selector(
+                    "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
+                    state="visible",
+                )
+                confirm_delete.click()
+                page.wait_for_timeout(3000)
+
+                # Handle post-deletion actions
+                logging.info("Clicking 'I'd rather not answer'...")
+                not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                if not_answer_button:
+                    not_answer_button.click()
+                    page.wait_for_timeout(2000)
+                else:
+                    logging.warning("'I'd rather not answer' button not found.")
+                    return True, "I'd rather not answer' button not found.but successfully delte the product"
+
+                logging.info("Clicking 'Next'...")
+                next_button = page.locator("//*[text()='Next']").first
+                if next_button and next_button.is_visible():
+                    next_button.click()
+                    page.wait_for_timeout(2000)
+                    logging.info("Process completed successfully.")
+                    return True, "Successfully deleted the  listing"
+                else:
+                    logging.warning("'Next' button not found.")
+                    return True, "'Next' button not found.but successfully delte the product"
+
+            page.wait_for_timeout(5000)  # Wait for another 5 seconds
+            matches_found = get_count_of_elements_with_text(search_for,page)
+            if matches_found > 0:
+                logging.info(f"Success (Attempt 2): Found ({matches_found}) matches for ({search_for})")
                 # Open the "More options" menu
                 more_options = page.locator(
                     "//div[contains(@class, 'x1n2onr6')]//div[contains(@class, 'x1ja2u2z')]//div[@aria-label and contains(@aria-label, 'More options')]"
@@ -384,7 +427,7 @@ def search_and_delete(search_query,session_cookie):
                 confirm_delete.click()
                 page.wait_for_timeout(3000)
 
-                 # Handle post-deletion actions
+                # Handle post-deletion actions
                 logging.info("Clicking 'I'd rather not answer'...")
                 not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
                 if not_answer_button:
@@ -392,27 +435,33 @@ def search_and_delete(search_query,session_cookie):
                     page.wait_for_timeout(2000)
                 else:
                     logging.warning("'I'd rather not answer' button not found.")
-                    return False, "I'd rather not answer' button not found."
+                    return True, "I'd rather not answer' button not found. but successfully delte the product"
 
                 logging.info("Clicking 'Next'...")
                 next_button = page.locator("//*[text()='Next']").first
                 if next_button and next_button.is_visible():
                     next_button.click()
                     page.wait_for_timeout(2000)
-                    browser.close()
                     logging.info("Process completed successfully.")
                     return True, "Successfully deleted the  listing"
                 else:
                     logging.warning("'Next' button not found.")
-                    return False, "'Next' button not found."
-
-            else:
-                logging.warning("Search input not found.")
-                browser.close()
-                logging.info("Process completed successfully.")
-                return False, "Search input not found."
+                    return True, "'Next' button not found.but successfully delte the product"
             
+
+            didnt_find_locator = "text='We didn't find anything'"
+            if page.locator(didnt_find_locator).is_visible():
+                logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
+                return  True, "didnt_find_anything_displayed"
     except Exception as e:
-        logging.error(f"Error in search_and_delete: {e}")
+        logging.error(f"Error in perform_search_and_delete: {e}")
         return False, str(e)
-        
+
+def get_count_of_elements_with_text( search_for,page):
+    return len(get_elements_with_text(search_for,page))
+
+def get_elements_with_text(search_for,page):
+    locator_case_sensitive = f"text={search_for}"
+    locator_case_insensitive = f"text=/.*{search_for}.*/i"
+    elements = page.locator(locator_case_sensitive).all()
+    return elements if elements else page.locator(locator_case_insensitive).all()
