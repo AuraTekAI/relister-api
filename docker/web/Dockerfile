@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED 1
 # Copy the contents of the current directory (on the host) to the /app directory inside the container.
 COPY . /app
 
-# Set the working directory inside the container to /app.
+# Set the working directory inside the container.
 WORKDIR /app
 
 # Install system dependencies required for Playwright and PostgreSQL
@@ -24,20 +24,20 @@ RUN apt-get update && apt-get install -y \
 # Create a virtual environment
 RUN python -m venv /py
 
+# Set the virtual environment in PATH **before installing anything**
+ENV PATH="/py/bin:$PATH"
+
 # Upgrade pip & setuptools
-RUN /py/bin/pip install --upgrade pip setuptools
+RUN pip install --upgrade pip setuptools
 
 # Install Python dependencies
-RUN /py/bin/pip install -r /app/requirements.txt
+RUN pip install -r /app/requirements.txt
 
-# Install Playwright and its browsers BEFORE switching to a non-root user
-RUN /py/bin/playwright install --with-deps
+# Install Playwright and its browsers **inside the virtual environment**
+RUN playwright install --with-deps
 
 # Create a non-root user for security
 RUN adduser --disabled-password --no-create-home user
-
-# Set the virtual environment in PATH
-ENV PATH="/py/bin:$PATH"
 
 # Switch to non-root user
 USER user
