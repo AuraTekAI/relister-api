@@ -80,11 +80,11 @@ def import_url_from_gumtree(request):
         
         import_url = ImportFromUrl(url)
         is_valid, error_message = import_url.validate()
+
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
-        list_id = url.split('/')[-1]
-        if not list_id.isdigit():
-            return JsonResponse({'error': 'Invalid URL'}, status=200)
+        if import_url.print_url_type() == "Facebook":
+            return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
         if ListingUrl.objects.filter(url=url).exists():
             return JsonResponse({'error': 'URL already exists'}, status=200)
         # Extract data from URL
