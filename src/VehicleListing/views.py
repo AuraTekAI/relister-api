@@ -89,11 +89,9 @@ def import_url_from_gumtree(request):
             return JsonResponse({'error': 'URL already exists'}, status=200)
         # Extract data from URL
         vehicle_listing = get_listings(url,user)
-        listing_url = ListingUrl.objects.create(url=url, user=user , status='Completed')
-        print(f"listing_url: {listing_url}")
-        vls = VehicleListingSerializer(vehicle_listing)
-
         if vehicle_listing:
+            ListingUrl.objects.create(url=url, user=user , status='Completed')
+            vls = VehicleListingSerializer(vehicle_listing)
             print(f"vehicle_listing: {vehicle_listing}")
             thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
             thread.start()
@@ -104,7 +102,7 @@ def import_url_from_gumtree(request):
             }
             return JsonResponse(user_data, status=200)
         else:
-            return JsonResponse({'error': 'Failed to extract data from URL'}, status=200)
+            return JsonResponse({'error': 'Failed to extract data from URL, Check the URL and try again'}, status=200)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 

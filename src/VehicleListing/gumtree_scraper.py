@@ -20,9 +20,13 @@ def get_listings(url,user):
         try:
             dict_data = {}
             response = client.get(base_url)
+            if response.status_code != 200:
+                logging.info(f"Response status code is not 200: {response}")
+                return None
             response_data = response.json()
             if not response_data:
-                return response_data["error"]
+                logging.error(f"Response data is empty: {response}")
+                return None
             for current_data in response_data["categoryInfo"]:
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
@@ -66,4 +70,8 @@ def get_listings(url,user):
         except Exception as e:
             error_detail = getattr(e, "response", {}).get("data", str(e))
             logging.error(f"Error in get_listings: {error_detail}")
-            return error_detail
+            return None
+    else:
+        logging.error(f"Invalid URL: {url}")
+        return None
+    
