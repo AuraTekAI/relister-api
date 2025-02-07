@@ -26,6 +26,8 @@ EXPOSE 8000
 # - postgresql-client: Required to interact with PostgreSQL databases.
 # - build-essential: Contains compilers and libraries needed to build some Python packages.
 # - postgresql and musl: Necessary for interacting with PostgreSQL databases and providing a lightweight C standard library.
+RUN playwright install
+
 RUN python -m venv /py && \
     apt-get update && \
     apt-get install -y postgresql-client curl && \
@@ -46,7 +48,6 @@ RUN python -m venv /py && \
 # Add the virtual environment's bin directory to the PATH environment variable.
 # This ensures that when you run Python or pip commands, they use the executables from the virtual environment.
 ENV PATH="/py/bin:$PATH"
-
 # Switch to the 'user' account created earlier to run the application.
 # This enhances security by avoiding running the application as the root user.
 USER user
