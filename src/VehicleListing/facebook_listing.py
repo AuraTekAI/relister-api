@@ -117,8 +117,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Make": vehicle_listing.make,
                 "Model": vehicle_listing.model,
                 "Price": str(vehicle_listing.price),
-                # "Location": vehicle_listing.location,
-                "Location" : "Karachi,Pakistan",
+                "Location": vehicle_listing.location,
                 "Mileage": str(vehicle_listing.mileage),
                 "Description": vehicle_listing.description
             }
@@ -416,3 +415,4 @@ def search_and_delete(search_query,session_cookie):
     except Exception as e:
         logging.error(f"Error in search_and_delete: {e}")
         return False, str(e)
+        
