@@ -7,7 +7,7 @@ import logging
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-API_KEY = "4fa8ea3f06670db603cdf3d47d50e0b5346b90e3"
+API_KEY = "796fe18ec2b188966a2430dc6e12a966c688d8f0"
 def get_listings(url,user):
     logging.info(f"url: {url}")
     if not API_KEY:
@@ -23,7 +23,6 @@ def get_listings(url,user):
             response_data = response.json()
             if not response_data:
                 return response_data["error"]
-            # print(len(response_data["categoryInfo"]))
             for current_data in response_data["categoryInfo"]:
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
