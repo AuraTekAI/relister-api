@@ -7,10 +7,13 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete
+from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_profile_listings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
+from django.views.decorators.http import require_http_methods
+from rest_framework.decorators import api_view, permission_classes
+
 # @csrf_exempt
 # def import_url_from_gumtree(request):
 #     if request.method == 'POST':
@@ -322,3 +325,40 @@ def create_facebook_marketplace_listing_task(vehicle_listing):
         vehicle_listing.status="failed"
         vehicle_listing.save()
         print(f"Error in create_facebook_marketplace_listing_task: {e}")
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_facebook_profile_listings(request):
+    try:
+        print(request.user)
+        data = json.loads(request.body)
+        profile_url = data.get('profile_url')
+
+        if not profile_url:
+            return JsonResponse({'error': 'Profile URL is required'}, status=400)
+
+        # Get user's Facebook credentials
+        credentials = FacebookUserCredentials.objects.filter(user=request.user).first()
+        if not credentials:
+            return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
+
+        # Get listings using the function
+        success, listings = get_profile_listings(profile_url, credentials.session_cookie)
+
+        if success:
+            return JsonResponse({
+                'count': len(listings),
+                'next': None,
+                'previous': None,
+                'results': listings
+            }, status=200)
+        else:
+            return JsonResponse({
+                'count': 0,
+                'results': []
+            }, status=400)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

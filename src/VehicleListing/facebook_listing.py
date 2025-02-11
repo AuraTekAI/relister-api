@@ -13,8 +13,8 @@ images_folder = os.path.join(os.path.dirname(__file__), '..', 'static', 'images'
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
-        element.type(char, delay=random.uniform(2, 5))  
-        time.sleep(random.uniform(0.0005, 0.005))
+        element.type(char, delay=random.uniform(0.0001, 0.0005))  
+        time.sleep(random.uniform(0.0001, 0.0001))
 
 def random_sleep(min_seconds, max_seconds):
     """Sleep for a random amount of time."""
@@ -30,7 +30,13 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
             input_element = page.locator(selector).first
             input_element.scroll_into_view_if_needed()
             input_element.clear()
-            human_like_typing(input_element, value)  
+            
+            # Use instant fill for description
+            if field_name == "Description":
+                input_element.fill(value)  # Instant input
+            else:
+                human_like_typing(input_element, value)
+                
             logging.info(f"{field_name} filled successfully.")
             break
         except Exception as e:
@@ -50,7 +56,7 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
     if use_tab:
         input_element.press("Tab")
 
-    random_sleep(1, 2)  # Random delay after filling the field
+    random_sleep(0.1, 0.5)  # Random delay after filling the field
     return True
 
 def select_dropdown_option(page, field_name, option_text):
@@ -60,7 +66,7 @@ def select_dropdown_option(page, field_name, option_text):
         dropdown = page.locator(f"//label[@aria-label='{field_name}' and @role='combobox']").first
         dropdown.scroll_into_view_if_needed()
         dropdown.click()
-        random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+        random_sleep(0.1, 0.5)  # Random delay after clicking the dropdown
 
         try:
             option = page.locator(f"//div[@role='option' or @role='listbox']//span[contains(text(), '{option_text}')]").first
@@ -71,7 +77,7 @@ def select_dropdown_option(page, field_name, option_text):
             dropdown.press("Enter")
 
         logging.info(f"{field_name} selected successfully.")
-        random_sleep(1, 2)  # Random delay after selecting the option
+        random_sleep(0.1, 0.5)  # Random delay after selecting the option
         return True
     except Exception as e:
         logging.error(f"Error selecting {field_name}: {e}")
@@ -84,14 +90,14 @@ def select_vehicle_type(page):
         vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
         vehicle_dropdown.scroll_into_view_if_needed()
         vehicle_dropdown.click()
-        random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+        random_sleep(0.1, 0.5)  # Random delay after clicking the dropdown
 
         car_option = page.locator("//div[@role='option'][contains(.,'Car/Truck')]").first
         car_option.scroll_into_view_if_needed()
         car_option.click()
 
         logging.info("Vehicle type (Car/Truck) selected successfully.")
-        random_sleep(1, 2)  # Random delay after selecting the option
+        random_sleep(0.1, 0.5)  # Random delay after selecting the option
         return True
     except Exception as e:
         logging.error(f"Error selecting vehicle type: {e}")
@@ -108,7 +114,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             # Navigate to the vehicle listing page
             page.goto("https://www.facebook.com/marketplace/create/vehicle", timeout=60000)
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(2, 3)  # Random delay after page load
+            random_sleep(0.1, 0.5)  # Random delay after page load
 
             # Vehicle details
             vehicle_details = {
@@ -146,7 +152,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             image_input = page.locator("//input[@type='file']").first
             image_input.set_input_files(local_image_path)
             logging.info("Photos uploaded successfully.")
-            random_sleep(2, 3)  # Random delay after uploading images
+            random_sleep(0.1, 0.5)  # Random delay after uploading images
 
             # Fill form fields
             select_dropdown_option(page, "Year", vehicle_details["Year"])
@@ -191,7 +197,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     field,
                     vehicle_details[field],
                     selectors,
-                    use_suggestion=(field in ["Make", "Model", "Location"]),
+                    use_suggestion=(field in ["Location"]),
                     use_tab=(field in ["Mileage", "Price", "Description"])
                 )
 
@@ -227,6 +233,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 select_dropdown_option(page, "Transmission", "Automatic transmission")
 
             # Submit form
+            random_sleep(0.2, 0.3)
             for button_text in ["Next", "Publish"]:
                 try:
                     button = page.locator(
@@ -236,7 +243,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     button.scroll_into_view_if_needed()
                     button.click()
                     logging.info(f"Clicked {button_text} button.")
-                    random_sleep(3, 5)  # Random delay after clicking the button
+                    random_sleep(0.1, 0.5)  # Random delay after clicking the button
                 except Exception as e:
                     logging.error(f"Failed to click {button_text} button: {e}")
                     return False, "Failed to click button"
@@ -251,6 +258,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
     except Exception as e:
         logging.error(f"Error in create_marketplace_listing: {e}")
         return False, str(e)
+
 def login_to_facebook( email, password,session_cookie=None):
     """Log in to Facebook automatically."""
     try:
@@ -261,7 +269,7 @@ def login_to_facebook( email, password,session_cookie=None):
             # Navigate to Facebook login page
             page.goto("https://www.facebook.com/login", timeout=30000)
             logging.info("Navigated to Facebook login page.")
-            random_sleep(2, 3)  # Random delay after page load
+            random_sleep(0.1, 0.5)  # Random delay after page load
 
             # Handle cookie consent
             handle_cookie_consent(page)
@@ -271,21 +279,21 @@ def login_to_facebook( email, password,session_cookie=None):
             email_field.scroll_into_view_if_needed()
             human_like_typing(email_field, email)
             logging.info("Email filled successfully.")
-            random_sleep(2,5)
+            random_sleep(0.1, 0.5)
 
             # Fill password field
             password_field = page.locator('input[name="pass"]').first
             password_field.scroll_into_view_if_needed()
             human_like_typing(password_field, password)
             logging.info("Password filled successfully.")
-            random_sleep(2,5)
+            random_sleep(0.1, 0.5)
 
             # Click login button
             login_button = page.locator('button[name="login"]').first
             login_button.scroll_into_view_if_needed()
             login_button.click()
             logging.info("Login button clicked.")
-            random_sleep(2, 5)
+            random_sleep(0.1, 0.5)
 
             # Verify login success
             if is_logged_in(page):
@@ -324,8 +332,6 @@ def handle_cookie_consent(page):
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
         
-
-
 def perform_search_and_delete(search_for,session_cookie):
     try:
         with sync_playwright() as p:
@@ -335,7 +341,7 @@ def perform_search_and_delete(search_for,session_cookie):
             page.goto("https://www.facebook.com/marketplace/you/selling")
             page.wait_for_timeout(5000)
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(3, 5)
+            random_sleep(1,2)
             if not search_for.strip():
                 return False, "Search value is required"
             
@@ -465,3 +471,62 @@ def get_elements_with_text(search_for,page):
     locator_case_insensitive = f"text=/.*{search_for}.*/i"
     elements = page.locator(locator_case_sensitive).all()
     return elements if elements else page.locator(locator_case_insensitive).all()
+
+def get_profile_listings(profile_url, session_cookie):
+    """Get all listings from any Facebook Marketplace profile URL."""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(storage_state=session_cookie)
+            page = context.new_page()
+            
+            # Navigate to profile URL
+            page.goto(profile_url)
+            
+            # Wait for the profile's listings section to load
+            page.wait_for_selector('h2:has-text("listings")', timeout=10000)
+            
+            # Get all listing elements under the user's listings section
+            listings = []
+            elements = page.query_selector_all('div[style*="max-width: 175px"] a[href*="/marketplace/item/"]')
+            
+            for element in elements:
+                try:
+                    # Extract price - using more specific selector from the HTML
+                    price_element = element.query_selector('.x193iq5w[dir="auto"]:has-text("PKR")')
+                    price = price_element.text_content() if price_element else None
+                    
+                    # Extract title
+                    title_element = element.query_selector('.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6[style*="-webkit-box"]')
+                    title = title_element.text_content() if title_element else None
+                    
+                    # Extract location
+                    location_element = element.query_selector('.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft')
+                    location = location_element.text_content() if location_element else None
+                    
+                    # Extract image URL
+                    # img_element = element.query_selector('img.xt7dq6l')
+                    # image_url = img_element.get_attribute('src') if img_element else None
+                    
+                    # Extract listing URL
+                    listing_url = 'https://www.facebook.com'+element.get_attribute('href')
+                    
+                    if all([price, title, location, listing_url]):
+                        listings.append({
+                            'price': price,
+                            'title': title,
+                            'location': location,
+                            # 'image_url': image_url,
+                            'listing_url': listing_url
+                        })
+                except Exception as e:
+                    logging.error(f"Error parsing listing: {str(e)}")
+                    continue
+            
+            browser.close()
+            logging.info(f"Found {len(listings)} listings from user's profile")
+            return True, listings
+
+    except Exception as e:
+        logging.error(f"Error in get_profile_listings: {e}")
+        return False, str(e)
