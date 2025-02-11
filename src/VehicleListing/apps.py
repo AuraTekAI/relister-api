@@ -16,7 +16,7 @@ def create_periodic_task(sender, **kwargs):
     from django_celery_beat.models import PeriodicTask, IntervalSchedule
     
     schedule, created = IntervalSchedule.objects.get_or_create(
-        every=20,
+        every=30,
         period=IntervalSchedule.MINUTES,
     )
     PeriodicTask.objects.update_or_create(
@@ -24,5 +24,17 @@ def create_periodic_task(sender, **kwargs):
         defaults={  
             "interval": schedule,
             "task": "VehicleListing.tasks.create_facebook_marketplace_listing_task",
+        },
+    )
+
+    schedule, created = IntervalSchedule.objects.get_or_create(
+        every=1,
+        period=IntervalSchedule.DAYS,
+    )
+    PeriodicTask.objects.update_or_create(
+        name="Relist_Facebook_Listings",
+        defaults={
+            "interval": schedule,
+            "task": "VehicleListing.tasks.relist_facebook_marketplace_listing_task",
         },
     )

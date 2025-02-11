@@ -14,4 +14,6 @@ You will only need to run the above command if you are running the project for t
 - To create a user for testing the web interface, run the below command and follow the prompts:
     - `docker exec -it web python src/manage.py migrate`. 
     - `docker exec -it web python src/manage.py createsuperuser`
+- Manually install playwright browsers in the container by running `playwright install` in the container.
+    - `docker-compose exec web playwright install`
     

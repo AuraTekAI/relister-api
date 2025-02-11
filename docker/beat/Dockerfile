@@ -18,25 +18,41 @@ WORKDIR /app
 # Install the PostgreSQL client, which is required to interact with PostgreSQL databases.
 # Install additional necessary packages: build-essential (for compiling Python packages with native extensions),
 # postgresql (for the database system), and musl (for lightweight and fast C standard library).
-RUN python -m venv /py && \
-    apt-get update && \
-    apt-get install -y postgresql-client curl && \
-    apt-get install -y --no-install-recommends build-essential postgresql musl && \
-    # Upgrade pip to the latest version.
-    /py/bin/pip install --upgrade pip && \
-    /py/bin/pip install --upgrade setuptools && \
-    # Install Python dependencies from the requirements.txt file.
-    /py/bin/pip install -r /app/requirements.txt && \
-    # Clean up by removing unnecessary packages to reduce the image size.
-    apt-get purge -y --auto-remove build-essential postgresql musl && \
-    rm -rf /var/lib/apt/lists/* && \
-    # Add a new user named 'user' with no home directory and disabled password (for security).
-    adduser --disabled-password --no-create-home user
+# Install system dependencies required for Playwright and PostgreSQL
+RUN apt-get update && apt-get install -y \
+    curl wget unzip \
+    libnss3 libatk1.0-0 libx11-xcb1 libxcb-dri3-0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libasound2 libpangocairo-1.0-0 \
+    libpango-1.0-0 libcairo2 \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
-# Add the virtual environment's bin directory to the PATH environment variable.
-# This ensures that the correct Python and pip executables are used by default.
+# Set the virtual environment in PATH **before installing anything**
 ENV PATH="/py/bin:$PATH"
 
-# Switch to the 'user' account created earlier, which is a non-root user.
-# Running the application as a non-root user increases security.
+# Upgrade pip & setuptools
+RUN pip install --upgrade pip setuptools
+
+# Install Python dependencies
+RUN pip install -r /app/requirements.txt
+
+# Install Playwright **without browsers** (since you install them manually inside the container)
+RUN playwright install --with-deps --dry-run
+
+# Install Playwright dependencies
+RUN playwright install-deps
+
+# Create a non-root user for security
+RUN adduser --disabled-password --home /app user
+
+# Ensure the non-root user has necessary permissions
+RUN chown -R user:user /app
+
+# Set Playwright’s cache directory to an accessible location
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/playwright-browsers
+RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH && chown -R user:user $PLAYWRIGHT_BROWSERS_PATH
+
+# Switch to non-root user
 USER user
+

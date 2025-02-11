@@ -2,7 +2,6 @@
 FROM python:3.12-slim
 
 # Set environment variables to optimize Python behavior inside the Docker container.
-ENV PYTHONDOWNWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 # Copy the contents of the current directory (on the host) to the /app directory inside the container.
@@ -33,11 +32,23 @@ RUN pip install --upgrade pip setuptools
 # Install Python dependencies
 RUN pip install -r /app/requirements.txt
 
-# Install Playwright and its browsers **inside the virtual environment**
-RUN playwright install --with-deps
+# Install Playwright **without browsers** (since you install them manually inside the container)
+RUN playwright install --with-deps --dry-run
+
+# Install Playwright dependencies
+RUN playwright install-deps
 
 # Create a non-root user for security
-RUN adduser --disabled-password --no-create-home user
+RUN adduser --disabled-password --home /app user
+
+# Ensure the non-root user has necessary permissions
+RUN chown -R user:user /app
+
+# Set Playwright’s cache directory to an accessible location
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/playwright-browsers
+RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH && chown -R user:user $PLAYWRIGHT_BROWSERS_PATH
 
 # Switch to non-root user
 USER user
+
+
