@@ -476,57 +476,146 @@ def get_profile_listings(profile_url, session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             
+            # Set shorter timeout for navigation
+            page.set_default_timeout(10000)
+            
             # Navigate to profile URL
             page.goto(profile_url)
+            page.wait_for_timeout(1000)
+
+            # Extract profile ID from URL
+            profile_id = profile_url.split('/')[-1] if profile_url.endswith('/') else profile_url.split('/')[-1]
             
-            # Wait for the profile's listings section to load
-            page.wait_for_selector('h2:has-text("listings")', timeout=10000)
+            # More specific selectors for profile listings
+            listing_selectors = [
+                f'div[style*="max-width: 175px"] a[href*="/marketplace/item/"]',
+                # f'a[href*="/marketplace/item/"]'
+            ]
             
-            # Get all listing elements under the user's listings section
+            # First hover over the listings container
+            listings_container = page.locator('div[style*="max-width: 175px"]').first
+            listings_container.hover()
+            
+            previous_count = 0
+            same_count_iterations = 0
+            max_same_count = 4  # Increased to 4 attempts
+            start_time = time.time()
+            max_time = 75  # Increased to 75 seconds for more thorough scrolling
+            
+            while same_count_iterations < max_same_count and (time.time() - start_time) < max_time:
+                # Enhanced scroll sequence
+                for _ in range(4):  # Increased to 4 scrolls per iteration
+                    # Multiple scroll methods
+                    page.keyboard.press("PageDown")
+                    page.wait_for_timeout(400)
+                    
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(400)
+                    
+                    page.evaluate("""
+                        window.scrollTo(0, document.body.scrollHeight);
+                        window.scrollTo(0, document.body.scrollHeight + 1500);
+                    """)
+                    page.wait_for_timeout(400)
+                    
+                    # Try to scroll the last element into view
+                    try:
+                        for selector in listing_selectors:
+                            elements = page.query_selector_all(selector)
+                            if elements:
+                                elements[-1].scroll_into_view_if_needed()
+                                break
+                    except Exception:
+                        continue
+                
+                # Get current count using all selectors
+                max_count = 0
+                for selector in listing_selectors:
+                    try:
+                        count = len(page.query_selector_all(selector))
+                        max_count = max(max_count, count)
+                    except:
+                        continue
+                
+                logging.info(f"Current item count: {max_count}")
+                
+                if max_count > previous_count:
+                    previous_count = max_count
+                    same_count_iterations = 0
+                    logging.info(f"Found new items ({max_count}), continuing to scroll...")
+                else:
+                    same_count_iterations += 1
+                    logging.info(f"No new items found. Attempt {same_count_iterations} of {max_same_count}")
+            
+            # Final thorough scroll
+            for _ in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+                page.keyboard.press("End")
+                page.wait_for_timeout(1000)
+            
+            # Use sets to track seen listings
+            seen_ids = set()
+            seen_titles = set()
             listings = []
-            elements = page.query_selector_all('div[style*="max-width: 175px"] a[href*="/marketplace/item/"]')
             
-            for element in elements:
-                try:
-                    # Extract price - using more specific selector from the HTML
-                    price_element = element.query_selector('.x193iq5w[dir="auto"]:has-text("PKR")')
-                    price = price_element.text_content() if price_element else None
-                    
-                    # Extract title
-                    title_element = element.query_selector('.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6[style*="-webkit-box"]')
-                    title = title_element.text_content() if title_element else None
-                    
-                    # Extract location
-                    location_element = element.query_selector('.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft')
-                    location = location_element.text_content() if location_element else None
-                    
-                    # Extract image URL
-                    # img_element = element.query_selector('img.xt7dq6l')
-                    # image_url = img_element.get_attribute('src') if img_element else None
-                    
-                    # Extract listing URL
-                    listing_url = 'https://www.facebook.com'+element.get_attribute('href')
-                    
-                    if all([price, title, location, listing_url]):
-                        listings.append({
-                            'price': price,
+            for selector in listing_selectors:
+                elements = page.query_selector_all(selector)
+                for element in elements:
+                    try:
+                        href = element.get_attribute('href')
+                        if not href or '/marketplace/item/' not in href:
+                            continue
+                            
+                        listing_id = href.split('/item/')[1].split('/')[0]
+                        
+                        # Extract title first for duplicate checking
+                        title_element = element.query_selector('span[style*="-webkit-line-clamp: 2"]')
+                        if not title_element:
+                            continue
+                            
+                        title = title_element.text_content()
+                        
+                        # Skip if we've seen this ID or title
+                        if listing_id in seen_ids or title in seen_titles:
+                            continue
+                            
+                        # Extract other details
+                        price_element = element.query_selector('span:has-text("$")')
+                        location_element = element.query_selector('span[class*="xlyipyv"]')
+                        
+                        price = price_element.text_content() if price_element else "Price not available"
+                        location = location_element.text_content() if location_element else "Location not available"
+                        
+                        
+                        listing = {
+                            'id': listing_id,
                             'title': title,
+                            'price': price,
                             'location': location,
-                            # 'image_url': image_url,
-                            'listing_url': listing_url
-                        })
-                except Exception as e:
-                    logging.error(f"Error parsing listing: {str(e)}")
-                    continue
+                            'url': f"https://www.facebook.com/marketplace/item/{listing_id}/",
+                        }
+                        
+                        # Add to tracking sets and listings list
+                        seen_ids.add(listing_id)
+                        seen_titles.add(title)
+                        listings.append(listing)
+                        logging.info(f"Successfully extracted listing: {title}")
+                        
+                    except Exception as e:
+                        logging.error(f"Error extracting listing details: {str(e)}")
+                        continue
             
             browser.close()
-            logging.info(f"Found {len(listings)} listings from user's profile")
+            logging.info(f"Successfully extracted {len(listings)} unique listings")
             return True, listings
-
+            
     except Exception as e:
         logging.error(f"Error in get_profile_listings: {e}")
-        return False, str(e)
+        if 'browser' in locals():
+            browser.close()
+        return False, []
