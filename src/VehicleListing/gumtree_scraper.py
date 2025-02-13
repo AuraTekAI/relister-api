@@ -2,7 +2,8 @@ from fastapi import HTTPException
 from zenrows import ZenRowsClient
 from .models import VehicleListing
 import logging
-
+import time
+import random
 
 
 # Configure logging
@@ -31,6 +32,7 @@ def get_listings(url,user):
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
             price=response_data["adPriceData"]["amount"]
+            seller_id=response_data["adPosterData"]["randomUserId"] 
             description=response_data["description"]
             image=response_data["images"][0]["baseurl"]
             location=response_data["adLocationData"]["suburb"]
@@ -62,6 +64,7 @@ def get_listings(url,user):
                 images=image,
                 url=url,
                 location=location,
+                gumtree_profile_id=seller_id,
                 status="pending"
             )
             logging.info(f"vehicle_listing: {vehicle_listing}")
@@ -74,4 +77,152 @@ def get_listings(url,user):
     else:
         logging.error(f"Invalid URL: {url}")
         return None
-    
+
+
+def get_gumtree_listing_details(listing_id):
+    """
+    Fetches listing details from the Gumtree API using ZenRowsClient.
+
+    Parameters:
+        listing_id (str): The ID of the listing to retrieve.
+
+    Returns:
+        dict: A dictionary containing the details of the listing, or None if an error occurs.
+    """
+    if not API_KEY:
+        logging.error("ZENROWS_API_KEY is not configured in the environment variables")
+        return None
+
+    client = ZenRowsClient(API_KEY)
+    base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{listing_id}"
+    logging.info(f"Fetching listing details from URL: {base_url}")
+
+    try:
+        response = client.get(base_url)
+        if response.status_code != 200:
+            logging.error(f"Non-200 response code received: {response.status_code}")
+            return None
+
+        response_data = response.json()
+        if not response_data:
+            logging.error("Empty response data received")
+            return None
+
+        # Extract and structure data
+        category_info = {item['name']: item['value'] for item in response_data.get("categoryInfo", [])}
+        listing_details = {
+            "title": response_data.get("adHeadingData", {}).get("title"),
+            "price": response_data.get("adPriceData", {}).get("amount"),
+            "description": response_data.get("description"),
+            "image": response_data.get("images", [{}])[0].get("baseurl") if response_data.get("images") else None,
+            "location": response_data.get("adLocationData", {}).get("suburb"),
+            "body_type": category_info.get("Body Type"),
+            "fuel_type": category_info.get("Fuel Type"),
+            "color": category_info.get("Colour"),
+            "variant": category_info.get("Variant"),
+            "year": category_info.get("Year"),
+            "model": category_info.get("Model"),
+            "make": category_info.get("Make"),
+            "mileage": category_info.get("Odometer"),
+            "transmission": category_info.get("Transmission"),
+            "url": ""
+        }
+        if not listing_details:
+            logging.error(f"No listing details found for listing ID: {listing_id}")
+            return None
+
+        logging.info(f"Successfully fetched details for listing ID: {listing_id}")
+        return listing_details
+
+    except Exception as e:
+        logging.error(f"Error fetching details for listing ID {listing_id}: {e}")
+        return None
+
+
+def get_gumtree_listings(profile_url,user):
+    """
+    Fetches all listings for a given seller ID.
+
+    Parameters:
+        seller_id (str): The seller's ID.
+
+    Returns:
+        list: A list of dictionaries containing details of the listings, or None if an error occurs.
+    """
+    if not API_KEY:
+        logging.error("ZENROWS_API_KEY is not configured in the environment variables")
+        return False,"ZENROWS_API_KEY is not configured in the environment variables"
+    seller_id = profile_url.split('/')[-1]  # Extract the last part of the URL
+    if not seller_id.isdigit():
+        logging.error(f"Invalid seller ID: {seller_id}")
+        return False,"Invalid seller ID"
+
+    client = ZenRowsClient(API_KEY)
+    base_url = f"https://gt-api.gumtree.com.au/web/user-profile-service/{seller_id}/listings"
+    logging.info(f"Fetching all listings for seller ID: {seller_id}")
+
+    try:
+        # Get total count of listings
+        initial_url = f"{base_url}?page=0&size=1"
+        initial_response = client.get(initial_url)
+        if initial_response.status_code != 200:
+            logging.error(f"seller id is not valid {initial_response.status_code}")
+            return False,"Invalid seller ID"
+
+        initial_data = initial_response.json()
+        total_count = initial_data.get("totalCount", 0)
+        if total_count == 0:
+            logging.warning(f"No listings found for seller ID: {seller_id}")
+            return False,"No listings found for seller ID"
+
+        # Fetch all listings
+        full_url = f"{base_url}?page=0&size=5"
+        full_response = client.get(full_url)
+        if full_response.status_code != 200:
+            logging.error(f"seller id is not valid {full_response.status_code}")
+            return False,"seller id is not valid"
+
+        full_data = full_response.json()
+        listings = full_data.get("profileListingList", [])
+        if not listings:
+            logging.warning(f"No listings data found for seller ID: {seller_id}")
+            return False,"No listings data found for seller ID"
+
+        # Collect details for each listing
+        for current_list in listings:
+            listing_id = current_list.get("id")
+            if not listing_id:
+                logging.warning("Listing ID is missing, skipping entry")
+                continue
+
+            logging.info(f"Fetching details for listing ID: {listing_id}")
+            time.sleep(random.uniform(1,3))
+            result = get_gumtree_listing_details(listing_id)
+            already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user).first()
+            if result and not already_exists:
+                vehicle_listing=VehicleListing.objects.create(
+                    user=user,
+                    list_id=listing_id,
+                    year=result.get("year"),
+                    body_type=result.get("body_type"),
+                    fuel_type=result.get("fuel_type"),
+                    color=result.get("color"),
+                    variant=result.get("variant"),
+                    make=result.get("make"),
+                    mileage=result.get("mileage"),
+                    model=result.get("model"),
+                    price=str(result.get("price")),
+                    transmission=result.get("transmission"),
+                    description=result.get("description"),
+                    images=result.get("image"),
+                    url=result.get("url"),
+                    location=result.get("location"),
+                    status="pending",
+                    gumtree_profile_id=seller_id
+                    )
+
+        return True,"Extracted all listings successfully"
+
+    except Exception as e:
+        logging.error(f"Error fetching listings for seller ID {seller_id}: {e}")
+        return None
