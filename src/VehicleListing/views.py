@@ -327,10 +327,10 @@ def create_facebook_marketplace_listing_task(vehicle_listing):
 
 
 @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated])
 def get_gumtree_profile_listings(request):
     try:
-        # print(request.user)
+        print(request.user)
         data = json.loads(request.body)
         profile_url = data.get('gumtree_profile_url')
         email = data.get('email')
