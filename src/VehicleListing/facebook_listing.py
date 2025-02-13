@@ -1,10 +1,10 @@
 import logging
 import random
 import time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
 import requests
-
+from .models import VehicleListing
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -465,3 +465,384 @@ def get_elements_with_text(search_for,page):
     locator_case_insensitive = f"text=/.*{search_for}.*/i"
     elements = page.locator(locator_case_sensitive).all()
     return elements if elements else page.locator(locator_case_insensitive).all()
+
+
+
+
+def get_facebook_profile_listings(profile_url, session_cookie):
+    """Get all listings from any Facebook Marketplace profile URL."""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(storage_state=session_cookie)
+            page = context.new_page()
+            
+            # Set shorter timeout for navigation
+            page.set_default_timeout(20000)
+            
+            # Navigate to profile URL
+            page.goto(profile_url)
+            page.wait_for_timeout(1000)
+
+            # Extract profile ID from URL
+            profile_id = profile_url.split('/')[-1] if profile_url.endswith('/') else profile_url.split('/')[-1]
+            
+            # More specific selectors for profile listings
+            listing_selectors = [
+                f'div[style*="max-width: 175px"] a[href*="/marketplace/item/"]',
+                # f'a[href*="/marketplace/item/"]'
+            ]
+            
+            # First hover over the listings container
+            listings_container = page.locator('div[style*="max-width: 175px"]').first
+            listings_container.hover()
+            
+            previous_count = 0
+            same_count_iterations = 0
+            max_same_count = 4  # Increased to 4 attempts
+            start_time = time.time()
+            max_time = 75  # Increased to 75 seconds for more thorough scrolling
+            
+            while same_count_iterations < max_same_count and (time.time() - start_time) < max_time:
+                # Enhanced scroll sequence
+                for _ in range(4):  # Increased to 4 scrolls per iteration
+                    # Multiple scroll methods
+                    page.keyboard.press("PageDown")
+                    page.wait_for_timeout(400)
+                    
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(400)
+                    
+                    page.evaluate("""
+                        window.scrollTo(0, document.body.scrollHeight);
+                        window.scrollTo(0, document.body.scrollHeight + 1500);
+                    """)
+                    page.wait_for_timeout(400)
+                    
+                    # Try to scroll the last element into view
+                    try:
+                        for selector in listing_selectors:
+                            elements = page.query_selector_all(selector)
+                            if elements:
+                                elements[-1].scroll_into_view_if_needed()
+                                break
+                    except Exception:
+                        continue
+                
+                # Get current count using all selectors
+                max_count = 0
+                for selector in listing_selectors:
+                    try:
+                        count = len(page.query_selector_all(selector))
+                        max_count = max(max_count, count)
+                    except:
+                        continue
+                
+                logging.info(f"Current item count: {max_count}")
+                
+                if max_count > previous_count:
+                    previous_count = max_count
+                    same_count_iterations = 0
+                    logging.info(f"Found new items ({max_count}), continuing to scroll...")
+                else:
+                    same_count_iterations += 1
+                    logging.info(f"No new items found. Attempt {same_count_iterations} of {max_same_count}")
+            
+            # Final thorough scroll
+            for _ in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+                page.keyboard.press("End")
+                page.wait_for_timeout(1000)
+            
+            # Use sets to track seen listings
+            seen_ids = set()
+            seen_titles = set()
+            listings = []
+            
+            for selector in listing_selectors:
+                elements = page.query_selector_all(selector)
+                for element in elements:
+                    try:
+                        href = element.get_attribute('href')
+                        if not href or '/marketplace/item/' not in href:
+                            continue
+                            
+                        listing_id = href.split('/item/')[1].split('/')[0]
+                        
+                        # Extract title first for duplicate checking
+                        title_element = element.query_selector('span[style*="-webkit-line-clamp: 2"]')
+                        if not title_element:
+                            continue
+                            
+                        title = title_element.text_content()
+                        
+                        # Skip if we've seen this ID or title
+                        if listing_id in seen_ids or title in seen_titles:
+                            continue
+                            
+                        # Extract other details
+                        price_element = element.query_selector('span:has-text("$")')
+                        location_element = element.query_selector('span[class*="xlyipyv"]')
+                        
+                        price = price_element.text_content() if price_element else "Price not available"
+                        location = location_element.text_content() if location_element else "Location not available"
+                        
+                        
+                        listing = {
+                            'id': listing_id,
+                            'title': title,
+                            'price': price,
+                            'location': location,
+                            'url': f"https://www.facebook.com/marketplace/item/{listing_id}/",
+                        }
+                        
+                        # Add to tracking sets and listings list
+                        seen_ids.add(listing_id)
+                        seen_titles.add(title)
+                        listings.append(listing)
+                        logging.info(f"Successfully extracted listing: {title}")
+                        
+                    except Exception as e:
+                        logging.error(f"Error extracting listing details: {str(e)}")
+                        continue
+            
+            browser.close()
+            logging.info(f"Successfully extracted {len(listings)} unique listings")
+            return True, listings
+            
+    except Exception as e:
+        logging.error(f"Error in get_profile_listings: {e}")
+        if 'browser' in locals():
+            browser.close()
+        return False, str(e)
+    
+
+
+
+
+
+def is_convertible_to_int(value):
+    """
+    Checks if the given value can be converted to an integer.
+    """
+    try:
+        int(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def random_delay(min_time=1, max_time=3):
+    """
+    Adds a randomized delay to mimic human behavior.
+    """
+    time.sleep(random.uniform(min_time, max_time))
+
+def extract_facebook_listing_details(current_listing, session):
+    """
+    Extract details of a Facebook Marketplace listing.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(storage_state=session)
+        page = context.new_page()
+
+        try:
+            logging.info(f"Navigating to listing URL: {current_listing['url']}")
+            page.goto(current_listing['url'], timeout=60000)
+
+            # Mimic human behavior
+            random_delay(2, 5)
+
+            listing = {
+                "url": current_listing['url'],
+                "year": None,
+                "make": "",
+                "model": "",
+                "price": None,
+                "mileage": None,
+                "description": "",
+                "images": [],
+                "location": ""
+            }
+
+            # Extract each part of the listing
+            extract_price(page, listing)
+            random_delay()
+            extract_mileage(page, listing)
+            random_delay()
+            extract_year_make_model(page, listing)
+            random_delay()
+            extract_description(page, listing)
+            random_delay()
+            listing["images"] = extract_images(page)
+            random_delay()
+            listing["location"] = extract_location(page)
+
+            logging.info(f"Successfully extracted details for listing: {current_listing['url']}")  
+            browser.close()          
+            return listing
+
+        except PlaywrightTimeoutError:
+            logging.error("Page loading timeout occurred.")
+            browser.close()
+            return None
+        except Exception as e:
+            logging.error(f"Error extracting listing details: {e}")
+            browser.close()
+            return None
+
+def extract_price(page, listing):
+    """
+    Extracts the price from the listing.
+    """
+    try:
+        element = page.query_selector("//h1[@dir]/../following-sibling::div[1]//span")
+        if element:
+            text = element.inner_text()
+            logging.info(f"Price text: {text}")
+            price_str = "".join(filter(str.isdigit, text))
+            if price_str:
+                listing["price"] = int(price_str)
+    except Exception as e:
+        logging.error(f"Error extracting price: {e}")
+
+def extract_mileage(page, listing):
+    """
+    Extracts the mileage from the listing.
+    """
+    try:
+        element = page.query_selector("//span[contains(text(), 'Driven')]")
+        if element:
+            text = element.inner_text()
+            logging.info(f"Mileage text: {text}")
+            mileage_str = "".join(filter(str.isdigit, text))
+            if mileage_str:
+                listing["mileage"] = int(mileage_str)
+    except Exception as e:
+        logging.error(f"Error extracting mileage: {e}")
+
+def extract_year_make_model(page, listing):
+    """
+    Extracts the year, make, and model of the vehicle.
+    """
+    try:
+        elements = page.query_selector_all("//h1//span[@dir='auto']")
+        for element in elements:
+            text = element.inner_text().strip()
+            parts = text.split()
+            print(parts)
+            if len(parts) >= 2:
+                try:
+                    if is_convertible_to_int(parts[0]):
+                        year = int(parts[0])
+                        if 1900 <= year <= 2025:
+                            listing["year"] = year
+                            listing["make"] = parts[1]
+                            listing["model"] = " ".join(parts[2:])
+                            return  # Exit after successful extraction
+                    else:
+                        listing["make"] = parts[0]
+                        listing["model"] = " ".join(parts[1:])
+                except ValueError:
+                   logging.warning(f"Failed to extract year from text: {text}")
+            else:
+                logging.warning("No valid year, make, and model found.")
+    except Exception as e:
+        logging.error(f"Error extracting year, make, and model: {e}")
+
+def extract_description(page, listing):
+    """
+    Extracts the description from the listing.
+    """
+    try:
+        see_more_button = page.query_selector("//*[text()='See more']")
+        if see_more_button:
+            see_more_button.click()
+            random_delay(1, 2)
+
+        description_element = page.query_selector("//*[text()='See less']/../..")
+        if description_element:
+            text = description_element.inner_text()
+            listing["description"] = text.replace("See less", "").strip()
+    except Exception as e:
+        logging.error(f"Error extracting description: {e}")
+
+def extract_images(page):
+    """
+    Extracts image URLs from the listing.
+    """
+    try:
+        image_urls = []
+        elements = page.query_selector_all("//*[starts-with(@aria-label, 'Thumbnail')]//img")
+        for el in elements:
+            src = el.get_attribute("src")
+            if src:
+                image_urls.append(src)
+        return image_urls
+    except Exception as e:
+        logging.error(f"Error extracting images: {e}")
+        return []
+
+def extract_location(page):
+    """
+    Extracts the location from the listing.
+    """
+    try:
+        element = page.query_selector("//a[contains(@href, '/marketplace/')]/span")
+        if element:
+            return element.inner_text()
+    except Exception as e:
+        logging.error(f"Error extracting location: {e}")
+    return ""
+
+
+
+def save_facebook_listing(listing_details,current_listing,user,seller_id):
+    try:
+        VehicleListing.objects.create(
+            user=user,
+            list_id=current_listing["id"],
+            year=listing_details.get("year"),
+            body_type="Other",
+            fuel_type="Other",
+            color="Other",
+            variant="Other",
+            make=listing_details.get("make"),
+            # mileage=current_listing["mileage"],
+            mileage=0,
+            model=listing_details.get("model"),
+            price=str(listing_details.get("price")),
+            transmission=None,
+            description=listing_details.get("description"),
+        images=listing_details["images"][0],
+            url=current_listing["url"],
+            location=listing_details.get("location"),
+            status="pending",
+            seller_profile_id=seller_id
+            )
+        # response_vehicle_listing_data = {   
+        #     "id": vehicle_listing.id,
+        #     "title": vehicle_listing.title,
+        #     "price": vehicle_listing.price,
+        #     "location": vehicle_listing.location,
+        #     "url": vehicle_listing.url,
+        #     "status": vehicle_listing.status,
+        #     "seller_profile_id": vehicle_listing.seller_profile_id,
+        #     "make": vehicle_listing.make,
+        #     "mileage": vehicle_listing.mileage,
+        #     "model": vehicle_listing.model,
+        #     "price": vehicle_listing.price,
+        #     "transmission": vehicle_listing.transmission,
+        #     "description": vehicle_listing.description,
+        #     "images": vehicle_listing.images,
+        #     "url": vehicle_listing.url,
+        #     "location": vehicle_listing.location,
+        #     "status": vehicle_listing.status,
+        #     "seller_profile_id": vehicle_listing.seller_profile_id
+
+        # }
+        # print(response_vehicle_listing_data)
+        return True,"Listing saved successfully"
+    except Exception as e:
+        return False,str(e)

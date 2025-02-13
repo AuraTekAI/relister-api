@@ -1,15 +1,16 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
-from .models import VehicleListing
+from .models import VehicleListing,GumtreeProfileListing
 import logging
 import time
 import random
 
 
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 API_KEY = "796fe18ec2b188966a2430dc6e12a966c688d8f0"
-def get_listings(url,user):
+def get_listings(url,user,import_url_instance):
     logging.info(f"url: {url}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
@@ -49,6 +50,7 @@ def get_listings(url,user):
 
             vehicle_listing=VehicleListing.objects.create(
                 user=user,
+                gumtree_url=import_url_instance,
                 list_id=list_id,
                 year=year,
                 body_type=body_type,
@@ -64,10 +66,12 @@ def get_listings(url,user):
                 images=image,
                 url=url,
                 location=location,
-                gumtree_profile_id=seller_id,
+                seller_profile_id=seller_id,
                 status="pending"
             )
             logging.info(f"vehicle_listing: {vehicle_listing}")
+            import_url_instance.status="Completed"
+            import_url_instance.save()
             return vehicle_listing
 
         except Exception as e:
@@ -187,6 +191,7 @@ def get_gumtree_listings(profile_url,user):
         if not listings:
             logging.warning(f"No listings data found for seller ID: {seller_id}")
             return False,"No listings data found for seller ID"
+        gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id)
 
         # Collect details for each listing
         for current_list in listings:
@@ -202,6 +207,7 @@ def get_gumtree_listings(profile_url,user):
             if result and not already_exists:
                 vehicle_listing=VehicleListing.objects.create(
                     user=user,
+                    gumtree_profile=gumtree_profile_listing_instance,
                     list_id=listing_id,
                     year=result.get("year"),
                     body_type=result.get("body_type"),
@@ -218,11 +224,12 @@ def get_gumtree_listings(profile_url,user):
                     url=result.get("url"),
                     location=result.get("location"),
                     status="pending",
-                    gumtree_profile_id=seller_id
+                    seller_profile_id=seller_id
                     )
-
+        gumtree_profile_listing_instance.status="completed"
+        gumtree_profile_listing_instance.save()
         return True,"Extracted all listings successfully"
 
     except Exception as e:
         logging.error(f"Error fetching listings for seller ID {seller_id}: {e}")
-        return None
+        return False,"Error fetching listings for seller ID"

@@ -3,35 +3,13 @@ from accounts.models import User
 # from django.conf import settings
 # Create your models here.
 
-class VehicleListing(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    list_id = models.CharField(max_length=255)
-    year = models.CharField(max_length=255)
-    body_type = models.CharField(max_length=255)
-    fuel_type = models.CharField(max_length=255)
-    color = models.CharField(max_length=255)
-    variant = models.CharField(max_length=255)
-    make = models.CharField(max_length=100)
-    model = models.CharField(max_length=100)
-    price = models.CharField(max_length=255)
-    mileage = models.IntegerField()
-    description = models.TextField()
-    transmission=models.CharField(max_length=255)
-    images = models.URLField()  # Store image URLs as JSON
-    location = models.CharField(max_length=255)
-    url = models.URLField(null=True,blank=True)
-    gumtree_profile_id = models.CharField(max_length=255,null=True,blank=True)
 
-    status = models.CharField(max_length=255, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
-        return f"{self.year} {self.make} {self.model}"
+
 
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    url = models.URLField()
+    url = models.URLField(null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=255, null=True)
@@ -48,22 +26,66 @@ class FacebookUserCredentials(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class FacebookListing(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
-    status = models.CharField(max_length=255, null=True)
-    error_message = models.TextField(null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    def __str__(self):
-        return f"{self.listing.make} {self.listing.model}"
+
     
 class GumtreeProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
     status = models.CharField(max_length=255, null=True,blank=True)
-    error_message = models.TextField(null=True,blank=True)
+    profile_id = models.CharField(max_length=255, null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     def __str__(self):
         return f"{self.url}"
+
+class FacebookProfileListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    url = models.URLField(null=True,blank=True)
+    status = models.CharField(max_length=255, null=True)
+    profile_id = models.CharField(max_length=255, null=True,blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.url}"
+
+class VehicleListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
+    gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
+    facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
+    list_id = models.CharField(max_length=255)
+    year = models.CharField(max_length=255,null=True,blank=True)
+    body_type = models.CharField(max_length=255,null=True,blank=True)
+    fuel_type = models.CharField(max_length=255,null=True,blank=True)
+    color = models.CharField(max_length=255,null=True,blank=True)
+    variant = models.CharField(max_length=255,null=True,blank=True)
+    make = models.CharField(max_length=100,null=True,blank=True)
+    model = models.CharField(max_length=100,null=True,blank=True)
+    price = models.CharField(max_length=255,null=True,blank=True)
+    mileage = models.IntegerField(null=True,blank=True)
+    description = models.TextField(null=True,blank=True)
+    transmission=models.CharField(max_length=255,null=True,blank=True)
+    images = models.URLField()  # Store image URLs as JSON
+    location = models.CharField(max_length=255,null=True,blank=True)
+    url = models.URLField(null=True,blank=True)
+    seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
+    status = models.CharField(max_length=255, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.year} {self.make} {self.model}"
+
+
+
+
+class FacebookListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
+    status = models.CharField(max_length=255, null=True)
+    error_message = models.TextField(null=True,blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"{self.listing.make} {self.listing.model}"
