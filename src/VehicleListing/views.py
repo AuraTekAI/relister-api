@@ -1,11 +1,11 @@
-from .gumtree_scraper import get_listings
+from .gumtree_scraper import get_listings,get_gumtree_listings
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing
 import json
 from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_profile_listings
 from django.http import JsonResponse
@@ -362,3 +362,51 @@ def get_facebook_profile_listings(request):
         return JsonResponse({'error': 'Invalid JSON data'}, status=400)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+def get_gumtree_profile_listings(request):
+    try:
+        # print(request.user)
+        data = json.loads(request.body)
+        profile_url = data.get('gumtree_profile_url')
+        email = data.get('email')
+        user = User.objects.filter(email=email).first()
+        import_url = ImportFromUrl(profile_url)
+        is_valid, error_message = import_url.validate()
+
+        if not is_valid:
+            return JsonResponse({'error': error_message}, status=200)
+        if import_url.print_url_type == "Facebook":
+            return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
+        # if GumtreeProfileListing.objects.filter(url=profile_url,user=request.user).exists():
+        if GumtreeProfileListing.objects.filter(url=profile_url,user=user).exists():
+            return JsonResponse({'error': 'This URL is already processed'}, status=200)
+
+        # Get listings using the function
+        success = get_gumtree_listings(profile_url, user)
+        
+        # success,message = get_gumtree_listings(profile_url, request.user)
+
+        if success[0]:
+            GumtreeProfileListing.objects.create(url=profile_url,user=user,status="completed")
+            return JsonResponse({
+                'count': len(success[2]),
+                'next': None,
+                'previous': None,
+                'results': success[2],
+                'message': success[1]
+            }, status=200)
+        else:
+            GumtreeProfileListing.objects.create(url=profile_url,user=user,status="failed")
+            return JsonResponse({
+                'count': 0,
+                'next': None,
+                'previous': None,
+                'results': [],
+                'message': success[1]
+            }, status=400)
+
+    except Exception as e:
+        return JsonResponse({'message': str(e)}, status=500)

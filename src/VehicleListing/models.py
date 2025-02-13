@@ -19,7 +19,8 @@ class VehicleListing(models.Model):
     transmission=models.CharField(max_length=255)
     images = models.URLField()  # Store image URLs as JSON
     location = models.CharField(max_length=255)
-    url = models.URLField()
+    url = models.URLField(null=True,blank=True)
+    gumtree_profile_id = models.CharField(max_length=255,null=True,blank=True)
 
     status = models.CharField(max_length=255, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -56,3 +57,13 @@ class FacebookListing(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     def __str__(self):
         return f"{self.listing.make} {self.listing.model}"
+    
+class GumtreeProfileListing(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    url = models.URLField(null=True,blank=True)
+    status = models.CharField(max_length=255, null=True,blank=True)
+    error_message = models.TextField(null=True,blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"{self.url}"

@@ -476,12 +476,12 @@ def get_profile_listings(profile_url, session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             
             # Set shorter timeout for navigation
-            page.set_default_timeout(10000)
+            page.set_default_timeout(20000)
             
             # Navigate to profile URL
             page.goto(profile_url)
@@ -502,7 +502,7 @@ def get_profile_listings(profile_url, session_cookie):
             
             previous_count = 0
             same_count_iterations = 0
-            max_same_count = 4  # Increased to 4 attempts
+            max_same_count = 2  # Increased to 4 attempts
             start_time = time.time()
             max_time = 75  # Increased to 75 seconds for more thorough scrolling
             
