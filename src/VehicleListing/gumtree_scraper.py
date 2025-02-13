@@ -163,7 +163,7 @@ def get_gumtree_listings(profile_url,user):
 
     try:
         # Get total count of listings
-        initial_url = f"{base_url}?page=0&size=1"
+        initial_url = f"{base_url}?page=0&size={total_count}"
         initial_response = client.get(initial_url)
         if initial_response.status_code != 200:
             logging.error(f"seller id is not valid {initial_response.status_code}")
