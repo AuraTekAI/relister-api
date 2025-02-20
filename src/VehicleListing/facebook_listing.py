@@ -321,12 +321,15 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             # Delete the images
             index = 0
             for image_url in vehicle_listing.images:
+                if index > 18:
+                    break
                 image_name = os.path.basename(image_url)
                 image_extension = os.path.splitext(image_name)[1] 
                 index = index + 1
                 new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
                 local_image_path = os.path.join(images_folder, new_image_name)
-                os.remove(local_image_path)
+                if os.path.exists(local_image_path):
+                    os.remove(local_image_path)
             logging.info("Image file deleted successfully.")
             return True, "Listing created successfully"
 
