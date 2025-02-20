@@ -24,6 +24,9 @@ def create_facebook_marketplace_listing_task(self):
                         FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
                         listing.status="completed"
                         listing.save()
+                    else:
+                        listing.status="completed"
+                        listing.save()
                 else:
                     FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
                     listing.status="failed"
@@ -39,6 +42,9 @@ def create_facebook_marketplace_listing_task(self):
                         already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing).first()
                         if not already_listed:
                             FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
+                            listing.status="completed"
+                            listing.save()
+                        else:
                             listing.status="completed"
                             listing.save()
                     else:

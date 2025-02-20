@@ -180,6 +180,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             index = 0
             # Download the images using url and save it locally    
             for image_url in vehicle_listing.images:
+                if index > 18:
+                    break
                 image_name = os.path.basename(image_url)
                 image_extension = os.path.splitext(image_name)[1] 
                 index = index + 1
@@ -631,6 +633,9 @@ def get_facebook_profile_listings(profile_url,session_cookie):
 
                                 location = location_element.text_content() if location_element else None
                                 mileage = "".join(filter(str.isdigit, mileage_element.text_content())) if mileage_element else None
+                                if mileage:
+                                    mileage = int(mileage) * 1000
+                                    mileage=str(mileage)
 
 
                                 # Add to the dictionary
@@ -834,7 +839,7 @@ def extract_location(page):
     try:
         element = page.query_selector("//a[contains(@href, '/marketplace/')]/span")
         if element:
-            return element.inner_text()
+            return element.inner_text().split(',')[0].strip()
     except Exception as e:
         logging.error(f"Error extracting location: {e}")
     return None
