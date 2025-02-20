@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import import_url_from_gumtree, all_vehicle_listing, VehicleListingViewSet, ListingUrlViewSet, FacebookUserCredentialsViewSet, get_gumtree_profile_listings, facebook_profile_listings,GumtreeProfileListingViewSet,FacebookProfileListingViewSet
+from .views import import_url_from_gumtree, all_vehicle_listing, VehicleListingViewSet, ListingUrlViewSet, FacebookUserCredentialsViewSet, get_gumtree_profile_listings, facebook_profile_listings,GumtreeProfileListingViewSet,FacebookProfileListingViewSet,get_montly_listings_report
 
 urlpatterns = [
     path('import/', import_url_from_gumtree, name='import_url_from_gumtree'),
@@ -16,4 +16,5 @@ urlpatterns = [
     path('gumtree_profile_listings_details/<int:pk>/', GumtreeProfileListingViewSet.as_view({'get': 'retrieve',  'patch': 'update', 'delete': 'destroy'}), name='gumtree_profile_listings_detail'),
     path('facebook_profile_listings_details/', FacebookProfileListingViewSet.as_view({'get': 'list' , 'post': 'create'}), name='facebook_profile_listings'),
     path('facebook_profile_listings_details/<int:pk>/', FacebookProfileListingViewSet.as_view({'get': 'retrieve',  'patch': 'update', 'delete': 'destroy'}), name='facebook_profile_listings_detail'),
+    path('monthly_report/', get_montly_listings_report, name='get_montly_listings_report'),
 ]
