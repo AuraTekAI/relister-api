@@ -4,17 +4,21 @@ from .models import VehicleListing,GumtreeProfileListing
 import logging
 import time
 import random
-
-
-
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 API_KEY = "796fe18ec2b188966a2430dc6e12a966c688d8f0"
+def extract_seller_id(profile_url):
+    """Extract the seller ID from a Facebook Marketplace profile URL."""
+    if profile_url.endswith('/'):
+        profile_url = profile_url[:-1]
+    seller_id = profile_url.split('/')[-1]
+    return seller_id
+
 def get_listings(url,user,import_url_instance):
     logging.info(f"url: {url}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
-    list_id = url.split('/')[-1]  # Extract the last part of the URL
+    list_id = extract_seller_id(url)  # Extract the last part of the URL
     if list_id.isdigit():
         client = ZenRowsClient(API_KEY)
         base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
@@ -29,13 +33,13 @@ def get_listings(url,user,import_url_instance):
             if not response_data:
                 logging.error(f"Response data is empty: {response}")
                 return None
+
             for current_data in response_data["categoryInfo"]:
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
             price=response_data["adPriceData"]["amount"]
             seller_id=response_data["adPosterData"]["randomUserId"] 
             description=response_data["description"]
-            image=response_data["images"][0]["baseurl"]
             location=response_data["adLocationData"]["suburb"]
             body_type=dict_data["Body Type"]
             fuel_type=dict_data["Fuel Type"]
@@ -63,7 +67,7 @@ def get_listings(url,user,import_url_instance):
                 price=str(price),
                 transmission=transmission,
                 description=description,
-                images=image,
+                images=[image.get("baseurl") for image in response_data.get("images", [])],
                 url=url,
                 location=location,
                 seller_profile_id=seller_id,
@@ -118,7 +122,7 @@ def get_gumtree_listing_details(listing_id):
             "title": response_data.get("adHeadingData", {}).get("title"),
             "price": response_data.get("adPriceData", {}).get("amount"),
             "description": response_data.get("description"),
-            "image": response_data.get("images", [{}])[0].get("baseurl") if response_data.get("images") else None,
+            "image": [image.get("baseurl") for image in response_data.get("images", [])],
             "location": response_data.get("adLocationData", {}).get("suburb"),
             "body_type": category_info.get("Body Type"),
             "fuel_type": category_info.get("Fuel Type"),
@@ -156,7 +160,7 @@ def get_gumtree_listings(profile_url,user):
     if not API_KEY:
         logging.error("ZENROWS_API_KEY is not configured in the environment variables")
         return False,"ZENROWS_API_KEY is not configured in the environment variables"
-    seller_id = profile_url.split('/')[-1]  # Extract the last part of the URL
+    seller_id = extract_seller_id(profile_url)  # Extract the last part of the URL
     if not seller_id.isdigit():
         logging.error(f"Invalid seller ID: {seller_id}")
         return False,"Invalid seller ID"
@@ -167,7 +171,7 @@ def get_gumtree_listings(profile_url,user):
 
     try:
         # Get total count of listings
-        initial_url = f"{base_url}?page=0&size={total_count}"
+        initial_url = f"{base_url}?page=0&size=1"
         initial_response = client.get(initial_url)
         if initial_response.status_code != 200:
             logging.error(f"seller id is not valid {initial_response.status_code}")
@@ -180,7 +184,7 @@ def get_gumtree_listings(profile_url,user):
             return False,"No listings found for seller ID"
 
         # Fetch all listings
-        full_url = f"{base_url}?page=0&size=5"
+        full_url = f"{base_url}?page=0&size={total_count}"
         full_response = client.get(full_url)
         if full_response.status_code != 200:
             logging.error(f"seller id is not valid {full_response.status_code}")
@@ -191,7 +195,7 @@ def get_gumtree_listings(profile_url,user):
         if not listings:
             logging.warning(f"No listings data found for seller ID: {seller_id}")
             return False,"No listings data found for seller ID"
-        gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id)
+        gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=total_count)
 
         # Collect details for each listing
         for current_list in listings:

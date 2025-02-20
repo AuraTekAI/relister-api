@@ -31,6 +31,7 @@ class FacebookUserCredentials(models.Model):
 class GumtreeProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
+    total_listings = models.IntegerField(null=True,blank=True)
     status = models.CharField(max_length=255, null=True,blank=True)
     profile_id = models.CharField(max_length=255, null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -41,6 +42,7 @@ class GumtreeProfileListing(models.Model):
 class FacebookProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
+    total_listings = models.IntegerField(null=True,blank=True)
     status = models.CharField(max_length=255, null=True)
     profile_id = models.CharField(max_length=255, null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -66,7 +68,7 @@ class VehicleListing(models.Model):
     mileage = models.IntegerField(null=True,blank=True)
     description = models.TextField(null=True,blank=True)
     transmission=models.CharField(max_length=255,null=True,blank=True)
-    images = models.URLField()  # Store image URLs as JSON
+    images = models.JSONField(null=True,blank=True)  # Store image URLs as JSON
     location = models.CharField(max_length=255,null=True,blank=True)
     url = models.URLField(null=True,blank=True)
     seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
