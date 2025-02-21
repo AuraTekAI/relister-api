@@ -342,11 +342,11 @@ def get_gumtree_profile_listings(request):
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
         if GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
             return JsonResponse({'error': 'This URL is already processed'}, status=200)
-
-        # Get listings using the function
-        thread = threading.Thread(target=get_gumtree_listings, args=(profile_url, user))
-        thread.start()
-        return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
+        success, message = get_gumtree_listings(profile_url, user)
+        if success:
+            return JsonResponse({'message': message}, status=200)
+        else:
+            return JsonResponse({'error': message}, status=200)
 
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
@@ -389,9 +389,15 @@ def facebook_profile_listings(request):
                 credentials.save()
             else:
                 return JsonResponse({'error': 'Login failed'}, status=400)
-        thread = threading.Thread(target=facebook_profile_listings_thread, args=(profile_url, credentials,user,seller_id))
-        thread.start()
-        return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
+        success, listings = get_facebook_profile_listings(profile_url, credentials.session_cookie)
+
+        if success:
+            facebook_profile_listing_instance = FacebookProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=len(listings))
+            thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,user,seller_id,facebook_profile_listing_instance))
+            thread.start()
+            return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
+        else:
+            return JsonResponse({'error': 'Failed to get listings'}, status=200)
 
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON data'}, status=400)
@@ -400,51 +406,43 @@ def facebook_profile_listings(request):
 
 
 
-def facebook_profile_listings_thread(profile_url, credentials,user,seller_id):
+def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebook_profile_listing_instance):
     # Get listings using the function
-        success, listings = get_facebook_profile_listings(profile_url, credentials.session_cookie)
-
-        if success:
-            facebook_profile_listing_instance = FacebookProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id)
-            for current_listing_key in listings:
-               current_listing=listings[current_listing_key]
-               already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
-               if already_listed:
-                   continue
-               time.sleep(random.uniform(1,2))
-               
-               vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
-               if vehicleListing:
-                    VehicleListing.objects.create(
-                        user=user,
-                        facebook_profile=facebook_profile_listing_instance,
-                        list_id=current_listing["id"],
-                        year=vehicleListing["year"],
-                        body_type="Other",
-                        fuel_type="Other",
-                        color="Other",
-                        variant="Other",
-                        make=vehicleListing["make"],
-                        mileage=current_listing["mileage"],
-                        model=vehicleListing["model"],
-                        price=vehicleListing.get("price"),
-                        transmission=None,
-                        description=vehicleListing.get("description"),
-                        images=vehicleListing["images"],
-                        url=current_listing["url"],
-                        location=vehicleListing.get("location"),
-                        status="pending",
-                        seller_profile_id=seller_id
-                        )
-            facebook_profile_listing_instance.status="completed"
-            facebook_profile_listing_instance.total_listings=len(listings)
-            facebook_profile_listing_instance.save()
-        else:
-            return  "failed to get listings"
-            # return JsonResponse({
-            #     'count': 0,
-            #     'error': "failed to get listings"
-            # }, status=400
+    count=0
+    for current_listing_key in listings:
+        current_listing=listings[current_listing_key]
+        already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
+        if already_listed:
+            continue
+        time.sleep(random.uniform(1,2))
+        
+        vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
+        if vehicleListing:
+            count+=1
+            VehicleListing.objects.create(
+                user=user,
+                facebook_profile=facebook_profile_listing_instance,
+                list_id=current_listing["id"],
+                year=vehicleListing["year"],
+                body_type="Other",
+                fuel_type="Other",
+                color="Other",
+                variant="Other",
+                make=vehicleListing["make"],
+                mileage=current_listing["mileage"],
+                model=vehicleListing["model"],
+                price=vehicleListing.get("price"),
+                transmission=None,
+                description=vehicleListing.get("description"),
+                images=vehicleListing["images"],
+                url=current_listing["url"],
+                location=vehicleListing.get("location"),
+                status="pending",
+                seller_profile_id=seller_id
+            )
+    facebook_profile_listing_instance.status="completed"
+    facebook_profile_listing_instance.processed_listings=count
+    facebook_profile_listing_instance.save()
     
 
 

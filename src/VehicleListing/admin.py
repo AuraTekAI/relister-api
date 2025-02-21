@@ -25,12 +25,12 @@ class VehicleListingAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin): 
-    list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'created_at', 'updated_at')
+    list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
     search_fields = ('user__email', 'url')
     list_filter = ('user',)
 
 class FacebookProfileListingAdmin(admin.ModelAdmin):        
-    list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'created_at', 'updated_at')
+    list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
     search_fields = ('user__email', 'url')
     list_filter = ('user',)
 
