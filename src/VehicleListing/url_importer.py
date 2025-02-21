@@ -52,6 +52,7 @@ class ImportFromSourceOption(Enum):
 class ImportFromUrl:
     EXPECTED_FACEBOOK_URL_STARTS_WITH = "https://www.facebook.com/marketplace/item/"
     EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH = "https://www.facebook.com/marketplace/profile/"
+    EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH_WEB = "https://web.facebook.com/marketplace/profile/"
     EXPECTED_GUMTREE_URL_STARTS_WITH = "https://www.gumtree.com.au/"
 
     def __init__(self, url):
@@ -65,6 +66,8 @@ class ImportFromUrl:
         if trimmed_url.startswith(self.EXPECTED_FACEBOOK_URL_STARTS_WITH):
             return ImportFromSourceOption.FACEBOOK
         if trimmed_url.startswith(self.EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH):
+            return ImportFromSourceOption.FACEBOOK
+        if trimmed_url.startswith(self.EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH_WEB):
             return ImportFromSourceOption.FACEBOOK
 
         if trimmed_url.startswith(self.EXPECTED_GUMTREE_URL_STARTS_WITH):

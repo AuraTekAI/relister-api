@@ -1,10 +1,10 @@
 import logging
 import random
 import time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
 import requests
-
+from .models import VehicleListing
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -53,46 +53,99 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
     random_sleep(1, 2)  # Random delay after filling the field
     return True
 
+
 def select_dropdown_option(page, field_name, option_text):
     """Helper function to select dropdown options with random delays."""
     logging.info(f"Selecting {field_name}...")
     try:
-        dropdown = page.locator(f"//label[@aria-label='{field_name}' and @role='combobox']").first
-        dropdown.scroll_into_view_if_needed()
-        dropdown.click()
-        random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+        # Multiple selectors for finding the dropdown
+        dropdown_selectors = [
+            f"//span[contains(text(), '{field_name}')]/ancestor::label",
+            f"//label[@aria-label='{field_name}' and @role='combobox']",
+            f"//span[text()='{field_name}']/ancestor::label[@role='combobox']",
+            f"//div[contains(@class, 'x1n2onr6')]//label[contains(.,'{field_name}')]",
+            f"//label[contains(., '{field_name}')][@role='combobox']",
+            f"//span[contains(text(), '{field_name}')]/ancestor::label"
+        ]
 
-        try:
-            option = page.locator(f"//div[@role='option' or @role='listbox']//span[contains(text(), '{option_text}')]").first
-            option.scroll_into_view_if_needed()
-            option.click()
-        except:
-            dropdown.fill(option_text)
-            dropdown.press("Enter")
-
-        logging.info(f"{field_name} selected successfully.")
-        random_sleep(1, 2)  # Random delay after selecting the option
-        return True
+        dropdown = None
+        for selector in dropdown_selectors:
+            try:
+                dropdown = page.locator(selector).first
+                if dropdown.is_visible():
+                    dropdown.scroll_into_view_if_needed()
+                    dropdown.click()
+                    random_sleep(1, 2)
+                    
+                    # Try to select the option
+                    option_selectors = [
+                        f"//div[@role='option' or @role='listbox']//span[contains(text(), '{option_text}')]",
+                        f"//div[@role='option'][contains(.,'{option_text}')]",
+                        f"//div[@role='option' or @role='listbox'][contains(.,'{option_text}')]"
+                    ]
+                    
+                    for option_selector in option_selectors:
+                        try:
+                            option = page.locator(option_selector).first
+                            if option.is_visible():
+                                option.scroll_into_view_if_needed()
+                                option.click()
+                                logging.info(f"{field_name} selected successfully.")
+                                random_sleep(1, 2)
+                                return True
+                        except Exception as e:
+                            logging.warning(f"Failed with option selector {option_selector}: {e}")
+                            continue
+                    
+                    # If no option found, try filling and pressing Enter
+                    dropdown.fill(option_text)
+                    dropdown.press("Enter")
+                    logging.info(f"{field_name} filled and entered.")
+                    random_sleep(1, 2)
+                    return True
+                    
+            except Exception as e:
+                logging.warning(f"Failed with dropdown selector {selector}: {e}")
+                continue
+        
+        if not dropdown:
+            raise Exception(f"Could not find {field_name} dropdown with any selector")
+            
     except Exception as e:
         logging.error(f"Error selecting {field_name}: {e}")
         raise
 
-def select_vehicle_type(page):
+
+def select_vehicle_type(page,vehicle_details):
     """Select the vehicle type (Car/Truck) with random delays."""
     logging.info("Selecting vehicle type...")
     try:
-        vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
-        vehicle_dropdown.scroll_into_view_if_needed()
-        vehicle_dropdown.click()
-        random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+        if vehicle_details["Mileage"]:
+            vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
+            vehicle_dropdown.scroll_into_view_if_needed()
+            vehicle_dropdown.click()
+            random_sleep(0.5, 1)  # Random delay after clicking the dropdown
 
-        car_option = page.locator("//div[@role='option'][contains(.,'Car/Truck')]").first
-        car_option.scroll_into_view_if_needed()
-        car_option.click()
+            car_option = page.locator("//div[@role='option'][contains(.,'Car/Truck')]").first
+            car_option.scroll_into_view_if_needed()
+            car_option.click()
 
-        logging.info("Vehicle type (Car/Truck) selected successfully.")
-        random_sleep(1, 2)  # Random delay after selecting the option
-        return True
+            logging.info("Vehicle type (Car/Truck) selected successfully.")
+            random_sleep(1, 2)  # Random delay after selecting the option
+            return True
+        else:
+            vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
+            vehicle_dropdown.scroll_into_view_if_needed()
+            vehicle_dropdown.click()
+            random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+
+            car_option = page.locator("//div[@role='option'][contains(.,'Other')]").first
+            car_option.scroll_into_view_if_needed()
+            car_option.click()
+
+            logging.info("Vehicle type (Other) selected successfully.")
+            random_sleep(1, 2)  # Random delay after selecting the option
+            return True
     except Exception as e:
         logging.error(f"Error selecting vehicle type: {e}")
         raise
@@ -115,38 +168,44 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Year": vehicle_listing.year,
                 "Make": vehicle_listing.make,
                 "Model": vehicle_listing.model,
-                "Price": str(vehicle_listing.price),
+                "Price": str(vehicle_listing.price) if vehicle_listing.price else None,
                 "Location": vehicle_listing.location,
-                "Mileage": str(vehicle_listing.mileage),
+                "Mileage": str(vehicle_listing.mileage) if vehicle_listing.mileage else None,
                 "Description": vehicle_listing.description
             }
 
             # Select vehicle type
-            select_vehicle_type(page)
+            select_vehicle_type(page,vehicle_details)
 
-            # Download the image and save it locally    
-            image_name = os.path.basename(vehicle_listing.images)
-            image_extension = os.path.splitext(image_name)[1] 
-            new_image_name = f"{vehicle_listing.list_id}_image{image_extension}"  
-            local_image_path = os.path.join(images_folder, new_image_name)
+            index = 0
+            # Download the images using url and save it locally    
+            for image_url in vehicle_listing.images:
+                if index > 18:
+                    break
+                image_name = os.path.basename(image_url)
+                image_extension = os.path.splitext(image_name)[1] 
+                index = index + 1
+                new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
+                local_image_path = os.path.join(images_folder, new_image_name)
 
-            try:
-                # Download the image
-                image_response = requests.get(vehicle_listing.images)
-                image_response.raise_for_status()
-                with open(local_image_path, "wb") as file:
-                    file.write(image_response.content)
-            except requests.exceptions.RequestException as e:
+                try:
+                    # Download the image
+                    image_response = requests.get(image_url)
+                    image_response.raise_for_status()
+                    with open(local_image_path, "wb") as file:
+                        file.write(image_response.content)
+                except requests.exceptions.RequestException as e:
                     return False, f"Error downloading the image: {e}"
-                        # Check if the image was downloaded successfully
-            if not os.path.exists(local_image_path):
-                return False, "Image download failed, file does not exist."
+                # Check if the image was downloaded successfully
+                if not os.path.exists(local_image_path):
+                    return False, "Image download failed, file does not exist." 
 
             # Upload images
-            image_input = page.locator("//input[@type='file']").first
-            image_input.set_input_files(local_image_path)
-            logging.info("Photos uploaded successfully.")
-            random_sleep(2, 3)  # Random delay after uploading images
+                image_input = page.locator("//input[@type='file']").first
+                image_input.set_input_files(local_image_path)
+                logging.info("Photos uploaded successfully.")
+                random_sleep(2, 3)  # Random delay after uploading images
+            
 
             # Fill form fields
             select_dropdown_option(page, "Year", vehicle_details["Year"])
@@ -186,45 +245,60 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             for field, selectors in input_fields.items():
-                fill_input_field(
-                    page,
-                    field,
-                    vehicle_details[field],
-                    selectors,
-                    use_suggestion=(field in ["Make", "Model", "Location"]),
-                    use_tab=(field in ["Mileage", "Price", "Description"])
-                )
-
+                if field != "Mileage":
+                    fill_input_field(
+                        page,
+                        field,
+                        vehicle_details[field],
+                        selectors,
+                        use_suggestion=(field in ["Make", "Model", "Location"]),
+                        use_tab=(field in ["Mileage", "Price", "Description"])
+                    )
+                else:
+                    if vehicle_details["Mileage"]:
+                        fill_input_field(
+                            page,
+                            field,
+                            vehicle_details[field],
+                            selectors,
+                            use_suggestion=(field in ["Make", "Model", "Location"]),
+                            use_tab=(field in ["Mileage", "Price", "Description"])
+                        )
+                    else:
+                        continue
+                    
             # Select dropdowns
             # select_dropdown_option(page, "Body style", "Sedan")
             # select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
             # select_dropdown_option(page, "Vehicle condition", "Excellent")
 
-            # Select dropdowns
-            if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
-                select_dropdown_option(page, "Body style", vehicle_listing.variant)
-            else:
-                select_dropdown_option(page, "Body style", "Other")
-            
-            if vehicle_listing.fuel_type in ["Petrol", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
-                select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
-            elif vehicle_listing.fuel_type == "Petrol - Premium Unleaded":
-                select_dropdown_option(page, "Fuel type", "Petrol")
-            elif vehicle_listing.fuel_type == "Petrol - Regular Unleaded":
-                select_dropdown_option(page, "Fuel type", "Petrol")
-            else:
-                select_dropdown_option(page, "Fuel type", "Other")
-            
-            
-            select_dropdown_option(page, "Vehicle condition", "Excellent")
-            
-            if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
-                select_dropdown_option(page, "Transmission", "Automatic transmission")
-            elif vehicle_listing.transmission in ["Manual Transmission", "Manual"]:
-                select_dropdown_option(page, "Transmission", "Manual transmission")
+            if vehicle_details['Mileage']:
 
-            else:
-                select_dropdown_option(page, "Transmission", "Automatic transmission")
+                # Select dropdowns
+                if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
+                    select_dropdown_option(page, "Body style", vehicle_listing.variant)
+                else:
+                    select_dropdown_option(page, "Body style", "Other")
+                
+                if vehicle_listing.fuel_type in ["Petrol", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
+                    select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
+                elif vehicle_listing.fuel_type == "Petrol - Premium Unleaded":
+                    select_dropdown_option(page, "Fuel type", "Petrol")
+                elif vehicle_listing.fuel_type == "Petrol - Regular Unleaded":
+                    select_dropdown_option(page, "Fuel type", "Petrol")
+                else:
+                    select_dropdown_option(page, "Fuel type", "Other")
+            
+            
+                select_dropdown_option(page, "Vehicle condition", "Excellent")
+            
+                if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
+                    select_dropdown_option(page, "Transmission", "Automatic transmission")
+                elif vehicle_listing.transmission in ["Manual Transmission", "Manual"]:
+                    select_dropdown_option(page, "Transmission", "Manual transmission")
+
+                else:
+                    select_dropdown_option(page, "Transmission", "Automatic transmission")
 
             # Submit form
             for button_text in ["Next", "Publish"]:
@@ -244,7 +318,18 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             # Close browser
             browser.close()
             logging.info("Browser closed successfully.")
-            os.remove(local_image_path)
+            # Delete the images
+            index = 0
+            for image_url in vehicle_listing.images:
+                if index > 18:
+                    break
+                image_name = os.path.basename(image_url)
+                image_extension = os.path.splitext(image_name)[1] 
+                index = index + 1
+                new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
+                local_image_path = os.path.join(images_folder, new_image_name)
+                if os.path.exists(local_image_path):
+                    os.remove(local_image_path)
             logging.info("Image file deleted successfully.")
             return True, "Listing created successfully"
 
@@ -465,3 +550,349 @@ def get_elements_with_text(search_for,page):
     locator_case_insensitive = f"text=/.*{search_for}.*/i"
     elements = page.locator(locator_case_sensitive).all()
     return elements if elements else page.locator(locator_case_insensitive).all()
+
+
+
+
+def get_facebook_profile_listings(profile_url,session_cookie):
+    """Get all listings from any Facebook Marketplace profile URL."""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(storage_state=session_cookie)
+            page = context.new_page()
+
+            # Set shorter timeout for navigation
+            page.set_default_timeout(20000)
+
+            # Navigate to profile URL
+            page.goto(profile_url)
+            page.wait_for_timeout(1000)
+
+            # More specific selectors for profile listings
+            listing_selectors = [
+                f'div[style*="max-width: 175px"] a[href*="/marketplace/item/"]',
+            ]
+
+            # First hover over the listings container
+            listings_container = page.locator('div[style*="max-width: 175px"]').first
+            listings_container.hover()
+            max_count = 3 
+            start_time = time.time()
+            max_time = 90  # Increased to 75 seconds for more thorough scrolling
+
+            # Use a set to store unique href links
+            href_links = set()
+
+            # Use a dictionary to store unique listings with details
+            unique_profile_listings = {}
+
+            while max_count and (time.time() - start_time) < max_time:
+                # Enhanced scroll sequence
+                for _ in range(4):  # Increased to 4 scrolls per iteration
+                    # Multiple scroll methods
+                    page.keyboard.press("PageDown")
+                    page.wait_for_timeout(400)
+
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(400)
+
+                    page.evaluate("""
+                        window.scrollTo(0, document.body.scrollHeight);
+                        window.scrollTo(0, document.body.scrollHeight + 1500);
+                    """)
+                    page.wait_for_timeout(500)
+
+                    # Try to scroll the last element into view
+                    try:
+                        for selector in listing_selectors:
+                            elements = page.query_selector_all(selector)
+                            if elements:
+                                elements[-1].scroll_into_view_if_needed()
+                                break
+                    except Exception:
+                        continue
+
+                # Collect href links and listing details in this iteration
+                for selector in listing_selectors:
+                    elements = page.query_selector_all(selector)
+                    for element in elements:
+                        try:
+                            href = element.get_attribute('href')
+                            if href and '/marketplace/item/' in href:
+                                href_links.add(href)
+
+                                # Extract details for the dictionary
+                                listing_id = href.split('/item/')[1].split('/')[0]
+                                title_element = element.query_selector('span[style*="-webkit-line-clamp: 2"]')
+                                price_element = element.query_selector('span:has-text("$")')
+                                location_element = element.query_selector('span[class*="xlyipyv"]')
+                                mileage_element = element.query_selector('span[class*="x1lliihq"]:has-text("km")')
+
+
+
+                                title = title_element.text_content() if title_element else None
+                                price = "".join(filter(str.isdigit, price_element.text_content())) if price_element else None
+
+                                location = location_element.text_content() if location_element else None
+                                mileage = "".join(filter(str.isdigit, mileage_element.text_content())) if mileage_element else None
+                                if mileage:
+                                    mileage = int(mileage) * 1000
+                                    mileage=str(mileage)
+
+
+                                # Add to the dictionary
+                                unique_profile_listings[listing_id] = {
+                                    'title': title,
+                                    'id': listing_id,
+                                    'price': price,
+                                    'location': location,
+                                    'mileage': mileage,
+                                    'url': f"https://www.facebook.com/marketplace/item/{listing_id}/"
+                                }
+
+                        except Exception as e:
+                            logging.error(f"Error extracting href or details: {str(e)}")
+                            continue
+                max_count-=1
+                logging.info(f"Current href links collected: {len(href_links)}")
+                logging.info(f" Current listings collected in dictionary: {len(unique_profile_listings)}")
+
+            browser.close()
+            logging.info(f"Successfully extracted {len(unique_profile_listings)} unique listings")
+            return True, unique_profile_listings
+
+    except Exception as e:
+        logging.error(f"Error in get_profile_listings: {e}")
+        browser.close()
+        return False, str(e)
+    
+
+
+
+
+
+def is_convertible_to_int(value):
+    """
+    Checks if the given value can be converted to an integer.
+    """
+    try:
+        int(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def random_delay(min_time=1, max_time=3):
+    """
+    Adds a randomized delay to mimic human behavior.
+    """
+    time.sleep(random.uniform(min_time, max_time))
+
+def extract_facebook_listing_details(current_listing, session):
+    """
+    Extract details of a Facebook Marketplace listing.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(storage_state=session)
+        page = context.new_page()
+
+        try:
+            logging.info(f"Navigating to listing URL: {current_listing['url']}")
+            page.goto(current_listing['url'], timeout=60000)
+
+            # Mimic human behavior
+            random_delay(2, 5)
+
+            listing = {
+                "url": current_listing['url'],
+                "year": None,
+                "make": None,
+                "model": None,
+                "price": None,
+                "mileage": current_listing["mileage"],
+                "description": None,
+                "images": [],
+                "location": None
+            }
+
+            # Extract each part of the listing
+            extract_price(page, listing)
+            random_delay()
+            # extract_mileage(page, listing)
+            # random_delay()
+            extract_year_make_model(page, listing)
+            random_delay()
+            extract_description(page, listing)
+            random_delay()
+            listing["images"] = extract_images(page)
+            random_delay()
+            listing["location"] = extract_location(page)
+
+            logging.info(f"Successfully extracted details for listing: {current_listing['url']}")  
+            browser.close()          
+            return listing
+
+        except PlaywrightTimeoutError:
+            logging.error("Page loading timeout occurred.")
+            browser.close()
+            return None
+        except Exception as e:
+            logging.error(f"Error extracting listing details: {e}")
+            browser.close()
+            return None
+
+def extract_price(page, listing):
+    """
+    Extracts the price from the listing.
+    """
+    try:
+        element = page.query_selector("//h1[@dir]/../following-sibling::div[1]//span")
+        if element:
+            text = element.inner_text()
+            logging.info(f"Price text: {text}")
+            # price_str = "".join(filter(str.isdigit, text))
+            if text:
+                listing["price"] = text
+    except Exception as e:
+        logging.error(f"Error extracting price: {e}")
+
+# def extract_mileage(page, listing):
+#     """
+#     Extracts the mileage from the listing.
+#     """
+#     try:
+#         element = page.query_selector("//span[contains(text(), 'Driven')]")
+#         if element:
+#             text = element.inner_text()
+#             logging.info(f"Mileage text: {text}")
+#             mileage_str = "".join(filter(str.isdigit, text))
+#             if mileage_str:
+#                 listing["mileage"] = int(mileage_str)
+#     except Exception as e:
+#         logging.error(f"Error extracting mileage: {e}")
+
+def extract_year_make_model(page, listing):
+    """
+    Extracts the year, make, and model of the vehicle.
+    """
+    try:
+        elements = page.query_selector_all("//h1//span[@dir='auto']")
+        for element in elements:
+            text = element.inner_text().strip()
+            parts = text.split()
+            print(parts)
+            if len(parts) >= 2:
+                try:
+                    if is_convertible_to_int(parts[0]):
+                        year = int(parts[0])
+                        if 1900 <= year <= 2025:
+                            listing["year"] = year
+                            listing["make"] = parts[1]
+                            listing["model"] = " ".join(parts[2:])
+                            return
+                    else:
+                        listing["year"] = 2020
+                        listing["make"] = parts[0]
+                        listing["model"] = " ".join(parts[1:])
+                except ValueError:
+                   logging.warning(f"Failed to extract year from text: {text}")
+            else:
+                logging.warning("No valid year, make, and model found.")
+    except Exception as e:
+        logging.error(f"Error extracting year, make, and model: {e}")
+
+def extract_description(page, listing):
+    """
+    Extracts the description from the listing.
+    """
+    try:
+        see_more_button = page.query_selector("//*[text()='See more']")
+        if see_more_button:
+            see_more_button.click()
+            random_delay(1, 2)
+
+        description_element = page.query_selector("//*[text()='See less']/../..")
+        if description_element:
+            text = description_element.inner_text()
+            listing["description"] = text.replace("See less", "").strip()
+    except Exception as e:
+        logging.error(f"Error extracting description: {e}")
+
+def extract_images(page):
+    """
+    Extracts image URLs from the listing.
+    """
+    try:
+        image_urls = []
+        elements = page.query_selector_all("//*[starts-with(@aria-label, 'Thumbnail')]//img")
+        for el in elements:
+            src = el.get_attribute("src")
+            if src:
+                image_urls.append(src)
+        return image_urls
+    except Exception as e:
+        logging.error(f"Error extracting images: {e}")
+        return []
+
+def extract_location(page):
+    """
+    Extracts the location from the listing.
+    """
+    try:
+        element = page.query_selector("//a[contains(@href, '/marketplace/')]/span")
+        if element:
+            return element.inner_text().split(',')[0].strip()
+    except Exception as e:
+        logging.error(f"Error extracting location: {e}")
+    return None
+
+
+
+def save_facebook_listing(listing_details,current_listing,user,seller_id):
+    try:
+        VehicleListing.objects.create(
+            user=user,
+            list_id=current_listing["id"],
+            year=listing_details.get("year"),
+            body_type="Other",
+            fuel_type="Other",
+            color="Other",
+            variant="Other",
+            make=listing_details.get("make"),
+            mileage=current_listing["mileage"],
+            model=listing_details.get("model"),
+            price=str(listing_details.get("price")),
+            transmission=None,
+            description=listing_details.get("description"),
+        images=listing_details["images"][0],
+            url=current_listing["url"],
+            location=listing_details.get("location"),
+            status="pending",
+            seller_profile_id=seller_id
+            )
+        # response_vehicle_listing_data = {   
+        #     "id": vehicle_listing.id,
+        #     "title": vehicle_listing.title,
+        #     "price": vehicle_listing.price,
+        #     "location": vehicle_listing.location,
+        #     "url": vehicle_listing.url,
+        #     "status": vehicle_listing.status,
+        #     "seller_profile_id": vehicle_listing.seller_profile_id,
+        #     "make": vehicle_listing.make,
+        #     "mileage": vehicle_listing.mileage,
+        #     "model": vehicle_listing.model,
+        #     "price": vehicle_listing.price,
+        #     "transmission": vehicle_listing.transmission,
+        #     "description": vehicle_listing.description,
+        #     "images": vehicle_listing.images,
+        #     "url": vehicle_listing.url,
+        #     "location": vehicle_listing.location,
+        #     "status": vehicle_listing.status,
+        #     "seller_profile_id": vehicle_listing.seller_profile_id
+
+        # }
+        # print(response_vehicle_listing_data)
+        return True,"Listing saved successfully"
+    except Exception as e:
+        return False,str(e)

@@ -3,15 +3,18 @@ from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete
+from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,save_facebook_listing
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
 from rest_framework.decorators import api_view, permission_classes
+import time
+import random   
+from datetime import datetime, timedelta
 # @csrf_exempt
 # def import_url_from_gumtree(request):
 #     if request.method == 'POST':
@@ -88,10 +91,11 @@ def import_url_from_gumtree(request):
             return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
         if ListingUrl.objects.filter(url=url).exists():
             return JsonResponse({'error': 'URL already exists'}, status=200)
+        import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
         # Extract data from URL
-        vehicle_listing = get_listings(url,user)
+        vehicle_listing = get_listings(url,user,import_url_instance)
         if vehicle_listing:
-            ListingUrl.objects.create(url=url, user=user , status='Completed')
+            
             vls = VehicleListingSerializer(vehicle_listing)
             print(f"vehicle_listing: {vehicle_listing}")
             thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
@@ -181,17 +185,11 @@ class VehicleListingViewSet(ModelViewSet):
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         if vehicle_listing.status== "pending" or vehicle_listing.status== "failed":
             vehicle_listing.delete()
-            # url = vehicle_listing.url
-            # import_url = ListingUrl.objects.filter(url=url).first()
-            # import_url.delete()
             return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
         else:
             response = perform_search_and_delete(search_query,credentials.session_cookie)
             if response[0]:
                 vehicle_listing.delete()
-                # url = vehicle_listing.url
-                # import_url = ListingUrl.objects.filter(url=url).first()
-                # import_url.delete()
                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
             else:
                 return JsonResponse({'error': response[1]}, status=200)
@@ -276,7 +274,6 @@ def create_facebook_listing(vehicle_listing):
 
 def create_facebook_marketplace_listing_task(vehicle_listing):
     try:
-        print(vehicle_listing.user)
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         if credentials and credentials.session_cookie:
             listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
@@ -330,36 +327,243 @@ def create_facebook_marketplace_listing_task(vehicle_listing):
 @permission_classes([IsAuthenticated])
 def get_gumtree_profile_listings(request):
     try:
-        print(request.user)
         data = json.loads(request.body)
         profile_url = data.get('gumtree_profile_url')
         email = data.get('email')
         user = User.objects.filter(email=email).first()
         import_url = ImportFromUrl(profile_url)
         is_valid, error_message = import_url.validate()
-
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
         if import_url.print_url_type == "Facebook":
             return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
-        # if GumtreeProfileListing.objects.filter(url=profile_url,user=request.user).exists():
-        if GumtreeProfileListing.objects.filter(url=profile_url,user=user).exists():
+        seller_id = extract_seller_id(profile_url)
+        if not seller_id or not seller_id.isdigit():
+            return JsonResponse({'error': 'Invalid seller ID'}, status=200)
+        if GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
             return JsonResponse({'error': 'This URL is already processed'}, status=200)
-
-        # Get listings using the function
-        success,message = get_gumtree_listings(profile_url, user)
-        # success,message = get_gumtree_listings(profile_url, request.user)
-
+        success, message = get_gumtree_listings(profile_url, user)
         if success:
-            GumtreeProfileListing.objects.create(url=profile_url,user=user,status="completed")
-            return JsonResponse({
-                'message': message
-            }, status=200)
+            return JsonResponse({'message': message}, status=200)
         else:
-            GumtreeProfileListing.objects.create(url=profile_url,user=user,status="failed")
-            return JsonResponse({
-                'message': message
-            }, status=400)
+            return JsonResponse({'error': message}, status=200)
 
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
+    
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def facebook_profile_listings(request):
+    try:
+        # print(request.user)
+        data = json.loads(request.body)
+        profile_url = data.get('profile_url')
+        email = data.get('email')
+        user = User.objects.filter(email=email).first()
+
+        if not profile_url:
+            return JsonResponse({'error': 'Profile URL is required'}, status=400)
+        import_url = ImportFromUrl(profile_url)
+        is_valid, error_message = import_url.validate()
+
+        if not is_valid:
+            return JsonResponse({'error': error_message}, status=200)
+        if import_url.print_url_type() == "Gumtree":
+            return  JsonResponse({'error': 'This is Gumtree Url, Now, Only Process the Facebook Url'}, status=200)
+        seller_id = extract_seller_id(profile_url)
+        if not seller_id or not seller_id.isdigit():
+            return JsonResponse({'error': 'Invalid seller ID'}, status=200)
+        if FacebookProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
+                return JsonResponse({'error': 'This URL is already processed'}, status=200)
+        # Get user's Facebook credentials
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        if not credentials:
+            return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
+        if credentials.session_cookie == {}:
+            session_cookie =login_to_facebook(credentials.email, credentials.password)
+            if session_cookie:
+                credentials.session_cookie = session_cookie
+                credentials.save()
+            else:
+                return JsonResponse({'error': 'Login failed'}, status=400)
+        success, listings = get_facebook_profile_listings(profile_url, credentials.session_cookie)
+
+        if success:
+            facebook_profile_listing_instance = FacebookProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=len(listings))
+            thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,user,seller_id,facebook_profile_listing_instance))
+            thread.start()
+            return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
+        else:
+            return JsonResponse({'error': 'Failed to get listings'}, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+
+def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebook_profile_listing_instance):
+    # Get listings using the function
+    count=0
+    for current_listing_key in listings:
+        current_listing=listings[current_listing_key]
+        already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
+        if already_listed:
+            continue
+        time.sleep(random.uniform(1,2))
+        
+        vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
+        if vehicleListing:
+            count+=1
+            VehicleListing.objects.create(
+                user=user,
+                facebook_profile=facebook_profile_listing_instance,
+                list_id=current_listing["id"],
+                year=vehicleListing["year"],
+                body_type="Other",
+                fuel_type="Other",
+                color="Other",
+                variant="Other",
+                make=vehicleListing["make"],
+                mileage=current_listing["mileage"],
+                model=vehicleListing["model"],
+                price=vehicleListing.get("price"),
+                transmission=None,
+                description=vehicleListing.get("description"),
+                images=vehicleListing["images"],
+                url=current_listing["url"],
+                location=vehicleListing.get("location"),
+                status="pending",
+                seller_profile_id=seller_id
+            )
+    facebook_profile_listing_instance.status="completed"
+    facebook_profile_listing_instance.processed_listings=count
+    facebook_profile_listing_instance.save()
+    
+
+
+class FacebookProfileListingViewSet(ModelViewSet):
+    queryset = FacebookProfileListing.objects.all()
+    serializer_class = FacebookProfileListingSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['url']
+    filterset_fields = ['url']
+    ordering_fields = ['url']
+    ordering = ['url']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return FacebookProfileListing.objects.all() 
+        else:
+            return FacebookProfileListing.objects.filter(user=user).all()
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        print(f"instance: {instance}")
+        # Proceed with deletion
+        facebook_profile_listing=FacebookProfileListing.objects.filter(id=instance.id).first()
+        facebook_profile_listing.delete()
+        return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+
+class GumtreeProfileListingViewSet(ModelViewSet):
+    queryset = GumtreeProfileListing.objects.all()
+    serializer_class = GumtreeProfileListingSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['url']
+    filterset_fields = ['url']
+    ordering_fields = ['url']
+    ordering = ['url']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return GumtreeProfileListing.objects.all()
+        else:
+           
+            return GumtreeProfileListing.objects.filter(user=user).all()
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        print(f"instance: {instance}")
+        # Proceed with deletion
+        gumtree_profile_listing=GumtreeProfileListing.objects.filter(id=instance.id).first()
+        gumtree_profile_listing.delete()
+        return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+
+
+def extract_seller_id(profile_url):
+    """Extract the seller ID from a Facebook Marketplace profile URL."""
+    if profile_url.endswith('/'):
+        profile_url = profile_url[:-1]
+    seller_id = profile_url.split('/')[-1]
+    return seller_id
+
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_montly_listings_report(request):
+    if request.method == 'GET':
+        user = request.user
+        pending_vehicle_listings_count = 0
+        failed_vehicle_listings_count = 0
+        completed_vehicle_listings_count = 0
+        pending_gumtree_profile_count = 0
+        failed_gumtree_profile_count = 0
+        completed_gumtree_profile_count = 0
+        pending_facebook_profile_count = 0
+        failed_facebook_profile_count = 0
+        completed_facebook_profile_count = 0
+        total_vehicle_listings_count = 0
+        total_gumtree_profile_count = 0
+        total_facebook_profile_count = 0
+        current_date = datetime.now().date()
+        thirty_days_ago = current_date - timedelta(days=30)
+        if user.is_superuser:
+            vehicle_listings = VehicleListing.objects.filter(updated_at__date__gte=thirty_days_ago).all()
+            gumtree_profile_listings = GumtreeProfileListing.objects.filter(updated_at__date__gte=thirty_days_ago).all()
+            facebook_profile_listings = FacebookProfileListing.objects.filter(updated_at__date__gte=thirty_days_ago).all()
+        else:
+            vehicle_listings = VehicleListing.objects.filter(user=user,updated_at__date__gte=thirty_days_ago).all()
+            gumtree_profile_listings = GumtreeProfileListing.objects.filter(user=user,updated_at__date__gte=thirty_days_ago).all()
+            facebook_profile_listings = FacebookProfileListing.objects.filter(user=user,updated_at__date__gte=thirty_days_ago).all()
+        if vehicle_listings:
+            for current_listing in vehicle_listings:
+                if current_listing.status == "completed":
+                    completed_vehicle_listings_count += 1
+                elif current_listing.status == "failed":
+                    failed_vehicle_listings_count += 1
+                else:
+                    pending_vehicle_listings_count += 1
+            total_vehicle_listings_count = completed_vehicle_listings_count + failed_vehicle_listings_count + pending_vehicle_listings_count
+        if gumtree_profile_listings:
+            for current_listing in gumtree_profile_listings:
+                if current_listing.status == "completed":
+                    completed_gumtree_profile_count += 1
+                elif current_listing.status == "failed":
+                    failed_gumtree_profile_count += 1
+                else:
+                    pending_gumtree_profile_count += 1
+            total_gumtree_profile_count = completed_gumtree_profile_count + failed_gumtree_profile_count + pending_gumtree_profile_count
+        if facebook_profile_listings:
+            for current_listing in facebook_profile_listings:
+                if current_listing.status == "completed":
+                    completed_facebook_profile_count += 1
+                elif current_listing.status == "failed":
+                    failed_facebook_profile_count += 1
+                else:
+                    pending_facebook_profile_count += 1
+            total_facebook_profile_count = completed_facebook_profile_count + failed_facebook_profile_count + pending_facebook_profile_count
+            total_facebook_profile_count = completed_facebook_profile_count + failed_facebook_profile_count + pending_facebook_profile_count
+            return JsonResponse({'pending_vehicle_listings_count': pending_vehicle_listings_count, 'failed_vehicle_listings_count': failed_vehicle_listings_count, 'completed_vehicle_listings_count': completed_vehicle_listings_count,'total_vehicle_listings': total_vehicle_listings_count,'pending_gumtree_profile_count': pending_gumtree_profile_count, 'failed_gumtree_profile_count': failed_gumtree_profile_count, 'completed_gumtree_profile_count': completed_gumtree_profile_count,'total_gumtree_profile_count': total_gumtree_profile_count,'pending_facebook_profile_count': pending_facebook_profile_count, 'failed_facebook_profile_count': failed_facebook_profile_count, 'completed_facebook_profile_count': completed_facebook_profile_count,'total_facebook_profile_count': total_facebook_profile_count}, status=200)
+        else:
+            return JsonResponse({'pending_vehicle_listings_count': pending_vehicle_listings_count, 'failed_vehicle_listings_count': failed_vehicle_listings_count, 'completed_vehicle_listings_count': completed_vehicle_listings_count,'total_vehicle_listings': total_vehicle_listings_count,'pending_gumtree_profile_count': pending_gumtree_profile_count, 'failed_gumtree_profile_count': failed_gumtree_profile_count, 'completed_gumtree_profile_count': completed_gumtree_profile_count,'total_gumtree_profile_count': total_gumtree_profile_count,'pending_facebook_profile_count': pending_facebook_profile_count, 'failed_facebook_profile_count': failed_facebook_profile_count, 'completed_facebook_profile_count': completed_facebook_profile_count,'total_facebook_profile_count': total_facebook_profile_count}, status=200)
+        
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+
+
