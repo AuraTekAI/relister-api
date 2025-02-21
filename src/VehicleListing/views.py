@@ -382,6 +382,13 @@ def facebook_profile_listings(request):
         credentials = FacebookUserCredentials.objects.filter(user=user).first()
         if not credentials:
             return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
+        if credentials.session_cookie == {}:
+            session_cookie =login_to_facebook(credentials.email, credentials.password)
+            if session_cookie:
+                credentials.session_cookie = session_cookie
+                credentials.save()
+            else:
+                return JsonResponse({'error': 'Login failed'}, status=400)
         thread = threading.Thread(target=facebook_profile_listings_thread, args=(profile_url, credentials,user,seller_id))
         thread.start()
         return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
