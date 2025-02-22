@@ -16,14 +16,14 @@ def create_periodic_task(sender, **kwargs):
     from django_celery_beat.models import PeriodicTask, IntervalSchedule
     
     schedule, created = IntervalSchedule.objects.get_or_create(
-        every=30,
-        period=IntervalSchedule.MINUTES,
+        every=1,
+        period=IntervalSchedule.HOURS,
     )
     PeriodicTask.objects.update_or_create(
-        name="Create_Facebook_Listings",
+        name="Create_Pending_Facebook_Listings",
         defaults={  
             "interval": schedule,
-            "task": "VehicleListing.tasks.create_facebook_marketplace_listing_task",
+            "task": "VehicleListing.tasks.create_pending_facebook_marketplace_listing_task",
         },
     )
 
@@ -32,9 +32,21 @@ def create_periodic_task(sender, **kwargs):
         period=IntervalSchedule.DAYS,
     )
     PeriodicTask.objects.update_or_create(
-        name="Relist_Facebook_Listings",
+        name="Relist_7_Days_Facebook_Listings",
         defaults={
             "interval": schedule,
             "task": "VehicleListing.tasks.relist_facebook_marketplace_listing_task",
+        },
+    )
+
+    schedule, created = IntervalSchedule.objects.get_or_create(
+        every=1,
+        period=IntervalSchedule.DAYS,
+    )
+    PeriodicTask.objects.update_or_create(
+        name="Create_Failed_Facebook_Listings",
+        defaults={
+            "interval": schedule,
+            "task": "VehicleListing.tasks.create_failed_facebook_marketplace_listing_task",
         },
     )

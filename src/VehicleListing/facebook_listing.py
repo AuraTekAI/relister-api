@@ -4,7 +4,6 @@ import time
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
 import requests
-from .models import VehicleListing
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -453,36 +452,61 @@ def perform_search_and_delete(search_for,session_cookie):
                 )
                 delete_option.click()
                 page.wait_for_timeout(2000)
+                success,message = find_and_click_delete_button(page)
+                if success:
+                    logging.info(f"{message}")
+                    # Handle post-deletion actions
+                    logging.info("Clicking 'I'd rather not answer'...")
+                    not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                    if not_answer_button and not_answer_button.is_visible():
+                        not_answer_button.click()
+                        page.wait_for_timeout(2000)
+                    else:   
+                        logging.warning("'I'd rather not answer' button not found.")
+                        return True, "I'd rather not answer' button not found. but successfully delte the product"
 
-                # Confirm deletion
-                logging.info("Confirming deletion...")
-                confirm_delete = page.wait_for_selector(
-                    "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
-                    state="visible",
-                )
-                confirm_delete.click()
-                page.wait_for_timeout(3000)
-
-                # Handle post-deletion actions
-                logging.info("Clicking 'I'd rather not answer'...")
-                not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                if not_answer_button:
-                    not_answer_button.click()
-                    page.wait_for_timeout(2000)
+                    logging.info("Clicking 'Next'...")
+                    next_button = page.locator("//*[text()='Next']").first
+                    if next_button and next_button.is_visible():
+                        next_button.click()
+                        page.wait_for_timeout(2000)
+                        logging.info("Process completed successfully.")
+                        return True, "Successfully deleted the  listing"
+                    else:
+                        logging.warning("'Next' button not found.")
+                        return True, "'Next' button not found.but successfully delte the product"
                 else:
-                    logging.warning("'I'd rather not answer' button not found.")
-                    return True, "I'd rather not answer' button not found.but successfully delte the product"
+                    return False,message
 
-                logging.info("Clicking 'Next'...")
-                next_button = page.locator("//*[text()='Next']").first
-                if next_button and next_button.is_visible():
-                    next_button.click()
-                    page.wait_for_timeout(2000)
-                    logging.info("Process completed successfully.")
-                    return True, "Successfully deleted the  listing"
-                else:
-                    logging.warning("'Next' button not found.")
-                    return True, "'Next' button not found.but successfully delte the product"
+                # # Confirm deletion
+                # logging.info("Confirming deletion...")
+                # confirm_delete = page.wait_for_selector(
+                #     "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
+                #     state="visible",
+                # )
+                # confirm_delete.click()
+                # page.wait_for_timeout(3000)
+
+                # # Handle post-deletion actions
+                # logging.info("Clicking 'I'd rather not answer'...")
+                # not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                # if not_answer_button:
+                #     not_answer_button.click()
+                #     page.wait_for_timeout(2000)
+                # else:
+                #     logging.warning("'I'd rather not answer' button not found.")
+                #     return True, "I'd rather not answer' button not found.but successfully delte the product"
+
+                # logging.info("Clicking 'Next'...")
+                # next_button = page.locator("//*[text()='Next']").first
+                # if next_button and next_button.is_visible():
+                #     next_button.click()
+                #     page.wait_for_timeout(2000)
+                #     logging.info("Process completed successfully.")
+                #     return True, "Successfully deleted the  listing"
+                # else:
+                #     logging.warning("'Next' button not found.")
+                #     return True, "'Next' button not found.but successfully delte the product"
 
             page.wait_for_timeout(5000)  # Wait for another 5 seconds
             matches_found = get_count_of_elements_with_text(search_for,page)
@@ -502,36 +526,61 @@ def perform_search_and_delete(search_for,session_cookie):
                 )
                 delete_option.click()
                 page.wait_for_timeout(2000)
+                success,message = find_and_click_delete_button(page)
+                if success:
+                    logging.info(f"{message}")
+                    # Handle post-deletion actions
+                    logging.info("Clicking 'I'd rather not answer'...")
+                    not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                    if not_answer_button and not_answer_button.is_visible():
+                        not_answer_button.click()
+                        page.wait_for_timeout(2000)
+                    else:
+                        logging.warning("'I'd rather not answer' button not found.")
+                        return True, "I'd rather not answer' button not found. but successfully delte the product"
 
-                # Confirm deletion
-                logging.info("Confirming deletion...")
-                confirm_delete = page.wait_for_selector(
-                    "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
-                    state="visible",
-                )
-                confirm_delete.click()
-                page.wait_for_timeout(3000)
-
-                # Handle post-deletion actions
-                logging.info("Clicking 'I'd rather not answer'...")
-                not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                if not_answer_button:
-                    not_answer_button.click()
-                    page.wait_for_timeout(2000)
+                    logging.info("Clicking 'Next'...")
+                    next_button = page.locator("//*[text()='Next']").first
+                    if next_button and next_button.is_visible():
+                        next_button.click()
+                        page.wait_for_timeout(2000)
+                        logging.info("Process completed successfully.")
+                        return True, "Successfully deleted the  listing"
+                    else:
+                        logging.warning("'Next' button not found.")
+                        return True, "'Next' button not found.but successfully delte the product"
                 else:
-                    logging.warning("'I'd rather not answer' button not found.")
-                    return True, "I'd rather not answer' button not found. but successfully delte the product"
+                    return False,message
 
-                logging.info("Clicking 'Next'...")
-                next_button = page.locator("//*[text()='Next']").first
-                if next_button and next_button.is_visible():
-                    next_button.click()
-                    page.wait_for_timeout(2000)
-                    logging.info("Process completed successfully.")
-                    return True, "Successfully deleted the  listing"
-                else:
-                    logging.warning("'Next' button not found.")
-                    return True, "'Next' button not found.but successfully delte the product"
+                # # Confirm deletion
+                # logging.info("Confirming deletion...")
+                # confirm_delete = page.wait_for_selector(
+                #     "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
+                #     state="visible",
+                # )
+                # confirm_delete.click()
+                # page.wait_for_timeout(3000)
+
+                # # Handle post-deletion actions
+                # logging.info("Clicking 'I'd rather not answer'...")
+                # not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                # if not_answer_button:
+                #     not_answer_button.click()
+                #     page.wait_for_timeout(2000)
+                # else:
+                #     logging.warning("'I'd rather not answer' button not found.")
+                #     return True, "I'd rather not answer' button not found. but successfully delte the product"
+
+                # logging.info("Clicking 'Next'...")
+                # next_button = page.locator("//*[text()='Next']").first
+                # if next_button and next_button.is_visible():
+                #     next_button.click()
+                #     page.wait_for_timeout(2000)
+                #     logging.info("Process completed successfully.")
+                #     return True, "Successfully deleted the  listing"
+                # else:
+                #     logging.warning("'Next' button not found.")
+                #     return True, "'Next' button not found.but successfully delte the product"
             
 
             didnt_find_locator = "text='We didn't find anything'"
@@ -550,6 +599,34 @@ def get_elements_with_text(search_for,page):
     locator_case_insensitive = f"text=/.*{search_for}.*/i"
     elements = page.locator(locator_case_sensitive).all()
     return elements if elements else page.locator(locator_case_insensitive).all()
+
+def find_and_click_delete_button(page):
+    logging.info("Attempting to find the 'Delete' button...")
+
+    # Different XPath variants to locate the Delete button
+    delete_selectors = [
+        "//div[@aria-label='Delete' and @role='button']",
+        "//span[contains(text(), 'Delete')]/ancestor::div[@role='button']",  # Variant 1: Using role=button
+        "//span[contains(text(), 'Delete')]/parent::span/parent::div",  # Variant 2: Traversing up from <span>
+          # Variant 3: aria-label Delete
+    ]
+
+    for selector in delete_selectors:
+        try:
+            delete_buttons = page.query_selector_all(selector)
+            if delete_buttons:
+                for button in delete_buttons:
+                    if button.is_visible():
+                        button.click()
+                        page.wait_for_timeout(2000)
+                        logging.info(f"Successfully clicked the 'Delete' button using selector: {selector}")
+                        return True, "Successfully deleted the listing"
+                logging.warning(f"Elements found for selector {selector}, but none were visible.")
+        except Exception as e:
+            logging.error(f"Error while searching with selector {selector}: {e}")
+
+    logging.error("Delete button not found using any selector.")
+    return False, "Failed to delete the listing"
 
 
 
@@ -849,50 +926,50 @@ def extract_location(page):
 
 
 
-def save_facebook_listing(listing_details,current_listing,user,seller_id):
-    try:
-        VehicleListing.objects.create(
-            user=user,
-            list_id=current_listing["id"],
-            year=listing_details.get("year"),
-            body_type="Other",
-            fuel_type="Other",
-            color="Other",
-            variant="Other",
-            make=listing_details.get("make"),
-            mileage=current_listing["mileage"],
-            model=listing_details.get("model"),
-            price=str(listing_details.get("price")),
-            transmission=None,
-            description=listing_details.get("description"),
-        images=listing_details["images"][0],
-            url=current_listing["url"],
-            location=listing_details.get("location"),
-            status="pending",
-            seller_profile_id=seller_id
-            )
-        # response_vehicle_listing_data = {   
-        #     "id": vehicle_listing.id,
-        #     "title": vehicle_listing.title,
-        #     "price": vehicle_listing.price,
-        #     "location": vehicle_listing.location,
-        #     "url": vehicle_listing.url,
-        #     "status": vehicle_listing.status,
-        #     "seller_profile_id": vehicle_listing.seller_profile_id,
-        #     "make": vehicle_listing.make,
-        #     "mileage": vehicle_listing.mileage,
-        #     "model": vehicle_listing.model,
-        #     "price": vehicle_listing.price,
-        #     "transmission": vehicle_listing.transmission,
-        #     "description": vehicle_listing.description,
-        #     "images": vehicle_listing.images,
-        #     "url": vehicle_listing.url,
-        #     "location": vehicle_listing.location,
-        #     "status": vehicle_listing.status,
-        #     "seller_profile_id": vehicle_listing.seller_profile_id
+# def save_facebook_listing(listing_details,current_listing,user,seller_id):
+#     try:
+#         VehicleListing.objects.create(
+#             user=user,
+#             list_id=current_listing["id"],
+#             year=listing_details.get("year"),
+#             body_type="Other",
+#             fuel_type="Other",
+#             color="Other",
+#             variant="Other",
+#             make=listing_details.get("make"),
+#             mileage=current_listing["mileage"],
+#             model=listing_details.get("model"),
+#             price=str(listing_details.get("price")),
+#             transmission=None,
+#             description=listing_details.get("description"),
+#         images=listing_details["images"][0],
+#             url=current_listing["url"],
+#             location=listing_details.get("location"),
+#             status="pending",
+#             seller_profile_id=seller_id
+#             )
+#         # response_vehicle_listing_data = {   
+#         #     "id": vehicle_listing.id,
+#         #     "title": vehicle_listing.title,
+#         #     "price": vehicle_listing.price,
+#         #     "location": vehicle_listing.location,
+#         #     "url": vehicle_listing.url,
+#         #     "status": vehicle_listing.status,
+#         #     "seller_profile_id": vehicle_listing.seller_profile_id,
+#         #     "make": vehicle_listing.make,
+#         #     "mileage": vehicle_listing.mileage,
+#         #     "model": vehicle_listing.model,
+#         #     "price": vehicle_listing.price,
+#         #     "transmission": vehicle_listing.transmission,
+#         #     "description": vehicle_listing.description,
+#         #     "images": vehicle_listing.images,
+#         #     "url": vehicle_listing.url,
+#         #     "location": vehicle_listing.location,
+#         #     "status": vehicle_listing.status,
+#         #     "seller_profile_id": vehicle_listing.seller_profile_id
 
-        # }
-        # print(response_vehicle_listing_data)
-        return True,"Listing saved successfully"
-    except Exception as e:
-        return False,str(e)
+#         # }
+#         # print(response_vehicle_listing_data)
+#         return True,"Listing saved successfully"
+#     except Exception as e:
+#         return False,str(e)

@@ -7,7 +7,7 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,save_facebook_listing
+from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
