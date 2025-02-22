@@ -9,7 +9,7 @@ import time
 import random
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
-def create_facebook_marketplace_listing_task(self):
+def create_pending_facebook_marketplace_listing_task(self):
     pending_listings = VehicleListing.objects.filter(status="pending").all()
     for listing in pending_listings:
         try:
@@ -92,3 +92,59 @@ def relist_facebook_marketplace_listing_task(self):
                             listing.save()
             else:
                 continue
+
+
+
+
+@shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
+def create_failed_facebook_marketplace_listing_task(self):
+    pending_listings = VehicleListing.objects.filter(status="failed").all()
+    for listing in pending_listings:
+        try:
+            time.sleep(random.randint(2,5))
+            credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
+            if credentials and credentials.session_cookie:
+                listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
+                if listing_created:
+                    print(message)
+                    already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing).first()
+                    if not already_listed:
+                        FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
+                        listing.status="completed"
+                        listing.save()
+                    else:
+                        listing.status="completed"
+                        listing.save()
+                else:
+                    FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                    listing.status="failed"
+                    listing.save()
+            elif credentials and not credentials.session_cookie:
+                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                if session_cookie:
+                    credentials.session_cookie = session_cookie
+                    credentials.save()
+                    listing_created, message = create_marketplace_listing(listing, session_cookie) 
+                    if listing_created:
+                        print(message)
+                        already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing).first()
+                        if not already_listed:
+                            FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
+                            listing.status="completed"
+                            listing.save()
+                        else:
+                            listing.status="completed"
+                            listing.save()
+                    else:
+                        FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                        listing.status="failed"
+                        listing.save()
+                else:
+                    raise Exception("Login failed.")
+            else:
+                raise Exception("No credentials found for the user")
+             
+        except Exception as e:
+            listing.status="failed"
+            listing.save()
+            raise e
