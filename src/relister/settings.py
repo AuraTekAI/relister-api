@@ -104,25 +104,25 @@ WSGI_APPLICATION = "relister.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-USE_SQLITE = env('USE_SQLITE')
-if USE_SQLITE == 'True':
-    DATABASES = {
-        'default' : {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
+# USE_SQLITE = env('USE_SQLITE')
+# if USE_SQLITE == 'True':
+#     DATABASES = {
+#         'default' : {
+#             'ENGINE': 'django.db.backends.sqlite3',
+#             'NAME': BASE_DIR / 'db.sqlite3',
+#         }
+#     }
+# else:
+DATABASES = {
+    'default' : {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': env('POSTGRES_DB'),
+        'USER': env('POSTGRES_USER'),
+        'PASSWORD': env('POSTGRES_PASSWORD'),
+        'HOST': env('DB_HOST'),
+        'PORT': env('DB_PORT')
     }
-else:
-    DATABASES = {
-        'default' : {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': env('POSTGRES_DB'),
-            'USER': env('POSTGRES_USER'),
-            'PASSWORD': env('POSTGRES_PASSWORD'),
-            'HOST': env('DB_HOST'),
-            'PORT': env('DB_PORT')
-        }
-    }
+}
 
 CACHES = {
     'default': {
