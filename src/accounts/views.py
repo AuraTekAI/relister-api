@@ -7,8 +7,7 @@ from rest_framework import status, generics
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import filters
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import smart_bytes
+from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from accounts.models import User
 from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer, UserListSerializer

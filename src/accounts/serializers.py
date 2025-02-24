@@ -6,11 +6,8 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework.exceptions import AuthenticationFailed,NotAcceptable
 from rest_framework import serializers
 from accounts.models import User
-from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-
-        
 class UserListSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -51,7 +48,6 @@ class SetNewPasswordSerializer(serializers.Serializer):
             
         except Exception as e:
             raise NotAcceptable("Password doesn't match confirm password",406)
-
 # Add this new serializer
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)

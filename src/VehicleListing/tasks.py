@@ -10,6 +10,7 @@ import random
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def create_pending_facebook_marketplace_listing_task(self):
+    """Create pending facebook marketplace listings"""
     pending_listings = VehicleListing.objects.filter(status="pending").all()
     for listing in pending_listings:
         try:
@@ -64,6 +65,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def relist_facebook_marketplace_listing_task(self):
+    """Relist 7 days old facebook marketplace listings"""
     current_date = datetime.now().date()
     seven_days_ago = current_date - timedelta(days=7)
     pending_listings = VehicleListing.objects.filter(status="completed", updated_at__date__lte=seven_days_ago).all()
@@ -98,6 +100,7 @@ def relist_facebook_marketplace_listing_task(self):
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def create_failed_facebook_marketplace_listing_task(self):
+    """Create failed facebook marketplace listings"""
     pending_listings = VehicleListing.objects.filter(status="failed").all()
     for listing in pending_listings:
         try:

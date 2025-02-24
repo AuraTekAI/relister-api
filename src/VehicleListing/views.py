@@ -15,63 +15,11 @@ from rest_framework.decorators import api_view, permission_classes
 import time
 import random   
 from datetime import datetime, timedelta
-# @csrf_exempt
-# def import_url_from_gumtree(request):
-#     if request.method == 'POST':
-        
-#         data = json.loads(request.body)
-#         email = data[0].get('email')
-#         url = data[0].get('url')
-#         if not email:
-#             return JsonResponse({'error': 'Email is required'}, status=200)
-        
-#         user = User.objects.filter(email=email).first()
-#         if not user:
-#             return JsonResponse({'error': 'User not found'}, status=200)
-        
-#         import_url = ImportFromUrl(url)
-#         is_valid, error_message = import_url.validate()
-#         if not is_valid:
-#             return JsonResponse({'error': error_message}, status=200)
-#         list_id = url.split('/')[-1]
-#         if not list_id.isdigit():
-#             return JsonResponse({'error': 'Invalid URL'}, status=200)
-#         if ListingUrl.objects.filter(url=url).exists():
-#             return JsonResponse({'error': 'URL already exists'}, status=200)
-#         # Extract data from URL
-#         vehicle_listing = get_listings(url,user)
-#         listing_url = ListingUrl.objects.create(url=url, user=user , status='Completed')
-
-#         vls = VehicleListingSerializer(vehicle_listing)
-#         # vls.save()
-
-#         if vehicle_listing:
-#             print(f"vehicle_listing: {vehicle_listing}")
-#             response = create_facebook_listing(vehicle_listing)
-#             print(f"response: {response}")
-
-#             if response:
-#                 # Prepare user related listing data
-#                 user_data = {
-#                     'url': url,
-#                     'message': response[1]
-#                 }
-#                 return JsonResponse(user_data, status=200)
-#             else:
-#                 return JsonResponse({'error': response[1]}, status=200)
-#         else:
-#             return JsonResponse({'error': 'Failed to extract data from URL'}, status=400)
-
-#     return JsonResponse({'error': 'Invalid request method'}, status=405)
-
-
-
-
 
 @csrf_exempt
 def import_url_from_gumtree(request):
+    """Import URL from Gumtree"""
     if request.method == 'POST':
-        
         data = json.loads(request.body)
         email = data[0].get('email')
         url = data[0].get('url')
@@ -95,7 +43,6 @@ def import_url_from_gumtree(request):
         # Extract data from URL
         vehicle_listing = get_listings(url,user,import_url_instance)
         if vehicle_listing:
-            
             vls = VehicleListingSerializer(vehicle_listing)
             print(f"vehicle_listing: {vehicle_listing}")
             thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
@@ -114,6 +61,7 @@ def import_url_from_gumtree(request):
 
 @csrf_exempt
 def all_vehicle_listing(request):
+    """Get all vehicle listings"""
     if request.method == 'POST':
         data = json.loads(request.body)
         email = data[0].get('email')  # Access first item since you're sending array
@@ -132,6 +80,7 @@ def all_vehicle_listing(request):
 
 @csrf_exempt
 def all_urls(request):
+    """Get all URLs"""
     if request.method == 'POST':
         email = request.POST.get('email')
         user = User.objects.get(email=email).first()
@@ -140,9 +89,8 @@ def all_urls(request):
         all_urls = ListingUrl.objects.filter(user=user)
         return JsonResponse(all_urls, status=200)
     return JsonResponse({'error': 'Invalid request method'}, status=200)
-
-
 class ListingUrlViewSet(ModelViewSet):
+    """Get all URLs"""
     queryset = ListingUrl.objects.all()
     serializer_class = ListingUrlSerializer
     permission_classes = [IsAuthenticated]
@@ -160,6 +108,7 @@ class ListingUrlViewSet(ModelViewSet):
             return ListingUrl.objects.filter(user=user)
 
 class VehicleListingViewSet(ModelViewSet):
+    """Get all vehicle listings"""
     queryset = VehicleListing.objects.all().order_by('-updated_at')
     serializer_class = VehicleListingSerializer
     permission_classes = [IsAuthenticated]
@@ -170,6 +119,7 @@ class VehicleListingViewSet(ModelViewSet):
     ordering = ['make', 'model', 'location', 'price', 'mileage', 'year', 'variant', 'fuel_type', 'description', 'images']
     
     def get_queryset(self):
+        """Get all vehicle listings"""
         user = self.request.user
         if user.is_superuser:
             return VehicleListing.objects.all().order_by('-updated_at')
@@ -177,6 +127,7 @@ class VehicleListingViewSet(ModelViewSet):
             return VehicleListing.objects.filter(user=user).order_by('-updated_at')
 
     def destroy(self, request, *args, **kwargs):
+        """Delete vehicle listing"""
         instance = self.get_object()
         print(f"instance: {instance}")
         # Proceed with deletion
@@ -194,9 +145,8 @@ class VehicleListingViewSet(ModelViewSet):
             else:
                 return JsonResponse({'error': response[1]}, status=200)
 
-        
-
 class FacebookUserCredentialsViewSet(ModelViewSet):
+    """Get all Facebook user credentials"""
     queryset = FacebookUserCredentials.objects.all()
     serializer_class = FacebookUserCredentialsSerializer
     permission_classes = [IsAuthenticated]
@@ -205,20 +155,17 @@ class FacebookUserCredentialsViewSet(ModelViewSet):
     filterset_fields = ['email']
     ordering_fields = ['email']
     ordering = ['email']
-    
 
     def get_queryset(self):
+        """Get all Facebook user credentials"""
         user = self.request.user
         if user.is_superuser:
             return FacebookUserCredentials.objects.all()
         else:
             return FacebookUserCredentials.objects.filter(user=user)
 
-
-
-
-
 def create_facebook_listing(vehicle_listing):
+    """Create Facebook listing"""
     try:
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         print(credentials.email)
@@ -270,9 +217,8 @@ def create_facebook_listing(vehicle_listing):
         vehicle_listing.save()
         return False, "Failed to create listing"
     
-
-
 def create_facebook_marketplace_listing_task(vehicle_listing):
+    """Create Facebook marketplace listing"""
     try:
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         if credentials and credentials.session_cookie:
@@ -321,11 +267,10 @@ def create_facebook_marketplace_listing_task(vehicle_listing):
         vehicle_listing.save()
         print(f"Error in create_facebook_marketplace_listing_task: {e}")
 
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def get_gumtree_profile_listings(request):
+    """Get Gumtree profile listings"""
     try:
         data = json.loads(request.body)
         profile_url = data.get('gumtree_profile_url')
@@ -342,6 +287,7 @@ def get_gumtree_profile_listings(request):
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
         if GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
             return JsonResponse({'error': 'This URL is already processed'}, status=200)
+        # Get listings from Gumtree
         success, message = get_gumtree_listings(profile_url, user)
         if success:
             return JsonResponse({'message': message}, status=200)
@@ -350,20 +296,16 @@ def get_gumtree_profile_listings(request):
 
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
-    
-
-
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def facebook_profile_listings(request):
+    """Get Facebook profile listings"""
     try:
-        # print(request.user)
         data = json.loads(request.body)
         profile_url = data.get('profile_url')
         email = data.get('email')
         user = User.objects.filter(email=email).first()
-
         if not profile_url:
             return JsonResponse({'error': 'Profile URL is required'}, status=400)
         import_url = ImportFromUrl(profile_url)
@@ -393,6 +335,7 @@ def facebook_profile_listings(request):
 
         if success:
             facebook_profile_listing_instance = FacebookProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=len(listings))
+            # Create a new thread to process the listings
             thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,user,seller_id,facebook_profile_listing_instance))
             thread.start()
             return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
@@ -404,10 +347,8 @@ def facebook_profile_listings(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
-
-
 def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebook_profile_listing_instance):
-    # Get listings using the function
+    """Get listings using the function"""
     count=0
     for current_listing_key in listings:
         current_listing=listings[current_listing_key]
@@ -415,7 +356,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         if already_listed:
             continue
         time.sleep(random.uniform(1,2))
-        
+        # Get listings using the function
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
             count+=1
@@ -443,10 +384,9 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
     facebook_profile_listing_instance.status="completed"
     facebook_profile_listing_instance.processed_listings=count
     facebook_profile_listing_instance.save()
-    
-
 
 class FacebookProfileListingViewSet(ModelViewSet):
+    """Get all Facebook profile listings"""
     queryset = FacebookProfileListing.objects.all()
     serializer_class = FacebookProfileListingSerializer
     permission_classes = [IsAuthenticated]
@@ -457,12 +397,14 @@ class FacebookProfileListingViewSet(ModelViewSet):
     ordering = ['url']
 
     def get_queryset(self):
+        """Get all Facebook profile listings"""
         user = self.request.user
         if user.is_superuser:
             return FacebookProfileListing.objects.all() 
         else:
             return FacebookProfileListing.objects.filter(user=user).all()
     def destroy(self, request, *args, **kwargs):
+        """Delete Facebook profile listing"""
         instance = self.get_object()
         print(f"instance: {instance}")
         # Proceed with deletion
@@ -471,6 +413,7 @@ class FacebookProfileListingViewSet(ModelViewSet):
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 class GumtreeProfileListingViewSet(ModelViewSet):
+    """Get all Gumtree profile listings"""
     queryset = GumtreeProfileListing.objects.all()
     serializer_class = GumtreeProfileListingSerializer
     permission_classes = [IsAuthenticated]
@@ -481,6 +424,7 @@ class GumtreeProfileListingViewSet(ModelViewSet):
     ordering = ['url']
 
     def get_queryset(self):
+        """Get all Gumtree profile listings"""
         user = self.request.user
         if user.is_superuser:
             return GumtreeProfileListing.objects.all()
@@ -488,13 +432,13 @@ class GumtreeProfileListingViewSet(ModelViewSet):
            
             return GumtreeProfileListing.objects.filter(user=user).all()
     def destroy(self, request, *args, **kwargs):
+        """Delete Gumtree profile listing"""
         instance = self.get_object()
         print(f"instance: {instance}")
         # Proceed with deletion
         gumtree_profile_listing=GumtreeProfileListing.objects.filter(id=instance.id).first()
         gumtree_profile_listing.delete()
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-
 
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -503,11 +447,10 @@ def extract_seller_id(profile_url):
     seller_id = profile_url.split('/')[-1]
     return seller_id
 
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_montly_listings_report(request):
+    """Get monthly listings report"""
     if request.method == 'GET':
         user = request.user
         pending_vehicle_listings_count = 0

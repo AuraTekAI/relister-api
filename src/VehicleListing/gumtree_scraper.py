@@ -5,9 +5,8 @@ import logging
 import time
 import random
 import threading
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-# API_KEY = "796fe18ec2b188966a2430dc6e12a966c688d8f0"
+
+logging = logging.getLogger('gumtree')
 API_KEY = "812db259e316f5e9288f310ebb87e3fb50c369f1"
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -17,6 +16,7 @@ def extract_seller_id(profile_url):
     return seller_id
 
 def get_listings(url,user,import_url_instance):
+    """Get listings from Gumtree"""
     logging.info(f"url: {url}")
     if not API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
@@ -37,6 +37,7 @@ def get_listings(url,user,import_url_instance):
                 return None
 
             for current_data in response_data["categoryInfo"]:
+                logging.info(f"current_data: {current_data}")
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
             price=response_data["adPriceData"]["amount"]
@@ -48,12 +49,17 @@ def get_listings(url,user,import_url_instance):
             color=dict_data["Colour"]
             variant=dict_data["Variant"]
             year=dict_data["Year"]
-            model=dict_data["Model"]
-            make=dict_data["Make"]
+            if dict_data["Make, Model"]:
+                parts = dict_data["Make, Model"].split(" ", 1)  # Split into two parts at the first space
+                make = parts[0]  # First part
+                model = parts[1] if len(parts) > 1 else ""  # Remaining part
+            else:
+                model=dict_data["Model"]
+                make=dict_data["Make"]
             mileage=dict_data["Odometer"]
             transmission=dict_data["Transmission"]
             
-
+            # Create a new VehicleListing instance
             vehicle_listing=VehicleListing.objects.create(
                 user=user,
                 gumtree_url=import_url_instance,
@@ -120,6 +126,13 @@ def get_gumtree_listing_details(listing_id):
 
         # Extract and structure data
         category_info = {item['name']: item['value'] for item in response_data.get("categoryInfo", [])}
+        if category_info.get("Make, Model"):
+            parts = category_info.get("Make, Model").split(" ", 1)  # Split into two parts at the first space
+            make = parts[0]  # First part
+            model = parts[1] if len(parts) > 1 else ""  # Remaining part
+        else:
+            model=category_info.get("Model")
+            make=category_info.get("Make")  
         listing_details = {
             "title": response_data.get("adHeadingData", {}).get("title"),
             "price": response_data.get("adPriceData", {}).get("amount"),
@@ -131,8 +144,8 @@ def get_gumtree_listing_details(listing_id):
             "color": category_info.get("Colour"),
             "variant": category_info.get("Variant"),
             "year": category_info.get("Year"),
-            "model": category_info.get("Model"),
-            "make": category_info.get("Make"),
+            "model": model,
+            "make": make,
             "mileage": category_info.get("Odometer"),
             "transmission": category_info.get("Transmission"),
             "url": ""
