@@ -66,11 +66,10 @@ services:
       - ./src/.env
     working_dir: /app/src
     depends_on:
-      - db
       - redis
       - web
     command: >
-      sh -c "python /app/src/manage.py wait_for_db &&
+      sh -c "
          python /app/src/manage.py migrate &&
          celery -A relister beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler &
          celery -A relister worker --loglevel=info --hostname=relister_worker@%h -Q scheduling_queue,error_handler_queue,generic_email_queue, -E --concurrency=10"
@@ -78,8 +77,7 @@ services:
       - internal_network
 
 
-# volumes:
-#   local-db-data:
+
 
 networks:
   internal_network:
