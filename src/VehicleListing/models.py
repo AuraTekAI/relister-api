@@ -1,11 +1,5 @@
 from django.db import models
 from accounts.models import User
-# from django.conf import settings
-# Create your models here.
-
-
-
-
 
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -25,9 +19,6 @@ class FacebookUserCredentials(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-
-
-    
 class GumtreeProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
@@ -52,7 +43,6 @@ class FacebookProfileListing(models.Model):
 
     def __str__(self):
         return f"{self.url}"
-
 class VehicleListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
@@ -80,10 +70,6 @@ class VehicleListing(models.Model):
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
-
-
-
-
 class FacebookListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)

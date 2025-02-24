@@ -5,12 +5,7 @@ from django.contrib.auth.models import (
     PermissionsMixin,
 
 )
-
 from django.utils.translation import gettext_lazy as _
-
-
-
-
 class UserManager(BaseUserManager):
     """
     Custom user model manager where email is the unique identifiers
@@ -53,8 +48,6 @@ class UserManager(BaseUserManager):
         user.is_superuser = True
         user.save(using=self._db)
         return user
-
-
 class User(AbstractBaseUser, PermissionsMixin):
     # Required fields
     email = models.EmailField(verbose_name="email", max_length=60, unique=True)

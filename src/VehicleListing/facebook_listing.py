@@ -4,11 +4,10 @@ import time
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import os
 import requests
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+from relister.settings import IMAGES_DIR
 
-images_folder = os.path.join(os.path.dirname(__file__), '..', 'static', 'images')
 
+logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
@@ -82,7 +81,6 @@ def select_dropdown_option(page, field_name, option_text):
                         f"//div[@role='option'][contains(.,'{option_text}')]",
                         f"//div[@role='option' or @role='listbox'][contains(.,'{option_text}')]"
                     ]
-                    
                     for option_selector in option_selectors:
                         try:
                             option = page.locator(option_selector).first
@@ -113,7 +111,6 @@ def select_dropdown_option(page, field_name, option_text):
     except Exception as e:
         logging.error(f"Error selecting {field_name}: {e}")
         raise
-
 
 def select_vehicle_type(page,vehicle_details):
     """Select the vehicle type (Car/Truck) with random delays."""
@@ -185,7 +182,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 image_extension = os.path.splitext(image_name)[1] 
                 index = index + 1
                 new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
-                local_image_path = os.path.join(images_folder, new_image_name)
+                local_image_path = os.path.join(IMAGES_DIR, new_image_name)
 
                 try:
                     # Download the image
@@ -265,20 +262,15 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         )
                     else:
                         continue
-                    
-            # Select dropdowns
-            # select_dropdown_option(page, "Body style", "Sedan")
-            # select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
-            # select_dropdown_option(page, "Vehicle condition", "Excellent")
 
             if vehicle_details['Mileage']:
-
-                # Select dropdowns
+                # Select body style dropdown
                 if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
                     select_dropdown_option(page, "Body style", vehicle_listing.variant)
                 else:
                     select_dropdown_option(page, "Body style", "Other")
                 
+                # Select fuel type dropdown
                 if vehicle_listing.fuel_type in ["Petrol", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
                     select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
                 elif vehicle_listing.fuel_type == "Petrol - Premium Unleaded":
@@ -288,9 +280,10 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 else:
                     select_dropdown_option(page, "Fuel type", "Other")
             
-            
+                # Select vehicle condition dropdown
                 select_dropdown_option(page, "Vehicle condition", "Excellent")
             
+                # Select transmission dropdown
                 if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
                     select_dropdown_option(page, "Transmission", "Automatic transmission")
                 elif vehicle_listing.transmission in ["Manual Transmission", "Manual"]:
@@ -326,7 +319,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 image_extension = os.path.splitext(image_name)[1] 
                 index = index + 1
                 new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
-                local_image_path = os.path.join(images_folder, new_image_name)
+                local_image_path = os.path.join(IMAGES_DIR, new_image_name)
                 if os.path.exists(local_image_path):
                     os.remove(local_image_path)
             logging.info("Image file deleted successfully.")
@@ -408,9 +401,8 @@ def handle_cookie_consent(page):
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
         
-
-
 def perform_search_and_delete(search_for,session_cookie):
+    """Perform search and delete listing"""
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -423,7 +415,7 @@ def perform_search_and_delete(search_for,session_cookie):
             if not search_for.strip():
                 return False, "Search value is required"
             
-
+            
             input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
             input_element = page.locator(input_locator).first
 
@@ -433,7 +425,8 @@ def perform_search_and_delete(search_for,session_cookie):
             logging.info(f"Your Listings: Search: {search_for}")
             input_element.click()
             input_element.fill(search_for)
-            page.wait_for_timeout(5000)  # Wait for 5 seconds
+            page.wait_for_timeout(5000)
+            # Search for the listing
 
             matches_found = get_count_of_elements_with_text(search_for,page)
             if matches_found > 0:
@@ -477,37 +470,7 @@ def perform_search_and_delete(search_for,session_cookie):
                         return True, "'Next' button not found.but successfully delte the product"
                 else:
                     return False,message
-
-                # # Confirm deletion
-                # logging.info("Confirming deletion...")
-                # confirm_delete = page.wait_for_selector(
-                #     "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
-                #     state="visible",
-                # )
-                # confirm_delete.click()
-                # page.wait_for_timeout(3000)
-
-                # # Handle post-deletion actions
-                # logging.info("Clicking 'I'd rather not answer'...")
-                # not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                # if not_answer_button:
-                #     not_answer_button.click()
-                #     page.wait_for_timeout(2000)
-                # else:
-                #     logging.warning("'I'd rather not answer' button not found.")
-                #     return True, "I'd rather not answer' button not found.but successfully delte the product"
-
-                # logging.info("Clicking 'Next'...")
-                # next_button = page.locator("//*[text()='Next']").first
-                # if next_button and next_button.is_visible():
-                #     next_button.click()
-                #     page.wait_for_timeout(2000)
-                #     logging.info("Process completed successfully.")
-                #     return True, "Successfully deleted the  listing"
-                # else:
-                #     logging.warning("'Next' button not found.")
-                #     return True, "'Next' button not found.but successfully delte the product"
-
+            #second attempt
             page.wait_for_timeout(5000)  # Wait for another 5 seconds
             matches_found = get_count_of_elements_with_text(search_for,page)
             if matches_found > 0:
@@ -550,39 +513,8 @@ def perform_search_and_delete(search_for,session_cookie):
                         logging.warning("'Next' button not found.")
                         return True, "'Next' button not found.but successfully delte the product"
                 else:
-                    return False,message
-
-                # # Confirm deletion
-                # logging.info("Confirming deletion...")
-                # confirm_delete = page.wait_for_selector(
-                #     "//div[@aria-label='Delete' and contains(@class, 'x1i10hfl') and contains(@class, 'xjbqb8w') and @role='button' and @tabindex='0']",
-                #     state="visible",
-                # )
-                # confirm_delete.click()
-                # page.wait_for_timeout(3000)
-
-                # # Handle post-deletion actions
-                # logging.info("Clicking 'I'd rather not answer'...")
-                # not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                # if not_answer_button:
-                #     not_answer_button.click()
-                #     page.wait_for_timeout(2000)
-                # else:
-                #     logging.warning("'I'd rather not answer' button not found.")
-                #     return True, "I'd rather not answer' button not found. but successfully delte the product"
-
-                # logging.info("Clicking 'Next'...")
-                # next_button = page.locator("//*[text()='Next']").first
-                # if next_button and next_button.is_visible():
-                #     next_button.click()
-                #     page.wait_for_timeout(2000)
-                #     logging.info("Process completed successfully.")
-                #     return True, "Successfully deleted the  listing"
-                # else:
-                #     logging.warning("'Next' button not found.")
-                #     return True, "'Next' button not found.but successfully delte the product"
-            
-
+                    return False,message            
+            #do not find anything
             didnt_find_locator = "text='We didn't find anything'"
             if page.locator(didnt_find_locator).is_visible():
                 logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
@@ -592,23 +524,24 @@ def perform_search_and_delete(search_for,session_cookie):
         return False, str(e)
 
 def get_count_of_elements_with_text( search_for,page):
+    """Get count of elements with text"""
     return len(get_elements_with_text(search_for,page))
 
 def get_elements_with_text(search_for,page):
+    """Get elements with text"""
     locator_case_sensitive = f"text={search_for}"
     locator_case_insensitive = f"text=/.*{search_for}.*/i"
     elements = page.locator(locator_case_sensitive).all()
     return elements if elements else page.locator(locator_case_insensitive).all()
 
 def find_and_click_delete_button(page):
+    """Find and click the 'Delete' button"""
     logging.info("Attempting to find the 'Delete' button...")
-
     # Different XPath variants to locate the Delete button
     delete_selectors = [
         "//div[@aria-label='Delete' and @role='button']",
-        "//span[contains(text(), 'Delete')]/ancestor::div[@role='button']",  # Variant 1: Using role=button
-        "//span[contains(text(), 'Delete')]/parent::span/parent::div",  # Variant 2: Traversing up from <span>
-          # Variant 3: aria-label Delete
+        "//span[contains(text(), 'Delete')]/ancestor::div[@role='button']", 
+        "//span[contains(text(), 'Delete')]/parent::span/parent::div", 
     ]
 
     for selector in delete_selectors:
@@ -629,8 +562,6 @@ def find_and_click_delete_button(page):
     return False, "Failed to delete the listing"
 
 
-
-
 def get_facebook_profile_listings(profile_url,session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
@@ -638,25 +569,21 @@ def get_facebook_profile_listings(profile_url,session_cookie):
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
-
             # Set shorter timeout for navigation
             page.set_default_timeout(20000)
-
             # Navigate to profile URL
             page.goto(profile_url)
             page.wait_for_timeout(1000)
-
             # More specific selectors for profile listings
             listing_selectors = [
                 f'div[style*="max-width: 175px"] a[href*="/marketplace/item/"]',
             ]
-
             # First hover over the listings container
             listings_container = page.locator('div[style*="max-width: 175px"]').first
             listings_container.hover()
             max_count = 3 
             start_time = time.time()
-            max_time = 90  # Increased to 75 seconds for more thorough scrolling
+            max_time = 90
 
             # Use a set to store unique href links
             href_links = set()
@@ -705,12 +632,8 @@ def get_facebook_profile_listings(profile_url,session_cookie):
                                 price_element = element.query_selector('span:has-text("$")')
                                 location_element = element.query_selector('span[class*="xlyipyv"]')
                                 mileage_element = element.query_selector('span[class*="x1lliihq"]:has-text("km")')
-
-
-
                                 title = title_element.text_content() if title_element else None
                                 price = "".join(filter(str.isdigit, price_element.text_content())) if price_element else None
-
                                 location = location_element.text_content() if location_element else None
                                 mileage = "".join(filter(str.isdigit, mileage_element.text_content())) if mileage_element else None
                                 if mileage:
@@ -743,11 +666,6 @@ def get_facebook_profile_listings(profile_url,session_cookie):
         logging.error(f"Error in get_profile_listings: {e}")
         browser.close()
         return False, str(e)
-    
-
-
-
-
 
 def is_convertible_to_int(value):
     """
@@ -834,21 +752,6 @@ def extract_price(page, listing):
     except Exception as e:
         logging.error(f"Error extracting price: {e}")
 
-# def extract_mileage(page, listing):
-#     """
-#     Extracts the mileage from the listing.
-#     """
-#     try:
-#         element = page.query_selector("//span[contains(text(), 'Driven')]")
-#         if element:
-#             text = element.inner_text()
-#             logging.info(f"Mileage text: {text}")
-#             mileage_str = "".join(filter(str.isdigit, text))
-#             if mileage_str:
-#                 listing["mileage"] = int(mileage_str)
-#     except Exception as e:
-#         logging.error(f"Error extracting mileage: {e}")
-
 def extract_year_make_model(page, listing):
     """
     Extracts the year, make, and model of the vehicle.
@@ -923,53 +826,3 @@ def extract_location(page):
     except Exception as e:
         logging.error(f"Error extracting location: {e}")
     return None
-
-
-
-# def save_facebook_listing(listing_details,current_listing,user,seller_id):
-#     try:
-#         VehicleListing.objects.create(
-#             user=user,
-#             list_id=current_listing["id"],
-#             year=listing_details.get("year"),
-#             body_type="Other",
-#             fuel_type="Other",
-#             color="Other",
-#             variant="Other",
-#             make=listing_details.get("make"),
-#             mileage=current_listing["mileage"],
-#             model=listing_details.get("model"),
-#             price=str(listing_details.get("price")),
-#             transmission=None,
-#             description=listing_details.get("description"),
-#         images=listing_details["images"][0],
-#             url=current_listing["url"],
-#             location=listing_details.get("location"),
-#             status="pending",
-#             seller_profile_id=seller_id
-#             )
-#         # response_vehicle_listing_data = {   
-#         #     "id": vehicle_listing.id,
-#         #     "title": vehicle_listing.title,
-#         #     "price": vehicle_listing.price,
-#         #     "location": vehicle_listing.location,
-#         #     "url": vehicle_listing.url,
-#         #     "status": vehicle_listing.status,
-#         #     "seller_profile_id": vehicle_listing.seller_profile_id,
-#         #     "make": vehicle_listing.make,
-#         #     "mileage": vehicle_listing.mileage,
-#         #     "model": vehicle_listing.model,
-#         #     "price": vehicle_listing.price,
-#         #     "transmission": vehicle_listing.transmission,
-#         #     "description": vehicle_listing.description,
-#         #     "images": vehicle_listing.images,
-#         #     "url": vehicle_listing.url,
-#         #     "location": vehicle_listing.location,
-#         #     "status": vehicle_listing.status,
-#         #     "seller_profile_id": vehicle_listing.seller_profile_id
-
-#         # }
-#         # print(response_vehicle_listing_data)
-#         return True,"Listing saved successfully"
-#     except Exception as e:
-#         return False,str(e)

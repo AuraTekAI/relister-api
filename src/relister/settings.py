@@ -216,14 +216,6 @@ REDIS_DB = env('REDIS_DB')
 REDIS_PASSWORD = env('REDIS_PASSWORD')
 REDIS_URL = env('REDIS_URL')
 
-
-
-
-
-
-
-
-
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS = True  # Only use this for development
 CORS_ALLOW_CREDENTIALS = True
@@ -256,6 +248,58 @@ CORS_ALLOW_HEADERS = [
 ]
 
 
+IMAGES_DIR = os.path.join(os.path.dirname(__file__), '..', 'static', 'images')
+# Logging configuration
+LOG_DIR = os.path.join(PARENT_DIR, 'logs')
+# Ensure the log directory exists
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)  # Create the directory if it doesn't exist
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        }
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple'
+        },
+        'gumtree_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(LOG_DIR, 'gumtree_listing.log'),
+            'formatter': 'verbose'
+        },
+        'facebook_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(LOG_DIR, 'facebook_listing.log'),
+            'formatter': 'verbose'
+        },
+    },
+    'loggers': {
+        'gumtree': {
+            'handlers': ['console', 'gumtree_file'],
+            'level': 'DEBUG',
+            'propagate': False
+        },
+        'facebook': {
+            'handlers': ['console', 'facebook_file'],
+            'level': 'DEBUG',
+            'propagate': False
+        },
+    }
+}
 
 
 
