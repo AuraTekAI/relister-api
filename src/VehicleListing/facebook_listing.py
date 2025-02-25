@@ -169,7 +169,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
     try:    
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
 
@@ -355,7 +355,7 @@ def login_to_facebook( email, password,session_cookie=None):
     """Log in to Facebook automatically."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
             # Navigate to Facebook login page
@@ -428,7 +428,7 @@ def perform_search_and_delete(search_for,session_cookie):
     """Perform search and delete listing"""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             page.goto("https://www.facebook.com/marketplace/you/selling")
@@ -589,7 +589,7 @@ def get_facebook_profile_listings(profile_url,session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             # Set shorter timeout for navigation
@@ -711,7 +711,7 @@ def extract_facebook_listing_details(current_listing, session):
     Extract details of a Facebook Marketplace listing.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=session)
         page = context.new_page()
 
