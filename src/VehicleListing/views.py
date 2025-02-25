@@ -191,6 +191,7 @@ def create_facebook_listing(vehicle_listing):
                 if session_cookie:
                     credentials.session_cookie = session_cookie
                     credentials.save()
+                    time.sleep(random.uniform(3,5))
                     listing_created, message = create_marketplace_listing(vehicle_listing, session_cookie) 
                     if listing_created:
                         print(message)
