@@ -406,10 +406,22 @@ class FacebookProfileListingViewSet(ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """Delete Facebook profile listing"""
         instance = self.get_object()
-        print(f"instance: {instance}")
+        year_make_model_list=[]
+        session_cookie=None
         # Proceed with deletion
         facebook_profile_listing=FacebookProfileListing.objects.filter(id=instance.id).first()
+        facebook_profile_vehicle_listings=VehicleListing.objects.filter(facebook_profile=facebook_profile_listing,status="completed").all()
+        if facebook_profile_vehicle_listings:
+            user = facebook_profile_listing.user
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+            if credentials and credentials.session_cookie != {}:
+                session_cookie = credentials.session_cookie
+            for current_listing in facebook_profile_vehicle_listings:
+                year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
         facebook_profile_listing.delete()
+        if year_make_model_list:
+            thread = threading.Thread(target=delete_multiple_vehicle_listings, args=(year_make_model_list,session_cookie))
+            thread.start()
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 class GumtreeProfileListingViewSet(ModelViewSet):
@@ -434,10 +446,22 @@ class GumtreeProfileListingViewSet(ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """Delete Gumtree profile listing"""
         instance = self.get_object()
-        print(f"instance: {instance}")
+        year_make_model_list=[]
+        session_cookie=None
         # Proceed with deletion
         gumtree_profile_listing=GumtreeProfileListing.objects.filter(id=instance.id).first()
+        gumtree_profile_vehicle_listings=VehicleListing.objects.filter(gumtree_profile=gumtree_profile_listing,status="completed").all()
+        if gumtree_profile_vehicle_listings:
+            user = gumtree_profile_listing.user
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+            if credentials and credentials.session_cookie != {}:
+                session_cookie = credentials.session_cookie
+            for current_listing in gumtree_profile_vehicle_listings:
+                year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
         gumtree_profile_listing.delete()
+        if year_make_model_list:
+            thread = threading.Thread(target=delete_multiple_vehicle_listings, args=(year_make_model_list,session_cookie))
+            thread.start()
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 def extract_seller_id(profile_url):
@@ -447,6 +471,13 @@ def extract_seller_id(profile_url):
     seller_id = profile_url.split('/')[-1]
     return seller_id
 
+def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
+    """Delete multiple vehicle listings"""
+    if session_cookie:
+        for current_listing in year_make_model_list:
+            search_query = current_listing
+            perform_search_and_delete(search_query,session_cookie)
+            time.sleep(random.uniform(2,3))
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_montly_listings_report(request):
