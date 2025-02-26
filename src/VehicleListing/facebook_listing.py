@@ -147,23 +147,91 @@ def select_vehicle_type(page,vehicle_details):
         raise
 
 def handle_login_info_modal(page):
-    """Handle the 'Save your login info' modal if it appears"""
+    """Handle the 'Save your login info' modal if it appears."""
     try:
-        # Wait for a short time to see if the modal appears
-        modal_selector = "//span[contains(text(), 'Save your login info')]"
-        modal_exists = page.wait_for_selector(modal_selector, timeout=5000, state="visible")
+        # Wait for modal with exact class structure
+        modal_exists = page.wait_for_selector("div.x1o1ewxj.x3x9cwd.x1e5q0jg.x13rtm0m", timeout=5000, state="visible")
         
         if modal_exists:
             logging.info("Login info modal detected")
-            # Try clicking "Not now" button
-            not_now_button = page.locator("//span[contains(text(), 'Not now')]/ancestor::div[@role='button']").first
-            if not_now_button.is_visible():
-                not_now_button.click()
-                logging.info("Clicked 'Not now' on login info modal")
+            
+            # Try clicking "Not now" with exact class structure
+            not_now_selectors = [
+                # Exact class match for "Not now" button
+                "div.x1i10hfl.xjbqb8w.x1ejq31n.xd10rxx >> text=Not now",
+                # Full path to "Not now" text
+                "span.x1lliihq.x193iq5w.x6ikm8r.x10wlt62.xlyipyv.xuxw1ft >> text=Not now",
+                # Parent button containing "Not now"
+                "div[role='button'] span:has-text('Not now')"
+            ]
+
+            for selector in not_now_selectors:
+                try:
+                    button = page.locator(selector).first
+                    if button and button.is_visible():
+                        button.click(force=True)
+                        logging.info(f"Clicked 'Not now' using selector: {selector}")
+                        random_sleep(1, 2)
+                        return True
+                except Exception as e:
+                    logging.warning(f"Failed to click 'Not now' with selector {selector}: {e}")
+
+            # Try clicking close button with exact class structure
+            close_selectors = [
+                # Exact match for close button
+                "div[aria-label='Close'][role='button'].x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy",
+                # SVG path inside close button
+                "svg path[d='M5.707 4.293a1 1 0 1 0-1.414 1.414L10.586 12l-6.293 6.293a1 1 0 1 0 1.414 1.414L12 13.414l6.293 6.293a1 1 0 0 0 1.414-1.414L13.414 12l6.293-6.293a1 1 0 1 0-1.414-1.414L12 10.586 5.707 4.293z']",
+                # Parent div of close icon
+                "div.x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy.xa49m3k"
+            ]
+
+            for selector in close_selectors:
+                try:
+                    close_button = page.locator(selector).first
+                    if close_button and close_button.is_visible():
+                        close_button.click(force=True)
+                        logging.info(f"Clicked close button using selector: {selector}")
+                        random_sleep(1, 2)
+                        return True
+                except Exception as e:
+                    logging.warning(f"Failed to click close button with selector {selector}: {e}")
+
+            # If direct clicks fail, try JavaScript with exact class names
+            try:
+                page.evaluate("""
+                    // Try to click the close button
+                    const closeButton = document.querySelector('div[aria-label="Close"][role="button"]');
+                    if (closeButton) {
+                        closeButton.click();
+                        return;
+                    }
+                    
+                    // Try to click Not now button
+                    const notNowSpan = Array.from(document.querySelectorAll('span'))
+                        .find(span => span.textContent === 'Not now');
+                    if (notNowSpan) {
+                        const notNowButton = notNowSpan.closest('div[role="button"]');
+                        if (notNowButton) {
+                            notNowButton.click();
+                            return;
+                        }
+                    }
+                """)
+                logging.info("Clicked button using JavaScript")
+                random_sleep(1, 2)
                 return True
+            except Exception as e:
+                logging.warning(f"JavaScript click failed: {e}")
+
+            logging.error("Failed to close modal with all methods")
+            return False
+
     except Exception as e:
-        logging.info("No login info modal detected or already handled")
-        return False
+        logging.info(f"Modal handling error: {e}")
+    
+    return True  # Continue even if modal handling fails
+
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
