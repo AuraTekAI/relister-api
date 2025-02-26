@@ -149,95 +149,39 @@ def select_vehicle_type(page,vehicle_details):
 def handle_login_info_modal(page):
     """Handle the 'Save your login info' modal if it appears."""
     try:
-        # Wait for modal with exact class structure
-        modal_exists = page.wait_for_selector("div.x1o1ewxj.x3x9cwd.x1e5q0jg.x13rtm0m", timeout=5000, state="visible")
+        # Check if modal exists with a short timeout
+        modal_exists = page.wait_for_selector("//span[contains(text(), 'Save your login info')]", timeout=3000, state="visible")
         
         if modal_exists:
-            logging.info("Login info modal detected")
-            
-            # Try clicking "Not now" with exact class structure
-            not_now_selectors = [
-                # Exact class match for "Not now" button
-                "div.x1i10hfl.xjbqb8w.x1ejq31n.xd10rxx >> text=Not now",
-                # Full path to "Not now" text
-                "span.x1lliihq.x193iq5w.x6ikm8r.x10wlt62.xlyipyv.xuxw1ft >> text=Not now",
-                # Parent button containing "Not now"
-                "div[role='button'] span:has-text('Not now')"
-            ]
-
-            for selector in not_now_selectors:
-                try:
-                    button = page.locator(selector).first
-                    if button and button.is_visible():
-                        button.click(force=True)
-                        logging.info(f"Clicked 'Not now' using selector: {selector}")
-                        random_sleep(1, 2)
-                        return True
-                except Exception as e:
-                    logging.warning(f"Failed to click 'Not now' with selector {selector}: {e}")
-
-            # Try clicking close button with exact class structure
-            close_selectors = [
-                # Exact match for close button
-                "div[aria-label='Close'][role='button'].x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy",
-                # SVG path inside close button
-                "svg path[d='M5.707 4.293a1 1 0 1 0-1.414 1.414L10.586 12l-6.293 6.293a1 1 0 1 0 1.414 1.414L12 13.414l6.293 6.293a1 1 0 0 0 1.414-1.414L13.414 12l6.293-6.293a1 1 0 1 0-1.414-1.414L12 10.586 5.707 4.293z']",
-                # Parent div of close icon
-                "div.x1i10hfl.x1qjc9v5.xjbqb8w.xjqpnuy.xa49m3k"
-            ]
-
-            for selector in close_selectors:
-                try:
-                    close_button = page.locator(selector).first
-                    if close_button and close_button.is_visible():
-                        close_button.click(force=True)
-                        logging.info(f"Clicked close button using selector: {selector}")
-                        random_sleep(1, 2)
-                        return True
-                except Exception as e:
-                    logging.warning(f"Failed to click close button with selector {selector}: {e}")
-
-            # If direct clicks fail, try JavaScript with exact class names
+            logging.info("Login info modal detected, attempting to close")
             try:
-                page.evaluate("""
-                    // Try to click the close button
-                    const closeButton = document.querySelector('div[aria-label="Close"][role="button"]');
-                    if (closeButton) {
-                        closeButton.click();
-                        return;
-                    }
-                    
-                    // Try to click Not now button
-                    const notNowSpan = Array.from(document.querySelectorAll('span'))
-                        .find(span => span.textContent === 'Not now');
-                    if (notNowSpan) {
-                        const notNowButton = notNowSpan.closest('div[role="button"]');
-                        if (notNowButton) {
-                            notNowButton.click();
-                            return;
-                        }
-                    }
-                """)
-                logging.info("Clicked button using JavaScript")
-                random_sleep(1, 2)
-                return True
+                # Try to click "Not now" button
+                not_now_button = page.locator("//span[text()='Not now']/ancestor::div[@role='button']").first
+                if not_now_button:
+                    not_now_button.click(force=True)
+                    logging.info("Clicked 'Not now' button")
+                    random_sleep(1, 2)
             except Exception as e:
-                logging.warning(f"JavaScript click failed: {e}")
-
-            logging.error("Failed to close modal with all methods")
-            return False
-
-    except Exception as e:
-        logging.info(f"Modal handling error: {e}")
+                logging.warning(f"Failed to click 'Not now': {e}")
+                # Try close button as fallback
+                try:
+                    close_button = page.locator("div[aria-label='Close'][role='button']").first
+                    close_button.click(force=True)
+                    logging.info("Clicked close button")
+                    random_sleep(1, 2)
+                except Exception as e:
+                    logging.warning(f"Failed to click close button: {e}")
+    except Exception:
+        logging.info("No login modal detected, proceeding with form")
     
-    return True  # Continue even if modal handling fails
+    return True
 
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
     try:    
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
 
@@ -246,7 +190,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(2, 3)  # Random delay after page load
             
-            # Handle login info modal if it appears
+            # Quick check for modal and handle if exists
             handle_login_info_modal(page)
             
             # Vehicle details
@@ -419,11 +363,13 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
         logging.error(f"Error in create_marketplace_listing: {e}")
         return False, str(e)
 
+
+
 def login_to_facebook( email, password,session_cookie=None):
     """Log in to Facebook automatically."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             page = context.new_page()
             # Navigate to Facebook login page
@@ -496,7 +442,7 @@ def perform_search_and_delete(search_for,session_cookie):
     """Perform search and delete listing"""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             page.goto("https://www.facebook.com/marketplace/you/selling")
@@ -657,7 +603,7 @@ def get_facebook_profile_listings(profile_url,session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(storage_state=session_cookie)
             page = context.new_page()
             # Set shorter timeout for navigation
@@ -779,7 +725,7 @@ def extract_facebook_listing_details(current_listing, session):
     Extract details of a Facebook Marketplace listing.
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(storage_state=session)
         page = context.new_page()
 
