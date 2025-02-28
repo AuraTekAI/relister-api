@@ -201,7 +201,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Price": str(vehicle_listing.price) if vehicle_listing.price else None,
                 "Location": vehicle_listing.location,
                 "Mileage": str(vehicle_listing.mileage) if vehicle_listing.mileage else None,
-                "Description": vehicle_listing.description
+                "Description": vehicle_listing.description if vehicle_listing.description else "No description provided"
             }
 
             # Select vehicle type

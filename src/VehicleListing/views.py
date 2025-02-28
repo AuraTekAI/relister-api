@@ -7,7 +7,7 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details
+from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,extract_facebook_listing_details
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
@@ -35,12 +35,105 @@ def import_url_from_gumtree(request):
 
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
-        if import_url.print_url_type() == "Facebook":
-            return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
-        if ListingUrl.objects.filter(url=url).exists():
+        list_id = extract_seller_id(url)
+        if not list_id or not list_id.isdigit():
+            return JsonResponse({'error': 'Invalid seller ID'}, status=200)
+        if ListingUrl.objects.filter(url=url,user=user).exists():
             return JsonResponse({'error': 'URL already exists'}, status=200)
+        if import_url.print_url_type() == "Facebook Profile" or import_url.print_url_type() == "Gumtree Profile":
+            return  JsonResponse({'error': 'This is Facebook Profile Url, Now, Only Process the Gumtree and Facebook single Url'}, status=200)
+        if import_url.print_url_type() == "Facebook":
+            # Extract facebook listing data from URL
+            current_listing = {}
+            current_listing['url'] = url
+            current_listing['mileage'] = None
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+            if credentials and credentials.session_cookie != {}:
+                import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
+                response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
+                if response and response.get("year") and response.get("make") and response.get("model"):
+                    vehicle_listing = VehicleListing.objects.create(
+                        user=user,
+                        list_id=list_id,
+                        year=response["year"],
+                        body_type="Other",
+                        fuel_type="Other",
+                        color="Other",
+                        variant="Other",
+                        make=response["make"],
+                        mileage=current_listing["mileage"],
+                        model=response["model"],
+                        price=response.get("price"),
+                        transmission=None,
+                        description=response.get("description"),
+                        images=response["images"],
+                        url=current_listing["url"],
+                        location=response.get("location"),
+                        status="pending",
+                    )
+                    import_url_instance.status = "completed"
+                    import_url_instance.save()
+                    thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
+                    thread.start()
+                    user_data = {
+                        'url': url,
+                        'message': "Extracted data successfully and listing created in facebook is in progress"
+                    }
+                    return JsonResponse(user_data, status=200)
+                else:
+                    import_url_instance.status = "failed"
+                    import_url_instance.save()
+                    return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
+            elif credentials and credentials.session_cookie == {}:
+                import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
+                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                if session_cookie:
+                    credentials.session_cookie = session_cookie
+                    credentials.save()
+                    import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
+                    response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
+                    if response and response.get("year") and response.get("make") and response.get("model"):
+                        vehicle_listing = VehicleListing.objects.create(
+                            user=user,
+                            list_id=list_id,
+                            year=response["year"],
+                            body_type="Other",
+                            fuel_type="Other",
+                            color="Other",
+                            variant="Other",
+                            make=response["make"],
+                            mileage=current_listing["mileage"],
+                            model=response["model"],
+                            price=response.get("price"),
+                            transmission=None,
+                            description=response.get("description"),
+                            images=response["images"],
+                            url=current_listing["url"],
+                            location=response.get("location"),
+                            status="pending",
+                        )
+                        import_url_instance.status = "completed"
+                        import_url_instance.save()
+                        thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
+                        thread.start()
+                        user_data = {
+                            'url': url,
+                            'message': "Extracted data successfully and listing created in facebook is in progress"
+                        }
+                        return JsonResponse(user_data, status=200)
+                    else:
+                        import_url_instance.status = "failed"
+                        import_url_instance.save()
+                        return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
+
+                else:
+                    import_url_instance.status = "failed"
+                    import_url_instance.save()
+                    return JsonResponse({'error': 'Failed to extract facebook listing details, Facebook login failed. please check the credentials and try again'}, status=200)
+            else:
+                return JsonResponse({'error': 'Failed to extract facebook listing details, Please Provide the Facebook credentials and try again'}, status=200)
+        # Extract Gumtree data from URL
         import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
-        # Extract data from URL
         vehicle_listing = get_listings(url,user,import_url_instance)
         if vehicle_listing:
             vls = VehicleListingSerializer(vehicle_listing)
@@ -54,9 +147,13 @@ def import_url_from_gumtree(request):
             }
             return JsonResponse(user_data, status=200)
         else:
+            import_url_instance.status = "failed"
+            import_url_instance.save()
             return JsonResponse({'error': 'Failed to extract data from URL, Check the URL and try again'}, status=200)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
+
 
 
 @csrf_exempt

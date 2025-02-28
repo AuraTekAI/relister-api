@@ -2,14 +2,18 @@ from enum import Enum, auto
 class ImportFromSourceOption(Enum):
     UNKNOWN = auto()
     FACEBOOK = auto()
+    FACEBOOK_PROFILE = auto()
+    GUMTREE_PROFILE = auto()
     GUMTREE = auto()
     CARSALES = auto()
 
 class ImportFromUrl:
     """Import from URL Starts With"""
     EXPECTED_FACEBOOK_URL_STARTS_WITH = "https://www.facebook.com/marketplace/item/"
+    EXPECTED_FACEBOOK_URL_STARTS_WITH_WEB = "https://web.facebook.com/marketplace/item/"
     EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH = "https://www.facebook.com/marketplace/profile/"
     EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH_WEB = "https://web.facebook.com/marketplace/profile/"
+    EXPECTED_GUMTREE_PROFILE_URL_STARTS_WITH_WEB = "https://www.gumtree.com.au/web/s-user"
     EXPECTED_GUMTREE_URL_STARTS_WITH = "https://www.gumtree.com.au/"
 
     def __init__(self, url):
@@ -23,13 +27,18 @@ class ImportFromUrl:
         trimmed_url = self.url.strip()
         if trimmed_url.startswith(self.EXPECTED_FACEBOOK_URL_STARTS_WITH):
             return ImportFromSourceOption.FACEBOOK
+        if trimmed_url.startswith(self.EXPECTED_FACEBOOK_URL_STARTS_WITH_WEB):
+            return ImportFromSourceOption.FACEBOOK
         if trimmed_url.startswith(self.EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH):
-            return ImportFromSourceOption.FACEBOOK
+            return ImportFromSourceOption.FACEBOOK_PROFILE
         if trimmed_url.startswith(self.EXPECTED_FACEBOOK_PROFILE_URL_STARTS_WITH_WEB):
-            return ImportFromSourceOption.FACEBOOK
+            return ImportFromSourceOption.FACEBOOK_PROFILE
+        if trimmed_url.startswith(self.EXPECTED_GUMTREE_PROFILE_URL_STARTS_WITH_WEB):
+            return ImportFromSourceOption.GUMTREE_PROFILE
 
         if trimmed_url.startswith(self.EXPECTED_GUMTREE_URL_STARTS_WITH):
             return ImportFromSourceOption.GUMTREE
+        
 
         return ImportFromSourceOption.UNKNOWN
 
@@ -59,6 +68,10 @@ class ImportFromUrl:
         source = self.get_import_source_from_url()
         if source == ImportFromSourceOption.FACEBOOK:
             return "Facebook"
+        elif source == ImportFromSourceOption.FACEBOOK_PROFILE:
+            return "Facebook Profile"
+        elif source == ImportFromSourceOption.GUMTREE_PROFILE:
+            return "Gumtree Profile"
         elif source == ImportFromSourceOption.GUMTREE:
             return "Gumtree"
         else:
