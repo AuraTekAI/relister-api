@@ -5,9 +5,9 @@ import logging
 import time
 import random
 import threading
+from django.conf import settings
 
 logging = logging.getLogger('gumtree')
-API_KEY = "812db259e316f5e9288f310ebb87e3fb50c369f1"
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
     if profile_url.endswith('/'):
@@ -18,11 +18,11 @@ def extract_seller_id(profile_url):
 def get_listings(url,user,import_url_instance):
     """Get listings from Gumtree"""
     logging.info(f"url: {url}")
-    if not API_KEY:
+    if not settings.ZENROWS_API_KEY:
         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
     list_id = extract_seller_id(url)  # Extract the last part of the URL
     if list_id.isdigit():
-        client = ZenRowsClient(API_KEY)
+        client = ZenRowsClient(settings.ZENROWS_API_KEY)
         base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
 
         try:
@@ -105,11 +105,11 @@ def get_gumtree_listing_details(listing_id):
     Returns:
         dict: A dictionary containing the details of the listing, or None if an error occurs.
     """
-    if not API_KEY:
+    if not settings.ZENROWS_API_KEY:
         logging.error("ZENROWS_API_KEY is not configured in the environment variables")
         return None
 
-    client = ZenRowsClient(API_KEY)
+    client = ZenRowsClient(settings.ZENROWS_API_KEY)
     base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{listing_id}"
     logging.info(f"Fetching listing details from URL: {base_url}")
 
@@ -172,7 +172,7 @@ def get_gumtree_listings(profile_url,user):
     Returns:
         list: A list of dictionaries containing details of the listings, or None if an error occurs.
     """
-    if not API_KEY:
+    if not settings.ZENROWS_API_KEY:
         logging.error("ZENROWS_API_KEY is not configured in the environment variables")
         return False,"ZENROWS_API_KEY is not configured in the environment variables"
     seller_id = extract_seller_id(profile_url)  # Extract the last part of the URL
@@ -180,7 +180,7 @@ def get_gumtree_listings(profile_url,user):
         logging.error(f"Invalid seller ID: {seller_id}")
         return False,"Invalid seller ID"
 
-    client = ZenRowsClient(API_KEY)
+    client = ZenRowsClient(settings.ZENROWS_API_KEY)
     base_url = f"https://gt-api.gumtree.com.au/web/user-profile-service/{seller_id}/listings"
     logging.info(f"Fetching all listings for seller ID: {seller_id}")
 
@@ -260,6 +260,7 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
                 status="pending",
                 seller_profile_id=seller_id
             )
+            logging.info(f"vehicle_listing: {vehicle_listing}")
     gumtree_profile_listing_instance.processed_listings=count
     gumtree_profile_listing_instance.status="completed"
     gumtree_profile_listing_instance.save()

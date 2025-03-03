@@ -378,8 +378,8 @@ def get_gumtree_profile_listings(request):
         is_valid, error_message = import_url.validate()
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
-        if import_url.print_url_type == "Facebook":
-            return  JsonResponse({'error': 'This is Facebook Url, Now, Only Process the Gumtree Url'}, status=200)
+        if import_url.print_url_type == "Facebook" or import_url.print_url_type == "Facebook Profile":
+            return  JsonResponse({'error': 'Please provide the Gumtree Profile Url'}, status=200)
         seller_id = extract_seller_id(profile_url)
         if not seller_id or not seller_id.isdigit():
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
@@ -411,8 +411,8 @@ def facebook_profile_listings(request):
 
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
-        if import_url.print_url_type() == "Gumtree":
-            return  JsonResponse({'error': 'This is Gumtree Url, Now, Only Process the Facebook Url'}, status=200)
+        if import_url.print_url_type() == "Gumtree" or import_url.print_url_type() == "Gumtree Profile" or import_url.print_url_type() == "Facebook":
+            return  JsonResponse({'error': 'Please provide the Facebook Profile Url'}, status=200)
         seller_id = extract_seller_id(profile_url)
         if not seller_id or not seller_id.isdigit():
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
