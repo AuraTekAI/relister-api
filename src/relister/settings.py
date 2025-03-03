@@ -159,6 +159,7 @@ USE_I18N = True
 TIME_ZONE = 'America/Chicago'
 USE_TZ = True
 
+ZENROWS_API_KEY = env('ZENROWS_API_KEY')
 
 
 # Static files (CSS, JavaScript, Images)
