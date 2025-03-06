@@ -13,7 +13,7 @@ class ListingUrl(models.Model):
     
 class FacebookUserCredentials(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    email = models.EmailField(unique=True , null=True)
+    email = models.CharField(max_length=255,null=True,blank=True,unique=True)
     password = models.CharField(max_length=255)
     session_cookie = models.JSONField(null=True,blank=True,default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -58,7 +58,10 @@ class VehicleListing(models.Model):
     model = models.CharField(max_length=100,null=True,blank=True)
     price = models.CharField(max_length=255,null=True,blank=True)
     mileage = models.IntegerField(null=True,blank=True)
+    exterior_colour = models.CharField(max_length=255,null=True,blank=True)
+    interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)
+    condition = models.CharField(max_length=255,null=True,blank=True)
     transmission=models.CharField(max_length=255,null=True,blank=True)
     images = models.JSONField(null=True,blank=True)  # Store image URLs as JSON
     location = models.CharField(max_length=255,null=True,blank=True)
