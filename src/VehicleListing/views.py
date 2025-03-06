@@ -15,6 +15,18 @@ from rest_framework.decorators import api_view, permission_classes
 import time
 import random   
 from datetime import datetime, timedelta
+from queue import Queue
+
+# dictionary which hold queues for each user
+user_queues = {}
+# worker function to process the vehicle listings
+def worker(user_id):
+    while True:
+        vehicle_listing = user_queues[user_id].get()
+        if vehicle_listing is None:
+            break
+        create_facebook_listing(vehicle_listing)
+        user_queues[user_id].task_done()
 
 @csrf_exempt
 def import_url_from_gumtree(request):
@@ -29,6 +41,11 @@ def import_url_from_gumtree(request):
         user = User.objects.filter(email=email).first()
         if not user:
             return JsonResponse({'error': 'User not found'}, status=200)
+        
+        # Initialize a queue for the user if it doesn't exist
+        if user.id not in user_queues:
+            user_queues[user.id] = Queue()
+            threading.Thread(target=worker, args=(user.id,), daemon=True).start()
         
         import_url = ImportFromUrl(url)
         is_valid, error_message = import_url.validate()
@@ -57,15 +74,18 @@ def import_url_from_gumtree(request):
                         list_id=list_id,
                         year=response["year"],
                         body_type="Other",
-                        fuel_type="Other",
-                        color="Other",
+                        fuel_type=response["fuel_type"],
+                        color=None,
                         variant="Other",
                         make=response["make"],
-                        mileage=current_listing["mileage"],
+                        mileage=response["driven"] if response["driven"] else current_listing["mileage"],
                         model=response["model"],
                         price=response.get("price"),
-                        transmission=None,
+                        transmission=response["transmission"],
                         description=response.get("description"),
+                        exterior_colour=response["exterior_colour"],
+                        interior_colour=response["interior_colour"],
+                        condition=response["condition"],
                         images=response["images"],
                         url=current_listing["url"],
                         location=response.get("location"),
@@ -73,8 +93,7 @@ def import_url_from_gumtree(request):
                     )
                     import_url_instance.status = "completed"
                     import_url_instance.save()
-                    thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
-                    thread.start()
+                    user_queues[user.id].put(vehicle_listing)
                     user_data = {
                         'url': url,
                         'message': "Extracted data successfully and listing created in facebook is in progress"
@@ -98,24 +117,26 @@ def import_url_from_gumtree(request):
                             list_id=list_id,
                             year=response["year"],
                             body_type="Other",
-                            fuel_type="Other",
-                            color="Other",
+                            fuel_type=response["fuel_type"],
+                            color=None,
                             variant="Other",
                             make=response["make"],
-                            mileage=current_listing["mileage"],
+                            mileage=response["driven"] if response["driven"] else current_listing["mileage"],
                             model=response["model"],
                             price=response.get("price"),
-                            transmission=None,
+                            transmission=response["transmission"],
                             description=response.get("description"),
                             images=response["images"],
+                            exterior_colour=response["exterior_colour"],
+                            interior_colour=response["interior_colour"],
+                            condition=response["condition"],
                             url=current_listing["url"],
                             location=response.get("location"),
                             status="pending",
                         )
                         import_url_instance.status = "completed"
                         import_url_instance.save()
-                        thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
-                        thread.start()
+                        user_queues[user.id].put(vehicle_listing)
                         user_data = {
                             'url': url,
                             'message': "Extracted data successfully and listing created in facebook is in progress"
@@ -138,8 +159,7 @@ def import_url_from_gumtree(request):
         if vehicle_listing:
             vls = VehicleListingSerializer(vehicle_listing)
             print(f"vehicle_listing: {vehicle_listing}")
-            thread = threading.Thread(target=create_facebook_listing, args=(vehicle_listing,))
-            thread.start()
+            user_queues[user.id].put(vehicle_listing)
             # Prepare user related listing data
             user_data = {
                 'url': url,
@@ -464,19 +484,22 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                 list_id=current_listing["id"],
                 year=vehicleListing["year"],
                 body_type="Other",
-                fuel_type="Other",
-                color="Other",
+                fuel_type=vehicleListing["fuel_type"],
+                color=None,
                 variant="Other",
                 make=vehicleListing["make"],
-                mileage=current_listing["mileage"],
+                mileage=vehicleListing["driven"] if vehicleListing["driven"] else current_listing["mileage"],
                 model=vehicleListing["model"],
                 price=vehicleListing.get("price"),
-                transmission=None,
+                transmission=vehicleListing["transmission"],
+                condition=vehicleListing["condition"],
                 description=vehicleListing.get("description"),
                 images=vehicleListing["images"],
                 url=current_listing["url"],
                 location=vehicleListing.get("location"),
                 status="pending",
+                exterior_colour=vehicleListing["exterior_colour"],
+                interior_colour=vehicleListing["interior_colour"],
                 seller_profile_id=seller_id
             )
     facebook_profile_listing_instance.status="completed"

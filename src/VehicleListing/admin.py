@@ -10,8 +10,8 @@ class FacebookListingAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class FacebookUserCredentialsAdmin(admin.ModelAdmin):
-    list_display = ('user', 'email','session_cookie', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'email')
+    list_display = ('user', 'username','session_cookie', 'created_at', 'updated_at')
+    search_fields = ('user__email', 'username')
     list_filter = ('user',)
 
 class ListingUrlAdmin(admin.ModelAdmin):

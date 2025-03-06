@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 import os
 import requests
 from relister.settings import IMAGES_DIR
-
+import re
 
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
@@ -123,12 +123,43 @@ def select_vehicle_type(page,vehicle_details):
             random_sleep(0.5, 1)  # Random delay after clicking the dropdown
 
             car_option = page.locator("//div[@role='option'][contains(.,'Car/Truck')]").first
-            car_option.scroll_into_view_if_needed()
-            car_option.click()
-
-            logging.info("Vehicle type (Car/Truck) selected successfully.")
-            random_sleep(1, 2)  # Random delay after selecting the option
-            return True
+            if car_option.is_visible():
+                car_option.scroll_into_view_if_needed()
+                car_option.click()
+                logging.info("Vehicle type (Car/Truck) selected successfully.")
+                random_sleep(1, 2)
+                return True,"Car/Truck"
+            else:
+                car_option = page.locator("//div[@role='option'][contains(.,'Car/van')]").first
+                if car_option.is_visible():
+                    if vehicle_details["Make"].lower() in ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]:
+                        car_option.scroll_into_view_if_needed()
+                        car_option.click()
+                        logging.info("Vehicle type (Car/van) selected successfully.")
+                        random_sleep(1, 2)
+                        return True,"Car/van"
+                    else:
+                        car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
+                        if car_option_other.is_visible():
+                            car_option_other.scroll_into_view_if_needed()
+                            car_option_other.click()
+                            logging.info("Vehicle type (Other) selected successfully.")
+                            random_sleep(1, 2)
+                            return True,"Other"
+                        else:
+                            logging.info("No suitable vehicle type option found.")
+                            return False,"No suitable vehicle type option found."
+                else:
+                    car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
+                    if car_option_other.is_visible():
+                        car_option_other.scroll_into_view_if_needed()
+                        car_option_other.click()
+                        logging.info("Vehicle type (Other) selected successfully.")
+                        random_sleep(1, 2)
+                        return True,"Other"
+                    else:
+                        logging.info("No suitable vehicle type option found.")
+                        return False,"No suitable vehicle type option found."
         else:
             vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
             vehicle_dropdown.scroll_into_view_if_needed()
@@ -141,7 +172,7 @@ def select_vehicle_type(page,vehicle_details):
 
             logging.info("Vehicle type (Other) selected successfully.")
             random_sleep(1, 2)  # Random delay after selecting the option
-            return True
+            return True,"Other"
     except Exception as e:
         logging.error(f"Error selecting vehicle type: {e}")
         raise
@@ -176,6 +207,15 @@ def handle_login_info_modal(page):
     
     return True
 
+def is_element_visible(page, selector):
+    """Check if an element is present and visible on the page."""
+    try:
+        element = page.locator(selector).first
+        return element.is_visible()
+    except Exception as e:
+        logging.warning(f"Error checking element visibility: {e}")
+        return False
+
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
@@ -192,6 +232,12 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             
             # Quick check for modal and handle if exists
             handle_login_info_modal(page)
+
+            # Check if the "Limit reached" element is visible
+            limit_reached_selector = "//span[@class='x1lliihq x6ikm8r x10wlt62 x1n2onr6']//span[contains(@class, 'x193iq5w') and text()='Limit reached']"
+            if is_element_visible(page, limit_reached_selector):
+                logging.info("Limit reached element is visible.")
+                return False, "Limit reached"
             
             # Vehicle details
             vehicle_details = {
@@ -205,7 +251,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             # Select vehicle type
-            select_vehicle_type(page,vehicle_details)
+            result = select_vehicle_type(page,vehicle_details)
 
             index = 0
             # Download the images using url and save it locally    
@@ -239,6 +285,14 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Fill form fields
             select_dropdown_option(page, "Year", vehicle_details["Year"])
+            vehicle_make_list = ["Alfa Romeo","Alpina","Aston Martin","Bentley","Chrysler","Daewoo","Ferrari","FIAT","Dodge","Ford","Honda","Hyundai","Hummer","INFINITI","Isuzu","Jaguar","Jeep","Kia","Lamborghini","Land Rover","Lexus","Lotus","MINI","Mercedes-Benz","Maserati","McLaren","Mitsubishi","Nissan","Plymouth","Pontiac","Porsche","Rolls-Royce","Saab","Smart","Subaru","Suzuki","Toyota","Tesla","Volkswagen","Volvo"]
+            lower_make_list= ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]
+            if result[1] == "Car/van":
+                if vehicle_listing.make.lower() in lower_make_list:
+                    select_dropdown_option(page, "Make", vehicle_make_list[lower_make_list.index(vehicle_listing.make.lower())])
+                else:
+                    logging.info(f"Make {vehicle_listing.make} not found in the list")
+                    return False, f"Make {vehicle_listing.make} not found in the list"
 
             # Input fields with their selectors
             input_fields = {
@@ -275,6 +329,10 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             for field, selectors in input_fields.items():
+                if field == "Make" and result[1] == "Car/van":
+                    continue
+                if field == "Mileage" and result[1] == "Other":
+                    continue
                 if field != "Mileage":
                     fill_input_field(
                         page,
@@ -285,7 +343,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         use_tab=(field in ["Mileage", "Price", "Description"])
                     )
                 else:
-                    if vehicle_details["Mileage"]:
+                    if vehicle_details["Mileage"] and result[1] != "Other":
                         fill_input_field(
                             page,
                             field,
@@ -296,8 +354,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         )
                     else:
                         continue
-
-            if vehicle_details['Mileage']:
+                        
+            if vehicle_details['Mileage'] and result[1] != "Other":
                 # Select body style dropdown
                 if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
                     select_dropdown_option(page, "Body style", vehicle_listing.variant)
@@ -315,7 +373,10 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     select_dropdown_option(page, "Fuel type", "Other")
             
                 # Select vehicle condition dropdown
-                select_dropdown_option(page, "Vehicle condition", "Excellent")
+                if vehicle_listing.condition:
+                    select_dropdown_option(page, "Vehicle condition", vehicle_listing.condition)
+                else:
+                    select_dropdown_option(page, "Vehicle condition", "Excellent")
             
                 # Select transmission dropdown
                 if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
@@ -325,6 +386,18 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
                 else:
                     select_dropdown_option(page, "Transmission", "Automatic transmission")
+                
+                #Select interior and exterior color
+                if result[1] == "Car/van":
+                    if vehicle_listing.color and vehicle_listing.color in ["White", "Black", "Grey", "Red", "Blue", "Green", "Brown", "Orange","Gold","Pink","Purple","Tan","Turquoise","Yellow","Charcoal","Beige","Burgundy","Silver","Off white","Other"]:
+                        select_dropdown_option(page, "Interior colour", "Grey")
+                        select_dropdown_option(page, "Exterior colour", vehicle_listing.color)
+                    elif vehicle_listing.exterior_colour and vehicle_listing.interior_colour:
+                        select_dropdown_option(page, "Interior colour", vehicle_listing.interior_colour)
+                        select_dropdown_option(page, "Exterior colour", vehicle_listing.exterior_colour)
+                    else:
+                        select_dropdown_option(page, "Interior colour", "Other")
+                        select_dropdown_option(page, "Exterior colour", "Other")
 
             # Submit form
             for button_text in ["Next", "Publish"]:
@@ -409,6 +482,7 @@ def login_to_facebook( email, password,session_cookie=None):
                 logging.info("Login successful.")
                 return session_cookie
             else:
+                logging.error("Login failed.")
                 browser.close()
                 return None
             
@@ -745,7 +819,13 @@ def extract_facebook_listing_details(current_listing, session):
                 "mileage": current_listing["mileage"],
                 "description": None,
                 "images": [],
-                "location": None
+                "location": None,
+                "transmission": "Automatic transmission",
+                "condition": "Excellent",
+                "fuel_type": "Other",
+                "driven": None,
+                "exterior_colour": "Other",
+                "interior_colour": "Other",
             }
 
             # Extract each part of the listing
@@ -755,8 +835,11 @@ def extract_facebook_listing_details(current_listing, session):
             # random_delay()
             extract_year_make_model(page, listing)
             random_delay()
+            extract_about_the_vehicle(page, listing)
+            random_delay()
             extract_description(page, listing)
             random_delay()
+
             listing["images"] = extract_images(page)
             random_delay()
             listing["location"] = extract_location(page)
@@ -863,3 +946,58 @@ def extract_location(page):
     except Exception as e:
         logging.error(f"Error extracting location: {e}")
     return None
+
+
+def extract_about_the_vehicle(page, listing):
+    """
+    Extracts the 'About the vehicle' section from the listing.
+    """
+    try:
+        # Check for the 'About this vehicle' header
+        about_header = page.query_selector("//h2[contains(@class, 'xdj266r') and contains(., 'About this vehicle')]")
+        if about_header:
+            logging.info("'About this vehicle' section found.")
+
+            # Extract 'Driven' information
+            driven_element = page.query_selector("//span[contains(@class, 'x193iq5w') and contains(., 'Driven')]")
+            if driven_element:
+                driven_text = driven_element.inner_text()
+                logging.info(f"Driven info: {driven_text}")
+                mileage_text = "".join(filter(str.isdigit, driven_text))
+                listing['driven'] = mileage_text
+
+            # Extract 'Exterior and Interior colour' information
+            colour_element = page.query_selector("//span[contains(@class, 'x193iq5w') and contains(., 'Exterior colour')]")
+            if colour_element:
+                colour_text = colour_element.inner_text()
+                logging.info(f"Colour info: {colour_text}")
+                exterior_colour = re.search(r'Exterior colour: (\w+)', colour_text)
+                interior_colour = re.search(r'Interior colour: (\w+)', colour_text)
+                listing['exterior_colour'] = exterior_colour.group(1) if exterior_colour else "Other"
+                listing['interior_colour'] = interior_colour.group(1) if interior_colour else "Other"
+
+            # Extract 'Fuel type' information
+            fuel_type_element = page.query_selector("//span[contains(@class, 'x193iq5w') and contains(., 'Fuel type')]")
+            if fuel_type_element:
+                fuel_type_text = fuel_type_element.inner_text()
+                logging.info(f"Fuel type info: {fuel_type_text}")
+                fuel_type = fuel_type_text.split("Fuel type:")[1].strip()
+                listing['fuel_type'] = fuel_type
+
+            # Extract 'Condition' information
+            condition_element = page.query_selector("//span[contains(@class, 'x193iq5w') and contains(., 'condition')]")
+            if condition_element:
+                condition_text = condition_element.inner_text()
+                logging.info(f"Condition info: {condition_text}")
+                condition=condition_text.split()[0]
+                listing['condition'] = condition
+            # Extract 'Transmission' information
+            transmission_element = page.query_selector("//span[contains(@class, 'x193iq5w') and contains(., 'transmission')]")
+            if transmission_element:
+                transmission_text = transmission_element.inner_text()
+                logging.info(f"Transmission info: {transmission_text}")
+                listing['transmission'] = transmission_text
+                print(transmission_text)
+
+    except Exception as e:
+        logging.error(f"Error extracting 'About the vehicle': {e}")
