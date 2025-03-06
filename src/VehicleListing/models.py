@@ -13,7 +13,7 @@ class ListingUrl(models.Model):
     
 class FacebookUserCredentials(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    email = models.CharField(max_length=255,null=True,blank=True,unique=True)
+    username = models.CharField(max_length=255,null=True,blank=True,unique=True)
     password = models.CharField(max_length=255)
     session_cookie = models.JSONField(null=True,blank=True,default=dict)
     created_at = models.DateTimeField(auto_now_add=True)

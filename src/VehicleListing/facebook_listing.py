@@ -132,13 +132,34 @@ def select_vehicle_type(page,vehicle_details):
             else:
                 car_option = page.locator("//div[@role='option'][contains(.,'Car/van')]").first
                 if car_option.is_visible():
-                    car_option.scroll_into_view_if_needed()
-                    car_option.click()
-                    logging.info("Vehicle type (Car/van) selected successfully.")
-                    random_sleep(1, 2)
-                    return True,"Car/van"
+                    if vehicle_details["Make"].lower() in ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]:
+                        car_option.scroll_into_view_if_needed()
+                        car_option.click()
+                        logging.info("Vehicle type (Car/van) selected successfully.")
+                        random_sleep(1, 2)
+                        return True,"Car/van"
+                    else:
+                        car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
+                        if car_option_other.is_visible():
+                            car_option_other.scroll_into_view_if_needed()
+                            car_option_other.click()
+                            logging.info("Vehicle type (Other) selected successfully.")
+                            random_sleep(1, 2)
+                            return True,"Other"
+                        else:
+                            logging.info("No suitable vehicle type option found.")
+                            return False,"No suitable vehicle type option found."
                 else:
-                    logging.info("No suitable vehicle type option found.")
+                    car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
+                    if car_option_other.is_visible():
+                        car_option_other.scroll_into_view_if_needed()
+                        car_option_other.click()
+                        logging.info("Vehicle type (Other) selected successfully.")
+                        random_sleep(1, 2)
+                        return True,"Other"
+                    else:
+                        logging.info("No suitable vehicle type option found.")
+                        return False,"No suitable vehicle type option found."
         else:
             vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
             vehicle_dropdown.scroll_into_view_if_needed()
@@ -310,6 +331,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             for field, selectors in input_fields.items():
                 if field == "Make" and result[1] == "Car/van":
                     continue
+                if field == "Mileage" and result[1] == "Other":
+                    continue
                 if field != "Mileage":
                     fill_input_field(
                         page,
@@ -320,7 +343,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         use_tab=(field in ["Mileage", "Price", "Description"])
                     )
                 else:
-                    if vehicle_details["Mileage"]:
+                    if vehicle_details["Mileage"] and result[1] != "Other":
                         fill_input_field(
                             page,
                             field,
@@ -331,8 +354,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         )
                     else:
                         continue
-
-            if vehicle_details['Mileage']:
+                        
+            if vehicle_details['Mileage'] and result[1] != "Other":
                 # Select body style dropdown
                 if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
                     select_dropdown_option(page, "Body style", vehicle_listing.variant)
