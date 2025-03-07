@@ -33,7 +33,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                     listing.status="failed"
                     listing.save()
             elif credentials and not credentials.session_cookie:
-                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                session_cookie =login_to_facebook(credentials.username, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
                     credentials.save()
@@ -82,7 +82,7 @@ def relist_facebook_marketplace_listing_task(self):
                         listing.updated_at = datetime.now()
                         listing.save()
             elif credentials and credentials.session_cookie == {}:
-                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                session_cookie =login_to_facebook(credentials.username, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
                     credentials.save()
@@ -123,7 +123,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                     listing.status="failed"
                     listing.save()
             elif credentials and not credentials.session_cookie:
-                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                session_cookie =login_to_facebook(credentials.username, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
                     credentials.save()

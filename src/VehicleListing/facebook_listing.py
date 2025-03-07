@@ -438,7 +438,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
 
 
-def login_to_facebook( email, password,session_cookie=None):
+def login_to_facebook( username, password,session_cookie=None):
     """Log in to Facebook automatically."""
     try:
         with sync_playwright() as p:
@@ -454,9 +454,9 @@ def login_to_facebook( email, password,session_cookie=None):
             handle_cookie_consent(page)
 
             # Fill email field
-            email_field = page.locator('input[name="email"]').first
-            email_field.scroll_into_view_if_needed()
-            human_like_typing(email_field, email)
+            username_field = page.locator('input[name="email"]').first
+            username_field.scroll_into_view_if_needed()
+            human_like_typing(username_field, username)
             logging.info("Email filled successfully.")
             random_sleep(2,5)
 
