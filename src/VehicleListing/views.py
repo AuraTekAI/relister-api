@@ -285,11 +285,9 @@ def create_facebook_listing(vehicle_listing):
     """Create Facebook listing"""
     try:
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
-        print(credentials.email)
         if credentials and credentials.session_cookie != {}:
             listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
             if listing_created:
-                print(message)
                 already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
                 if not already_listed:
                     FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
@@ -304,7 +302,7 @@ def create_facebook_listing(vehicle_listing):
                 vehicle_listing.save()
                 return False, message
         elif credentials and credentials.session_cookie == {}:
-                session_cookie =login_to_facebook(credentials.email, credentials.password)
+                session_cookie =login_to_facebook(credentials.username, credentials.password)
                 if session_cookie:
                     credentials.session_cookie = session_cookie
                     credentials.save()
@@ -353,7 +351,7 @@ def create_facebook_marketplace_listing_task(vehicle_listing):
                     vehicle_listing.status="failed"
                     vehicle_listing.save()
         elif credentials and not credentials.session_cookie:
-            session_cookie =login_to_facebook(credentials.email, credentials.password)
+            session_cookie =login_to_facebook(credentials.username, credentials.password)
             if session_cookie:
                 credentials.session_cookie = session_cookie
                 credentials.save()
@@ -443,7 +441,7 @@ def facebook_profile_listings(request):
         if not credentials:
             return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
         if credentials.session_cookie == {}:
-            session_cookie =login_to_facebook(credentials.email, credentials.password)
+            session_cookie =login_to_facebook(credentials.username, credentials.password)
             if session_cookie:
                 credentials.session_cookie = session_cookie
                 credentials.save()
