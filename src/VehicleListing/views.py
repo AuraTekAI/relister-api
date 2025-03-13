@@ -7,7 +7,7 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
 import json
-from .facebook_listing import create_marketplace_listing,login_to_facebook, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,extract_facebook_listing_details
+from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,extract_facebook_listing_details
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
@@ -19,6 +19,8 @@ from queue import Queue
 
 # dictionary which hold queues for each user
 user_queues = {}
+gumtree_profile_user_queues = {}
+facebook_profile_user_queues = {}
 # worker function to process the vehicle listings
 def worker(user_id):
     while True:
@@ -27,6 +29,23 @@ def worker(user_id):
             break
         create_facebook_listing(vehicle_listing)
         user_queues[user_id].task_done()
+
+
+def delete_facebook_profile_listing_worker(user_id):
+    while True:
+        vehicle_listing,session_cookie = facebook_profile_user_queues[user_id].get()
+        if vehicle_listing is None or session_cookie is None:
+            break
+        delete_multiple_vehicle_listings(vehicle_listing,session_cookie)
+        facebook_profile_user_queues[user_id].task_done()
+
+def delete_gumtree_profile_listing_worker(user_id):
+    while True:
+        vehicle_listing,session_cookie = gumtree_profile_user_queues[user_id].get()
+        if vehicle_listing is None or session_cookie is None:
+            break
+        delete_multiple_vehicle_listings(vehicle_listing,session_cookie)
+        gumtree_profile_user_queues[user_id].task_done()
 
 @csrf_exempt
 def import_url_from_gumtree(request):
@@ -59,117 +78,67 @@ def import_url_from_gumtree(request):
             return JsonResponse({'error': 'URL already exists'}, status=200)
         if import_url.print_url_type() == "Facebook Profile" or import_url.print_url_type() == "Gumtree Profile":
             return  JsonResponse({'error': 'This is Facebook Profile Url, Now, Only Process the Gumtree and Facebook single Url'}, status=200)
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        if not credentials or credentials.session_cookie == {}:
+            return JsonResponse({'error': 'No facebook credentials found for the user , Please provide the facebook credentials'}, status=200)
         if import_url.print_url_type() == "Facebook":
             # Extract facebook listing data from URL
             current_listing = {}
             current_listing['url'] = url
             current_listing['mileage'] = None
-            credentials = FacebookUserCredentials.objects.filter(user=user).first()
-            if credentials and credentials.session_cookie != {}:
-                import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
-                response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
-                if response and response.get("year") and response.get("make") and response.get("model"):
-                    vehicle_listing = VehicleListing.objects.create(
-                        user=user,
-                        list_id=list_id,
-                        year=response["year"],
-                        body_type="Other",
-                        fuel_type=response["fuel_type"],
-                        color=None,
-                        variant="Other",
-                        make=response["make"],
-                        mileage=response["driven"] if response["driven"] else current_listing["mileage"],
-                        model=response["model"],
-                        price=response.get("price"),
-                        transmission=response["transmission"],
-                        description=response.get("description"),
-                        exterior_colour=response["exterior_colour"],
-                        interior_colour=response["interior_colour"],
-                        condition=response["condition"],
-                        images=response["images"],
-                        url=current_listing["url"],
-                        location=response.get("location"),
-                        status="pending",
+            import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
+            response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
+            if response and response.get("year") and response.get("make") and response.get("model"):
+                vehicle_listing = VehicleListing.objects.create(
+                    user=user,
+                    list_id=list_id,
+                    year=response["year"],
+                    body_type="Other",
+                    fuel_type=response["fuel_type"],
+                    color=None,
+                    variant="Other",
+                    make=response["make"],
+                    mileage=response["driven"] if response["driven"] else current_listing["mileage"],
+                    model=response["model"],
+                    price=response.get("price"),
+                    transmission=response["transmission"],
+                    description=response.get("description"),
+                    exterior_colour=response["exterior_colour"],
+                    interior_colour=response["interior_colour"],
+                    condition=response["condition"],
+                    images=response["images"],
+                    url=current_listing["url"],
+                    location=response.get("location"),
+                    status="pending",
                     )
-                    import_url_instance.status = "completed"
-                    import_url_instance.save()
-                    user_queues[user.id].put(vehicle_listing)
-                    user_data = {
-                        'url': url,
-                        'message': "Extracted data successfully and listing created in facebook is in progress"
-                    }
-                    return JsonResponse(user_data, status=200)
-                else:
-                    import_url_instance.status = "failed"
-                    import_url_instance.save()
-                    return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
-            elif credentials and credentials.session_cookie == {}:
-                import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
-                session_cookie =login_to_facebook(credentials.email, credentials.password)
-                if session_cookie:
-                    credentials.session_cookie = session_cookie
-                    credentials.save()
-                    import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
-                    response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
-                    if response and response.get("year") and response.get("make") and response.get("model"):
-                        vehicle_listing = VehicleListing.objects.create(
-                            user=user,
-                            list_id=list_id,
-                            year=response["year"],
-                            body_type="Other",
-                            fuel_type=response["fuel_type"],
-                            color=None,
-                            variant="Other",
-                            make=response["make"],
-                            mileage=response["driven"] if response["driven"] else current_listing["mileage"],
-                            model=response["model"],
-                            price=response.get("price"),
-                            transmission=response["transmission"],
-                            description=response.get("description"),
-                            images=response["images"],
-                            exterior_colour=response["exterior_colour"],
-                            interior_colour=response["interior_colour"],
-                            condition=response["condition"],
-                            url=current_listing["url"],
-                            location=response.get("location"),
-                            status="pending",
-                        )
-                        import_url_instance.status = "completed"
-                        import_url_instance.save()
-                        user_queues[user.id].put(vehicle_listing)
-                        user_data = {
-                            'url': url,
-                            'message': "Extracted data successfully and listing created in facebook is in progress"
-                        }
-                        return JsonResponse(user_data, status=200)
-                    else:
-                        import_url_instance.status = "failed"
-                        import_url_instance.save()
-                        return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
-
-                else:
-                    import_url_instance.status = "failed"
-                    import_url_instance.save()
-                    return JsonResponse({'error': 'Failed to extract facebook listing details, Facebook login failed. please check the credentials and try again'}, status=200)
+                import_url_instance.status = "completed"
+                import_url_instance.save()
+                user_queues[user.id].put(vehicle_listing)
+                user_data = {
+                    'url': url,
+                    'message': "Extracted data successfully and listing created in facebook is in progress"
+                }
+                return JsonResponse(user_data, status=200)
             else:
-                return JsonResponse({'error': 'Failed to extract facebook listing details, Please Provide the Facebook credentials and try again'}, status=200)
+                import_url_instance.delete()
+                return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
         # Extract Gumtree data from URL
-        import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
-        vehicle_listing = get_listings(url,user,import_url_instance)
-        if vehicle_listing:
-            vls = VehicleListingSerializer(vehicle_listing)
-            print(f"vehicle_listing: {vehicle_listing}")
-            user_queues[user.id].put(vehicle_listing)
-            # Prepare user related listing data
-            user_data = {
-                'url': url,
-                'message': "Extracted data successfully and listing created in facebook is in progress"
-            }
-            return JsonResponse(user_data, status=200)
         else:
-            import_url_instance.status = "failed"
-            import_url_instance.save()
-            return JsonResponse({'error': 'Failed to extract data from URL, Check the URL and try again'}, status=200)
+            import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
+            vehicle_listing = get_listings(url,user,import_url_instance)
+            if vehicle_listing:
+                vls = VehicleListingSerializer(vehicle_listing)
+                print(f"vehicle_listing: {vehicle_listing}")
+                user_queues[user.id].put(vehicle_listing)
+                # Prepare user related listing data
+                user_data = {
+                    'url': url,
+                    'message': "Extracted data successfully and listing created in facebook is in progress"
+                }
+                return JsonResponse(user_data, status=200)
+            else:
+                import_url_instance.delete()
+                return JsonResponse({'error': 'Failed to extract data from URL, Check the URL and try again'}, status=200)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
@@ -255,12 +224,15 @@ class VehicleListingViewSet(ModelViewSet):
             vehicle_listing.delete()
             return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
         else:
-            response = perform_search_and_delete(search_query,credentials.session_cookie)
-            if response[0]:
-                vehicle_listing.delete()
-                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+            if credentials and credentials.session_cookie != {}:
+                response = perform_search_and_delete(search_query,credentials.session_cookie)
+                if response[0]:
+                    vehicle_listing.delete()
+                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+                else:
+                    return JsonResponse({'error': response[1]}, status=200)
             else:
-                return JsonResponse({'error': response[1]}, status=200)
+                return JsonResponse({'error': 'No facebook credentials found for the user'}, status=200)
 
 class FacebookUserCredentialsViewSet(ModelViewSet):
     """Get all Facebook user credentials"""
@@ -280,111 +252,111 @@ class FacebookUserCredentialsViewSet(ModelViewSet):
             return FacebookUserCredentials.objects.all()
         else:
             return FacebookUserCredentials.objects.filter(user=user)
+    def create(self, request, *args, **kwargs):
+        """Create Facebook user credentials"""
+        data = json.loads(request.body)
+        user_id = data.get('user')
+        cookies = data.get('cookies')
+        origins = data.get('origins')
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return JsonResponse({'error': 'User not found'}, status=200)
+        enhanced_cookies = []
+        if cookies:
+            for cookie in cookies:
+                if cookie["name"] == "dbln" or cookie["name"] == "ps_l" or cookie["name"] == "ps_n" or cookie["name"] == "ar_debug" :
+                    continue
+                elif cookie["name"] == "wd" or cookie["name"] == "presence":
+                    if cookie["expires"]:
+                        enhanced_cookies.append({
+                            "name": cookie['name'],
+                            "path": cookie['path'],
+                            "value": cookie['value'],
+                            "domain": cookie['domain'],
+                            "secure": cookie['secure'],
+                            "expires": cookie['expires'],
+                            "httpOnly": cookie['httpOnly'],
+                            "sameSite": "Lax"
+                        })
+                    else:
+                        enhanced_cookies.append({
+                            "name": cookie['name'],
+                            "path": cookie['path'],
+                            "value": cookie['value'],
+                            "domain": cookie['domain'],
+                            "secure": cookie['secure'],
+                            "httpOnly": cookie['httpOnly'],
+                            "sameSite": "Lax"
+                        })
+                else:
+                    if cookie["expires"]:
+                        enhanced_cookies.append({
+                            "name": cookie['name'],
+                            "path": cookie['path'],
+                            "value": cookie['value'],
+                            "domain": cookie['domain'],
+                            "secure": cookie['secure'],
+                            "expires": cookie['expires'],
+                            "httpOnly": cookie['httpOnly'],
+                            "sameSite": "None"
+                    })
+                    else:
+                        enhanced_cookies.append({
+                            "name": cookie['name'],
+                            "path": cookie['path'],
+                            "value": cookie['value'],
+                            "domain": cookie['domain'],
+                            "secure": cookie['secure'],
+                            "httpOnly": cookie['httpOnly'],
+                            "sameSite": "None"
+                        })
+        session_cookie = {
+            "cookies": enhanced_cookies,
+            "origins": origins
+        }
+        already_exist_session_cookie = FacebookUserCredentials.objects.filter(user=user).first()
+        if already_exist_session_cookie:
+            already_exist_session_cookie.session_cookie = session_cookie
+            already_exist_session_cookie.save()
+            return JsonResponse({'message': 'Facebook user credentials updated successfully'}, status=200)
+        else:
+            FacebookUserCredentials.objects.create(user=user, session_cookie=session_cookie)
+            return JsonResponse({'message': 'Facebook user credentials created successfully'}, status=200)
 
 def create_facebook_listing(vehicle_listing):
     """Create Facebook listing"""
     try:
         credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
         if credentials and credentials.session_cookie != {}:
-            listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
-            if listing_created:
-                already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
-                if not already_listed:
+            already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
+            if not already_listed:
+                listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
+                if listing_created:
                     FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
                     vehicle_listing.status="completed"
                     vehicle_listing.save()
                     return True, "Listing created successfully"
                 else:
-                    return False, "Listing already exists"
+                    vehicle_listing.status="failed"
+                    vehicle_listing.save()
+                    return False, "Failed to create listing"
             else:
-                FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                vehicle_listing.status="failed"
+                vehicle_listing.status="completed"
                 vehicle_listing.save()
-                return False, message
-        elif credentials and credentials.session_cookie == {}:
-                session_cookie =login_to_facebook(credentials.username, credentials.password)
-                if session_cookie:
-                    credentials.session_cookie = session_cookie
-                    credentials.save()
-                    time.sleep(random.uniform(3,5))
-                    listing_created, message = create_marketplace_listing(vehicle_listing, session_cookie) 
-                    if listing_created:
-                        print(message)
-                        already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
-                        if not already_listed:
-                            FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
-                            vehicle_listing.status="completed"
-                            vehicle_listing.save()
-                            return True, "Listing created successfully"
-                        else:
-                            return False, "Listing already exists"
-                    else:
-                        FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                        vehicle_listing.status="failed"
-                        vehicle_listing.save()
-                        return False, message
-                else:
-                    return False, "Login failed."
+                return True, "Listing already exists"
         else:
-            return False, "No credentials found for the user"
+            vehicle_listing.status="failed"
+            vehicle_listing.save()
+            return False, "No facebook credentials found for the user"
              
     except Exception as e:
         vehicle_listing.status="failed"
         vehicle_listing.save()
         return False, "Failed to create listing"
     
-def create_facebook_marketplace_listing_task(vehicle_listing):
-    """Create Facebook marketplace listing"""
-    try:
-        credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
-        if credentials and credentials.session_cookie:
-            listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
-            if listing_created:
-                print(message)
-                already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
-                if not already_listed:
-                    FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
-                    vehicle_listing.status="completed"
-                    vehicle_listing.save()
-            else:
-                    FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                    vehicle_listing.status="failed"
-                    vehicle_listing.save()
-        elif credentials and not credentials.session_cookie:
-            session_cookie =login_to_facebook(credentials.username, credentials.password)
-            if session_cookie:
-                credentials.session_cookie = session_cookie
-                credentials.save()
-                listing_created, message = create_marketplace_listing(vehicle_listing, session_cookie) 
-                if listing_created:
-                    already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing).first()
-                    if not already_listed:
-                        FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
-                        vehicle_listing.status="completed"
-                        vehicle_listing.save()
-                else:
-                    FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message=message)
-                    vehicle_listing.status="failed"
-                    vehicle_listing.save()
-            else:
-                FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message="Login failed.")
-                vehicle_listing.status="failed"
-                vehicle_listing.save()
-                print("Login failed.")
-        else:
-            FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="failed", error_message="No credentials found for the user")
-            vehicle_listing.status="failed"
-            vehicle_listing.save()
-            print("No credentials found for the user")
-             
-    except Exception as e:
-
-        vehicle_listing.status="failed"
-        vehicle_listing.save()
-        print(f"Error in create_facebook_marketplace_listing_task: {e}")
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated])    
 def get_gumtree_profile_listings(request):
     """Get Gumtree profile listings"""
     try:
@@ -403,6 +375,9 @@ def get_gumtree_profile_listings(request):
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
         if GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
             return JsonResponse({'error': 'This URL is already processed'}, status=200)
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        if not credentials or credentials.session_cookie == {}:
+            return JsonResponse({'error': 'No facebook credentials found for the user , Please provide the facebook credentials'}, status=200)
         # Get listings from Gumtree
         success, message = get_gumtree_listings(profile_url, user)
         if success:
@@ -438,15 +413,8 @@ def facebook_profile_listings(request):
                 return JsonResponse({'error': 'This URL is already processed'}, status=200)
         # Get user's Facebook credentials
         credentials = FacebookUserCredentials.objects.filter(user=user).first()
-        if not credentials:
+        if not credentials or credentials.session_cookie == {}:
             return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
-        if credentials.session_cookie == {}:
-            session_cookie =login_to_facebook(credentials.username, credentials.password)
-            if session_cookie:
-                credentials.session_cookie = session_cookie
-                credentials.save()
-            else:
-                return JsonResponse({'error': 'Login failed'}, status=400)
         success, listings = get_facebook_profile_listings(profile_url, credentials.session_cookie)
 
         if success:
@@ -533,14 +501,18 @@ class FacebookProfileListingViewSet(ModelViewSet):
         if facebook_profile_vehicle_listings:
             user = facebook_profile_listing.user
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
-            if credentials and credentials.session_cookie != {}:
-                session_cookie = credentials.session_cookie
+            if not credentials or credentials.session_cookie == {}:
+                return JsonResponse({'error': 'Facebook credentials not found, please login again'}, status=404)
+            session_cookie = credentials.session_cookie
             for current_listing in facebook_profile_vehicle_listings:
                 year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
         facebook_profile_listing.delete()
         if year_make_model_list:
-            thread = threading.Thread(target=delete_multiple_vehicle_listings, args=(year_make_model_list,session_cookie))
-            thread.start()
+            # Initialize a queue for the user if it doesn't exist
+            if user.id not in facebook_profile_user_queues:
+                facebook_profile_user_queues[user.id] = Queue()
+                threading.Thread(target=delete_facebook_profile_listing_worker, args=(user.id,), daemon=True).start()
+            facebook_profile_user_queues[user.id].put(year_make_model_list,session_cookie)
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 class GumtreeProfileListingViewSet(ModelViewSet):
@@ -573,14 +545,18 @@ class GumtreeProfileListingViewSet(ModelViewSet):
         if gumtree_profile_vehicle_listings:
             user = gumtree_profile_listing.user
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
-            if credentials and credentials.session_cookie != {}:
-                session_cookie = credentials.session_cookie
+            if not credentials or credentials.session_cookie == {}:
+                return JsonResponse({'error': 'Facebook credentials not found, please login again'}, status=404)
+            session_cookie = credentials.session_cookie
             for current_listing in gumtree_profile_vehicle_listings:
                 year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
         gumtree_profile_listing.delete()
         if year_make_model_list:
-            thread = threading.Thread(target=delete_multiple_vehicle_listings, args=(year_make_model_list,session_cookie))
-            thread.start()
+            # Initialize a queue for the user if it doesn't exist
+            if user.id not in gumtree_profile_user_queues:
+                gumtree_profile_user_queues[user.id] = Queue()
+                threading.Thread(target=delete_gumtree_profile_listing_worker, args=(user.id,), daemon=True).start()
+            gumtree_profile_user_queues[user.id].put(year_make_model_list,session_cookie)
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 def extract_seller_id(profile_url):
