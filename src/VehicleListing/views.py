@@ -252,6 +252,7 @@ class FacebookUserCredentialsViewSet(ModelViewSet):
             return FacebookUserCredentials.objects.all()
         else:
             return FacebookUserCredentials.objects.filter(user=user)
+
     def create(self, request, *args, **kwargs):
         """Create Facebook user credentials"""
         data = json.loads(request.body)
@@ -263,53 +264,27 @@ class FacebookUserCredentialsViewSet(ModelViewSet):
             return JsonResponse({'error': 'User not found'}, status=200)
         enhanced_cookies = []
         if cookies:
+            excluded_cookies = {"dbln", "ps_l", "ps_n", "ar_debug"}
+            lax_cookies = {"wd", "presence"}
+
             for cookie in cookies:
-                if cookie["name"] == "dbln" or cookie["name"] == "ps_l" or cookie["name"] == "ps_n" or cookie["name"] == "ar_debug" :
-                    continue
-                elif cookie["name"] == "wd" or cookie["name"] == "presence":
-                    if cookie["expires"]:
-                        enhanced_cookies.append({
-                            "name": cookie['name'],
-                            "path": cookie['path'],
-                            "value": cookie['value'],
-                            "domain": cookie['domain'],
-                            "secure": cookie['secure'],
-                            "expires": cookie['expires'],
-                            "httpOnly": cookie['httpOnly'],
-                            "sameSite": "Lax"
-                        })
-                    else:
-                        enhanced_cookies.append({
-                            "name": cookie['name'],
-                            "path": cookie['path'],
-                            "value": cookie['value'],
-                            "domain": cookie['domain'],
-                            "secure": cookie['secure'],
-                            "httpOnly": cookie['httpOnly'],
-                            "sameSite": "Lax"
-                        })
-                else:
-                    if cookie["expires"]:
-                        enhanced_cookies.append({
-                            "name": cookie['name'],
-                            "path": cookie['path'],
-                            "value": cookie['value'],
-                            "domain": cookie['domain'],
-                            "secure": cookie['secure'],
-                            "expires": cookie['expires'],
-                            "httpOnly": cookie['httpOnly'],
-                            "sameSite": "None"
-                    })
-                    else:
-                        enhanced_cookies.append({
-                            "name": cookie['name'],
-                            "path": cookie['path'],
-                            "value": cookie['value'],
-                            "domain": cookie['domain'],
-                            "secure": cookie['secure'],
-                            "httpOnly": cookie['httpOnly'],
-                            "sameSite": "None"
-                        })
+                if cookie["name"] in excluded_cookies:
+                    continue  # Skip excluded cookies
+                same_site_value = "Lax" if cookie["name"] in lax_cookies else "None"
+                enhanced_cookie = {
+                    "name": cookie["name"],
+                    "path": cookie["path"],
+                    "value": cookie["value"],
+                    "domain": cookie["domain"],
+                    "secure": cookie["secure"],
+                    "httpOnly": cookie["httpOnly"],
+                    "sameSite": same_site_value
+                }
+
+                if "expires" in cookie:
+                    enhanced_cookie["expires"] = cookie["expires"]
+
+                enhanced_cookies.append(enhanced_cookie)
         session_cookie = {
             "cookies": enhanced_cookies,
             "origins": origins
