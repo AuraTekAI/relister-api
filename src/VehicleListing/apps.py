@@ -13,7 +13,7 @@ class VehiclelistingConfig(AppConfig):
 
 @receiver(post_migrate)
 def create_periodic_task(sender, **kwargs):
-    from django_celery_beat.models import PeriodicTask, IntervalSchedule
+    from django_celery_beat.models import PeriodicTask, IntervalSchedule, CrontabSchedule
     
     schedule, created = IntervalSchedule.objects.get_or_create(
         every=1,
@@ -48,5 +48,23 @@ def create_periodic_task(sender, **kwargs):
         defaults={
             "interval": schedule,
             "task": "VehicleListing.tasks.create_failed_facebook_marketplace_listing_task",
+        },
+    )
+
+    crontab_schedule, _ = CrontabSchedule.objects.get_or_create(minute=0, hour='16-20')
+
+    PeriodicTask.objects.update_or_create(
+        name="Check_Facebook_Profile_Re-Listings",
+        defaults={
+            "crontab": crontab_schedule,
+            "task": "VehicleListing.tasks.check_facebook_profile_relisting_task",
+        },
+    )
+
+    PeriodicTask.objects.update_or_create(
+        name="Check_Gumtree_Profile_Re-Listings",
+        defaults={
+            "crontab": crontab_schedule,
+            "task": "VehicleListing.tasks.check_gumtree_profile_relisting_task",
         },
     )

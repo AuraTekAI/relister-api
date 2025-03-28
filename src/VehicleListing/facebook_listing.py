@@ -438,59 +438,6 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
 
 
-def login_to_facebook( username, password,session_cookie=None):
-    """Log in to Facebook automatically."""
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-            # Navigate to Facebook login page
-            page.goto("https://www.facebook.com/login", timeout=30000)
-            logging.info("Navigated to Facebook login page.")
-            random_sleep(3, 5)  # Random delay after page load
-
-            # Handle cookie consent
-            handle_cookie_consent(page)
-
-            # Fill email field
-            username_field = page.locator('input[name="email"]').first
-            username_field.scroll_into_view_if_needed()
-            human_like_typing(username_field, username)
-            logging.info("Email filled successfully.")
-            random_sleep(2,5)
-
-            # Fill password field
-            password_field = page.locator('input[name="pass"]').first
-            password_field.scroll_into_view_if_needed()
-            human_like_typing(password_field, password)
-            logging.info("Password filled successfully.")
-            random_sleep(2,5)
-
-            # Click login button
-            login_button = page.locator('button[name="login"]').first
-            login_button.scroll_into_view_if_needed()
-            login_button.click()
-            logging.info("Login button clicked.")
-            random_sleep(2, 5)
-
-            # Verify login success
-            if is_logged_in(page):
-                if not session_cookie:
-                    session_cookie = context.storage_state()     
-                browser.close()
-                logging.info("Login successful.")
-                return session_cookie
-            else:
-                logging.error("Login failed.")
-                browser.close()
-                return None
-            
-
-    except Exception as e:
-        logging.error(f"Error during login: {e}")
-        raise
-
 def is_logged_in(page):
     """Check if the user is logged in."""
     try:

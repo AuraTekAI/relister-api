@@ -287,6 +287,12 @@ LOGGING = {
             'filename': os.path.join(LOG_DIR, 'facebook_listing.log'),
             'formatter': 'verbose'
         },
+        'facebook_listing_cronjob_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(LOG_DIR, 'facebook_listing_cronjob.log'),
+            'formatter': 'verbose'
+        },
     },
     'loggers': {
         'gumtree': {
@@ -299,9 +305,13 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False
         },
+        'facebook_listing_cronjob': {
+            'handlers': ['console', 'facebook_listing_cronjob_file'],
+            'level': 'DEBUG',
+            'propagate': False
+        },
     }
 }
-
 
 
 
