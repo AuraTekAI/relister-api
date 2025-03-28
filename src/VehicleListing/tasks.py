@@ -1,14 +1,16 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
 from VehicleListing.facebook_listing import create_marketplace_listing
-from VehicleListing.models import VehicleListing, FacebookListing
+from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
-from VehicleListing.facebook_listing import perform_search_and_delete
+from VehicleListing.facebook_listing import perform_search_and_delete, get_facebook_profile_listings
+from VehicleListing.gumtree_scraper import get_gumtree_listings
+from VehicleListing.views import facebook_profile_listings_thread
 import time
 import random
 import logging
-
+import threading
 logger = logging.getLogger('facebook_listing_cronjob')
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
@@ -117,3 +119,38 @@ def create_failed_facebook_marketplace_listing_task(self):
                 raise e
     else:
         logger.info("No failed listings found for facebook marketplace")
+
+@shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
+def check_gumtree_profile_relisting_task(self):
+    """Check gumtree profile relisting"""
+    logger.info("Checking gumtree profile relisting")
+    gumtree_profile_listings = GumtreeProfileListing.objects.all()
+    if gumtree_profile_listings:
+        for gumtree_profile_listing in gumtree_profile_listings:
+            time.sleep(random.randint(1,3))
+            logger.info(f"Checking gumtree profile relisting for the user {gumtree_profile_listing.user.email}")
+            result, message = get_gumtree_listings(gumtree_profile_listing.url,gumtree_profile_listing.user)
+            if result:
+                logger.info(message)
+            else:
+                logger.error(message)
+
+
+
+@shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
+def check_facebook_profile_relisting_task(self):
+    """Check facebook profile relisting"""
+    facebook_profile_listings = FacebookProfileListing.objects.all()
+    if facebook_profile_listings:
+        for facebook_profile_listing_instance in facebook_profile_listings:
+            time.sleep(random.randint(1,3))
+            credentials = FacebookUserCredentials.objects.filter(user=facebook_profile_listing_instance.user).first()
+            if credentials:
+                success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url,credentials.session_cookie)
+                if success:
+                    thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,facebook_profile_listing_instance.user,facebook_profile_listing_instance.profile_id,facebook_profile_listing_instance))
+                    thread.start()
+                else:
+                    logger.error("Failed to get listings")
+            else:
+                logger.error("No facebook credentials found")

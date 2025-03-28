@@ -56,7 +56,8 @@ def get_listings(url,user,import_url_instance):
             else:
                 model=dict_data["Model"]
                 make=dict_data["Make"]
-            mileage=dict_data["Odometer"]
+            odo_meter=dict_data["Odometer"]
+            mileage=int(''.join(filter(str.isdigit, odo_meter)))                
             transmission=dict_data["Transmission"]
             
             # Create a new VehicleListing instance
@@ -149,7 +150,7 @@ def get_gumtree_listing_details(listing_id):
             "year": category_info.get("Year"),
             "model": model,
             "make": make,
-            "mileage": category_info.get("Odometer"),
+            "mileage":int(''.join(filter(str.isdigit, category_info.get("Odometer")))) ,
             "transmission": category_info.get("Transmission"),
             "url": ""
         }
@@ -213,7 +214,9 @@ def get_gumtree_listings(profile_url,user):
         if not listings:
             logging.warning(f"No listings data found for seller ID: {seller_id}")
             return False,"No listings data found for seller ID"
-        gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=total_count)
+        gumtree_profile_listing_instance = GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).first()
+        if not gumtree_profile_listing_instance:
+            gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=total_count)
 
         thread = threading.Thread(target=gumtree_profile_listings_thread, args=(listings,gumtree_profile_listing_instance,user,seller_id))
         thread.start()        
@@ -234,12 +237,13 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
             continue
 
         logging.info(f"Fetching details for listing ID: {listing_id}")
-        time.sleep(random.uniform(1,3))
-        result = get_gumtree_listing_details(listing_id)
-        already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user).first()
+        already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user,seller_profile_id=seller_id).first()
         if already_exists:
+            logging.info(f"Listing already exists: {already_exists}")
             count+=1
             continue
+        time.sleep(random.uniform(1,3))
+        result = get_gumtree_listing_details(listing_id)
         if result and not already_exists:
             count+=1
             vehicle_listing=VehicleListing.objects.create(
