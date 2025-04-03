@@ -9,10 +9,51 @@ from accounts.models import User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 class UserListSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False)  # Optional for updates
+    confirm_password = serializers.CharField(write_only=True, required=False)  # Optional for updates
+
     class Meta:
         model = User
-        fields = ['id', 'email', 'is_superuser']
-        read_only_fields = fields
+        fields = [
+            'id', 'email', 'is_superuser', 'is_approved', 
+            'dealership_name', 'contact_person_name', 'phone_number', 
+            'gumtree_dealarship_url', 'facebook_dealership_url',
+            'password', 'confirm_password'
+        ]
+        read_only_fields = ['id', 'is_superuser']  # These fields cannot be modified
+
+    def validate(self, attrs):
+        # Check if password is being updated
+        if 'password' in attrs:
+            if not attrs.get('confirm_password'):
+                raise serializers.ValidationError({"confirm_password": "Confirm password is required when updating password."})
+            if attrs['password'] != attrs['confirm_password']:
+                raise serializers.ValidationError({"password": "Password fields didn't match."})
+
+        # Remove confirm_password from attrs as it's not a model field
+        attrs.pop('confirm_password', None)
+        
+        # Validate at least one URL is present
+        gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
+        facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
+        
+        if not gumtree_url and not facebook_url:
+            raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        
+        return attrs
+
+    def update(self, instance, validated_data):
+        # Handle password update if provided
+        if 'password' in validated_data:
+            password = validated_data.pop('password')
+            instance.set_password(password)
+
+        # Update other fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        instance.save()
+        return instance
 
 class SetNewPasswordSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)

@@ -103,3 +103,25 @@ class UserListview(ModelViewSet):
     search_fields = ['dealership_name', 'email']
     ordering_fields = ['dealership_name', 'email']
     ordering = ['dealership_name', 'email']
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            self.perform_update(serializer)
+            return Response({
+                'status': status.HTTP_200_OK,
+                'message': 'User updated successfully',
+                'data': serializer.data
+            })
+        except Exception as e:
+            return Response({
+                'status': status.HTTP_400_BAD_REQUEST,
+                'message': str(e),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_update(self, serializer):
+        serializer.save()
