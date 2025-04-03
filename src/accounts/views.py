@@ -61,7 +61,13 @@ class RegisterView(APIView):
         if serializer.is_valid():
             user = serializer.save()
             
-            # Generate tokens for automatic login
+            if not user.is_approved:
+                return Response({
+                    'success': True,
+                    'message': 'Registration successful. Please wait for approval.',
+                }, status=status.HTTP_201_CREATED)
+            
+            # Generate tokens for automatic login if approved
             refresh = RefreshToken.for_user(user)
             
             return Response({
@@ -70,7 +76,8 @@ class RegisterView(APIView):
                 'user': {
                     'id': user.id,
                     'email': user.email,
-                    'name': user.name,
+                    'dealership_name': user.dealership_name,
+                    'contact_person_name': user.contact_person_name,
                 },
                 'tokens': {
                     'refresh': str(refresh),
@@ -93,6 +100,28 @@ class UserListview(ModelViewSet):
     serializer_class = UserListSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['name', 'email']
-    ordering_fields = ['name', 'email']
-    ordering = ['name', 'email']
+    search_fields = ['dealership_name', 'email']
+    ordering_fields = ['dealership_name', 'email']
+    ordering = ['dealership_name', 'email']
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            self.perform_update(serializer)
+            return Response({
+                'status': status.HTTP_200_OK,
+                'message': 'User updated successfully',
+                'data': serializer.data
+            })
+        except Exception as e:
+            return Response({
+                'status': status.HTTP_400_BAD_REQUEST,
+                'message': str(e),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_update(self, serializer):
+        serializer.save()
