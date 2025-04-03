@@ -11,7 +11,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 class UserListSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'name', 'is_superuser']
+        fields = ['id', 'email', 'is_superuser']
         read_only_fields = fields
 
 class SetNewPasswordSerializer(serializers.Serializer):
@@ -55,15 +55,21 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('email', 'password', 'confirm_password', 'name')
+        fields = ('email', 'password', 'confirm_password', 'dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url')
         extra_kwargs = {
-            'name': {'required': True},
-            'email': {'required': True}
+            'email': {'required': True},
+            'dealership_name': {'required': True},
+            'contact_person_name': {'required': True},
+            'phone_number': {'required': True},
         }
 
     def validate(self, attrs):
         if attrs['password'] != attrs['confirm_password']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
+        
+        if not attrs.get('gumtree_dealarship_url') and not attrs.get('facebook_dealership_url'):
+            raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        
         return attrs
 
     def create(self, validated_data):
@@ -75,13 +81,21 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)
         user = self.user
         
+        if not user.is_approved:
+            raise AuthenticationFailed('User is not approved.', code='user_not_approved')
+        
         # Add custom claims
         data.update({
             'user': {
                 'id': user.id,
                 'email': user.email,
-                'name': user.name,
+                'dealership_name': user.dealership_name,
+                'contact_person_name': user.contact_person_name,
+                'phone_number': user.phone_number,
+                'gumtree_dealarship_url': user.gumtree_dealarship_url,
+                'facebook_dealership_url': user.facebook_dealership_url,
                 'is_superuser': user.is_superuser,
+                'is_approved': user.is_approved,
             },
             'status': 200
         })

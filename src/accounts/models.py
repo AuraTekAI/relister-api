@@ -51,7 +51,12 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin):
     # Required fields
     email = models.EmailField(verbose_name="email", max_length=60, unique=True)
-    name = models.CharField(max_length=255, null=True, blank=True)
+    dealership_name = models.CharField(max_length=255, null=True, blank=True)
+    contact_person_name = models.CharField(max_length=255, null=True, blank=True)
+    phone_number = models.CharField(max_length=15, null=True, blank=True)
+    gumtree_dealarship_url = models.URLField(max_length=200, null=True, blank=True)
+    facebook_dealership_url = models.URLField(max_length=200, null=True, blank=True)
+    is_approved = models.BooleanField(default=False)
     
     # Extra information
     last_login = models.DateTimeField(verbose_name="last login", auto_now=True)
