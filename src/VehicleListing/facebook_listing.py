@@ -319,6 +319,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Location": [
                     # "//input[@id=':r3o:']",
                     "//label[@aria-label='Location']//input",
+                    "//span[contains(text(), 'Location')]/following-sibling::input",
                     "//input[@role='combobox' and @aria-label='Location']"
                 ],
                 "Description": [
@@ -332,6 +333,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 if field == "Make" and result[1] == "Car/van":
                     continue
                 if field == "Mileage" and result[1] == "Other":
+                    continue
+                if field == "Location" and not vehicle_details["Location"]:
                     continue
                 if field != "Mileage":
                     fill_input_field(
