@@ -62,7 +62,7 @@ class RegisterView(APIView):
         if serializer.is_valid():
             user = serializer.save()
             
-            if not user.is_approved:
+            if not user.is_approved and not user.is_superuser:
                 return Response({
                     'success': True,
                     'message': 'Registration successful. Please wait for approval.',

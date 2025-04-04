@@ -122,7 +122,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data = super().validate(attrs)
         user = self.user
         
-        if not user.is_approved:
+        if not user.is_approved and not user.is_superuser:
             raise AuthenticationFailed('User is not approved.', code='user_not_approved')
         
         # Add custom claims
