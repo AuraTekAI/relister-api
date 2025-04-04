@@ -11,6 +11,7 @@ from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from accounts.models import User
 from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer, UserListSerializer
+from django_filters.rest_framework import DjangoFilterBackend
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -99,10 +100,11 @@ class UserListview(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserListSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['dealership_name', 'email']
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter, DjangoFilterBackend]
+    search_fields = ['dealership_name', 'email', 'contact_person_name', 'phone_number']
     ordering_fields = ['dealership_name', 'email']
     ordering = ['dealership_name', 'email']
+    filterset_fields = ['is_approved', 'is_superuser', 'is_active']
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
