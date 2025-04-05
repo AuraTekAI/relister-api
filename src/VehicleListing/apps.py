@@ -40,8 +40,8 @@ def create_periodic_task(sender, **kwargs):
     )
 
     schedule, created = IntervalSchedule.objects.get_or_create(
-        every=1,
-        period=IntervalSchedule.DAYS,
+        every=12,
+        period=IntervalSchedule.HOURS,
     )
     PeriodicTask.objects.update_or_create(
         name="Create_Failed_Facebook_Listings",
