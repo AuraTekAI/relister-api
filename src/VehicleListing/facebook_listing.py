@@ -248,6 +248,97 @@ def click_button_when_enabled(page, button_text: str, max_attempts=3, wait_time=
     except Exception as e:
         logging.exception(f"Failed to click '{button_text}' button due to exception: {e}")
         return False, f"Exception occurred while clicking '{button_text}'"
+    
+
+
+def handle_make_field(page, make_value):
+    """Handles the 'Make' field by checking for input field first, then dropdown if input not found."""
+    logging.info(f"Handling 'Make' field with value: {make_value}")
+
+    vehicle_make_list = [
+        "Alfa Romeo", "Alpina", "Aston Martin", "Bentley", "Chrysler", "Daewoo", "Ferrari", "FIAT", "Dodge", "Ford",
+        "Honda", "Hyundai", "Hummer", "INFINITI", "Isuzu", "Jaguar", "Jeep", "Kia", "Lamborghini", "Land Rover",
+        "Lexus", "Lotus", "MINI", "Mercedes-Benz", "Maserati", "McLaren", "Mitsubishi", "Nissan", "Plymouth",
+        "Pontiac", "Porsche", "Rolls-Royce", "Saab", "Smart", "Subaru", "Suzuki", "Toyota", "Tesla", "Volkswagen", "Volvo"
+    ]
+    lower_make_list = [m.lower() for m in vehicle_make_list]
+    make_lower = make_value.lower()
+
+    # Step 1: Try input field first
+    make_input_selectors = [
+        "//span[contains(text(), 'Make')]/following-sibling::input"
+    ]
+
+    logging.info("Trying input selectors for 'Make'...")
+    for selector in make_input_selectors:
+        try:
+            input_element = page.locator(selector).first
+            if input_element.is_visible():
+                input_element.scroll_into_view_if_needed()
+                input_element.clear()
+                human_like_typing(input_element, make_value)
+                logging.info("Filled 'Make' via input: %s", make_value)
+                random_sleep(1, 2)
+                return True
+        except Exception as e:
+            logging.warning(f"Failed input selector {selector}: {e}")
+
+    # Step 2: Try dropdown as fallback
+    logging.info("Input not found. Trying dropdown for 'Make'...")
+    dropdown_selectors = [
+        "//span[contains(text(), 'Make')]/ancestor::label",
+        "//label[@aria-label='Make' and @role='combobox']",
+        "//span[text()='Make']/ancestor::label[@role='combobox']",
+        "//div[contains(@class, 'x1n2onr6')]//label[contains(.,'Make')]",
+        "//label[contains(., 'Make')][@role='combobox']",
+        "//span[contains(text(), 'Make')]/ancestor::label"
+    ]
+
+    if make_lower in lower_make_list:
+        display_make = vehicle_make_list[lower_make_list.index(make_lower)]
+        for selector in dropdown_selectors:
+            try:
+                dropdown = page.locator(selector).first
+                if dropdown.is_visible():
+                    dropdown.scroll_into_view_if_needed()
+                    dropdown.click()
+                    random_sleep(1, 2)
+
+                    # Try to select option
+                    option_selectors = [
+                        f"//div[@role='option' or @role='listbox']//span[contains(text(), '{display_make}')]",
+                        f"//div[@role='option'][contains(.,'{display_make}')]",
+                        f"//div[@role='option' or @role='listbox'][contains(.,'{display_make}')]"
+                    ]
+                    for option_selector in option_selectors:
+                        try:
+                            option = page.locator(option_selector).first
+                            if option.is_visible():
+                                option.scroll_into_view_if_needed()
+                                option.click()
+                                logging.info(f"Selected 'Make' from dropdown: {display_make}")
+                                random_sleep(1, 2)
+                                return True
+                        except Exception as e:
+                            logging.warning(f"Failed option selector {option_selector}: {e}")
+                            continue
+
+                    # As fallback: type and press Enter
+                    dropdown.fill(display_make)
+                    dropdown.press("Enter")
+                    logging.info("↩️ Typed and entered value in dropdown fallback")
+                    random_sleep(1, 2)
+                    return True
+            except Exception as e:
+                logging.warning(f"Failed dropdown selector {selector}: {e}")
+                continue
+    else:
+        logging.warning(f"Make '{make_value}' not recognized.")
+        return False, f"Make '{make_value}' not in supported list"
+
+    logging.error("Failed to handle 'Make' field.")
+    return False, "Failed to locate or interact with 'Make' field"
+
 
 
 
@@ -323,22 +414,24 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Fill form fields
             select_dropdown_option(page, "Year", vehicle_details["Year"])
-            vehicle_make_list = ["Alfa Romeo","Alpina","Aston Martin","Bentley","Chrysler","Daewoo","Ferrari","FIAT","Dodge","Ford","Honda","Hyundai","Hummer","INFINITI","Isuzu","Jaguar","Jeep","Kia","Lamborghini","Land Rover","Lexus","Lotus","MINI","Mercedes-Benz","Maserati","McLaren","Mitsubishi","Nissan","Plymouth","Pontiac","Porsche","Rolls-Royce","Saab","Smart","Subaru","Suzuki","Toyota","Tesla","Volkswagen","Volvo"]
-            lower_make_list= ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]
-            if result[1] == "Car/Truck":
-                if vehicle_listing.make.lower() in lower_make_list:
-                    select_dropdown_option(page, "Make", vehicle_make_list[lower_make_list.index(vehicle_listing.make.lower())])
-                else:
-                    logging.info(f"Make {vehicle_listing.make} not found in the list")
-                    return False, f"Make {vehicle_listing.make} not found in the list"
+            # vehicle_make_list = ["Alfa Romeo","Alpina","Aston Martin","Bentley","Chrysler","Daewoo","Ferrari","FIAT","Dodge","Ford","Honda","Hyundai","Hummer","INFINITI","Isuzu","Jaguar","Jeep","Kia","Lamborghini","Land Rover","Lexus","Lotus","MINI","Mercedes-Benz","Maserati","McLaren","Mitsubishi","Nissan","Plymouth","Pontiac","Porsche","Rolls-Royce","Saab","Smart","Subaru","Suzuki","Toyota","Tesla","Volkswagen","Volvo"]
+            # lower_make_list= ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]
+            # if result[1] == "Car/van":
+            #     if vehicle_listing.make.lower() in lower_make_list:
+            #         select_dropdown_option(page, "Make", vehicle_make_list[lower_make_list.index(vehicle_listing.make.lower())])
+            #     else:
+            #         logging.info(f"Make {vehicle_listing.make} not found in the list")
+            #         return False, f"Make {vehicle_listing.make} not found in the list"
+            # else:
+            handle_make_field(page, vehicle_listing.make)
 
             # Input fields with their selectors
             input_fields = {
-                "Make": [
-                    # "//input[@id=':r31:']",
-                    "//span[contains(text(), 'Make')]/following-sibling::input",
-                    "//div[contains(@class, 'xjbqb8w')]//input[contains(@class, 'x1i10hfl')]"
-                ],
+                # "Make": [
+                #     # "//input[@id=':r31:']",
+                #     "//span[contains(text(), 'Make')]/following-sibling::input",
+                #     "//div[contains(@class, 'xjbqb8w')]//input[contains(@class, 'x1i10hfl')]"
+                # ],
                 "Model": [
                     # "//input[@id=':r34:']",
                     "//span[contains(text(), 'Model')]/following-sibling::input",
@@ -368,8 +461,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             for field, selectors in input_fields.items():
-                if field == "Make" and result[1] == "Car/Truck":
-                    continue
+                # if field == "Make" and result[1] == "Car/Truck":
+                #     continue
                 if field == "Mileage" and result[1] == "Other":
                     continue
                 if field == "Location" and not vehicle_details["Location"]:
