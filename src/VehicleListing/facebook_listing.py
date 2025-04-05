@@ -325,7 +325,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             select_dropdown_option(page, "Year", vehicle_details["Year"])
             vehicle_make_list = ["Alfa Romeo","Alpina","Aston Martin","Bentley","Chrysler","Daewoo","Ferrari","FIAT","Dodge","Ford","Honda","Hyundai","Hummer","INFINITI","Isuzu","Jaguar","Jeep","Kia","Lamborghini","Land Rover","Lexus","Lotus","MINI","Mercedes-Benz","Maserati","McLaren","Mitsubishi","Nissan","Plymouth","Pontiac","Porsche","Rolls-Royce","Saab","Smart","Subaru","Suzuki","Toyota","Tesla","Volkswagen","Volvo"]
             lower_make_list= ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]
-            if result[1] == "Car/van":
+            if result[1] == "Car/Truck":
                 if vehicle_listing.make.lower() in lower_make_list:
                     select_dropdown_option(page, "Make", vehicle_make_list[lower_make_list.index(vehicle_listing.make.lower())])
                 else:
@@ -368,7 +368,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             for field, selectors in input_fields.items():
-                if field == "Make" and result[1] == "Car/van":
+                if field == "Make" and result[1] == "Car/Truck":
                     continue
                 if field == "Mileage" and result[1] == "Other":
                     continue
@@ -442,7 +442,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                success, message = click_button_when_enabled(page, button_text, max_attempts=10, wait_time=1)
+                success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=2)
                 if not success:
                     # Optionally handle the failure
                     return False, message
