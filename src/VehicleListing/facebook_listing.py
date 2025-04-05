@@ -215,6 +215,40 @@ def is_element_visible(page, selector):
     except Exception as e:
         logging.warning(f"Error checking element visibility: {e}")
         return False
+    
+
+def click_button_when_enabled(page, button_text: str, max_attempts=3, wait_time=2):
+    try:
+        # Locate the button using XPath
+        button = page.locator(
+            f"//div[@aria-label='{button_text}' and @role='button']"
+            f"|//span[contains(text(), '{button_text}')]/ancestor::div[@role='button']"
+        ).first
+
+        button.scroll_into_view_if_needed()
+
+        logging.info(f"Trying to click '{button_text}' button...")
+
+        for attempt in range(1, max_attempts + 1):
+            is_disabled = button.get_attribute("aria-disabled")
+
+            logging.info(f"[Attempt {attempt}] '{button_text}' button status: {'disabled' if is_disabled == 'true' else 'enabled'}")
+
+            if is_disabled != "true":
+                button.click()
+                logging.info(f" Successfully clicked '{button_text}' button.")
+                return True, f"Clicked '{button_text}'"
+            
+            logging.debug(f"Waiting {wait_time}s before retrying...")
+            time.sleep(wait_time)
+
+        logging.error(f"'{button_text}' button never became enabled after {max_attempts} attempts.")
+        return False, f"'{button_text}' button is disabled"
+
+    except Exception as e:
+        logging.exception(f"Failed to click '{button_text}' button due to exception: {e}")
+        return False, f"Exception occurred while clicking '{button_text}'"
+
 
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
@@ -254,33 +288,37 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             result = select_vehicle_type(page,vehicle_details)
 
             index = 0
-            # Download the images using url and save it locally    
-            for image_url in vehicle_listing.images:
-                if index > 18:
-                    break
-                image_name = os.path.basename(image_url)
-                image_extension = os.path.splitext(image_name)[1] 
-                index = index + 1
-                new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
-                local_image_path = os.path.join(IMAGES_DIR, new_image_name)
+            if vehicle_listing.images:
+                # Download the images using url and save it locally    
+                for image_url in vehicle_listing.images:
+                    if index > 18:
+                        break
+                    image_name = os.path.basename(image_url)
+                    image_extension = os.path.splitext(image_name)[1] 
+                    index = index + 1
+                    new_image_name = f"{vehicle_listing.list_id}_image{image_extension}index{index}"  
+                    local_image_path = os.path.join(IMAGES_DIR, new_image_name)
 
-                try:
-                    # Download the image
-                    image_response = requests.get(image_url)
-                    image_response.raise_for_status()
-                    with open(local_image_path, "wb") as file:
-                        file.write(image_response.content)
-                except requests.exceptions.RequestException as e:
-                    return False, f"Error downloading the image: {e}"
-                # Check if the image was downloaded successfully
-                if not os.path.exists(local_image_path):
-                    return False, "Image download failed, file does not exist." 
+                    try:
+                        # Download the image
+                        image_response = requests.get(image_url)
+                        image_response.raise_for_status()
+                        with open(local_image_path, "wb") as file:
+                            file.write(image_response.content)
+                    except requests.exceptions.RequestException as e:
+                        return False, f"Error downloading the image: {e}"
+                    # Check if the image was downloaded successfully
+                    if not os.path.exists(local_image_path):
+                        return False, "Image download failed, file does not exist." 
 
-            # Upload images
-                image_input = page.locator("//input[@type='file']").first
-                image_input.set_input_files(local_image_path)
-                logging.info("Photos uploaded successfully.")
-                random_sleep(2, 3)  # Random delay after uploading images
+                    # Upload images
+                    image_input = page.locator("//input[@type='file']").first
+                    image_input.set_input_files(local_image_path)
+                    logging.info("Photos uploaded successfully.")
+                    random_sleep(2, 3)  # Random delay after uploading images
+            else:
+                logging.info("No images found.")
+                return False, "No images found."
             
 
             # Fill form fields
@@ -313,12 +351,12 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 ],
                 "Price": [
                     # "//input[@id=':r37:']",
-                    "//label[@aria-label='Price']//input",
+                    # "//label[@aria-label='Price']//input",
                     "//span[contains(text(), 'Price')]/following-sibling::input"
                 ],
                 "Location": [
                     # "//input[@id=':r3o:']",
-                    "//label[@aria-label='Location']//input",
+                    # "//label[@aria-label='Location']//input",
                     "//span[contains(text(), 'Location')]/following-sibling::input",
                     "//input[@role='combobox' and @aria-label='Location']"
                 ],
@@ -404,18 +442,13 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                try:
-                    button = page.locator(
-                        f"//div[@aria-label='{button_text}' and @role='button']" +
-                        f"|//span[contains(text(), '{button_text}')]/ancestor::div[@role='button']"
-                    ).first
-                    button.scroll_into_view_if_needed()
-                    button.click()
-                    logging.info(f"Clicked {button_text} button.")
-                    random_sleep(3, 5)  # Random delay after clicking the button
-                except Exception as e:
-                    logging.error(f"Failed to click {button_text} button: {e}")
-                    return False, "Failed to click button"
+                success, message = click_button_when_enabled(page, button_text, max_attempts=10, wait_time=1)
+                if not success:
+                    # Optionally handle the failure
+                    return False, message
+                else:
+                    # Add random sleep if needed
+                    random_sleep(3, 5)
 
             # Close browser
             browser.close()
