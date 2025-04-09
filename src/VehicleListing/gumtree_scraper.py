@@ -6,6 +6,7 @@ import time
 import random
 import threading
 from django.conf import settings
+import re
 
 logging = logging.getLogger('gumtree')
 def extract_seller_id(profile_url):
@@ -14,6 +15,22 @@ def extract_seller_id(profile_url):
         profile_url = profile_url[:-1]
     seller_id = profile_url.split('/')[-1]
     return seller_id
+
+def clean_and_format_description(raw_description):
+    if not raw_description:
+        return ""
+    # Replace all variations of <br> with newline
+    text = re.sub(r'<br\s*/?>', '\n', raw_description)
+    # Replace asterisk-style bullet points with •
+    text = re.sub(r'\n\s*\*\s*', '\n• ', text)
+    # Preserve "***" separator with spacing before and after
+    text = re.sub(r'\n*\*{3,}\n*', '\n\n***\n\n', text)
+    # Collapse 3+ newlines to just 2 for clean spacing
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Remove leading/trailing whitespace
+    text = text.strip()
+    return text
+
 
 def get_listings(url,user,import_url_instance):
     """Get listings from Gumtree"""
@@ -40,9 +57,10 @@ def get_listings(url,user,import_url_instance):
                 logging.info(f"current_data: {current_data}")
                 dict_data[current_data['name']] = current_data['value']
             title=response_data["adHeadingData"]["title"]
-            price=response_data["adPriceData"]["amount"]
+            price=int(response_data["adPriceData"]["amount"])
             seller_id=response_data["adPosterData"]["randomUserId"] 
             description=response_data["description"]
+            enhanced_description=clean_and_format_description(description)
             location=response_data["adLocationData"]["suburb"]
             body_type=dict_data["Body Type"]
             fuel_type=dict_data["Fuel Type"]
@@ -77,7 +95,7 @@ def get_listings(url,user,import_url_instance):
                 transmission=transmission,
                 exterior_colour=color,
                 interior_colour="Other",
-                description=description,
+                description=enhanced_description,
                 images=[image.get("baseurl") for image in response_data.get("images", [])],
                 condition="Excellent",
                 url=url,
@@ -136,11 +154,13 @@ def get_gumtree_listing_details(listing_id):
             model = parts[1] if len(parts) > 1 else ""  # Remaining part
         else:
             model=category_info.get("Model")
-            make=category_info.get("Make")  
+            make=category_info.get("Make") 
+        description=response_data.get("description")
+        enhanced_description=clean_and_format_description(description) 
         listing_details = {
             "title": response_data.get("adHeadingData", {}).get("title"),
-            "price": response_data.get("adPriceData", {}).get("amount"),
-            "description": response_data.get("description"),
+            "price": int(response_data.get("adPriceData", {}).get("amount")),
+            "description": enhanced_description,
             "image": [image.get("baseurl") for image in response_data.get("images", [])],
             "location": response_data.get("adLocationData", {}).get("suburb"),
             "body_type": category_info.get("Body Type"),
@@ -230,12 +250,13 @@ def get_gumtree_listings(profile_url,user):
 def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,user,seller_id):
     # Collect details for each listing
     count=0
+    incoming_list_ids = set()
     for current_list in listings:
         listing_id = current_list.get("id")
         if not listing_id:
             logging.warning("Listing ID is missing, skipping entry")
             continue
-
+        incoming_list_ids.add(str(listing_id))
         logging.info(f"Fetching details for listing ID: {listing_id}")
         already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user,seller_profile_id=seller_id).first()
         if already_exists:
@@ -268,6 +289,17 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
                 seller_profile_id=seller_id
             )
             logging.info(f"vehicle_listing: {vehicle_listing}")
+    #Mark already exist listing who are not present in profile listings as sold
+    #Mark missing listings as SOLD
+    existing_listings = VehicleListing.objects.filter(
+        user=user, seller_profile_id=seller_id
+    ).exclude(list_id__in=incoming_list_ids)
+    if existing_listings:
+        for listing in existing_listings:
+            if listing.status != "sold":
+                logging.info(f"Marking listing ID {listing.list_id} as sold")
+                listing.status = "sold"
+                listing.save()
     gumtree_profile_listing_instance.processed_listings=count
     gumtree_profile_listing_instance.status="completed"
     gumtree_profile_listing_instance.save()

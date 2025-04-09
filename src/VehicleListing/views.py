@@ -1,4 +1,4 @@
-from .gumtree_scraper import get_listings,get_gumtree_listings
+from .gumtree_scraper import get_listings,get_gumtree_listings,clean_and_format_description
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
@@ -7,7 +7,7 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
 import json
-from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details,extract_facebook_listing_details
+from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 import threading
@@ -88,7 +88,8 @@ def import_url_from_gumtree(request):
             current_listing['mileage'] = None
             import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
             response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
-            if response and response.get("year") and response.get("make") and response.get("model"):
+            if response and response.get("year") and response.get("make") and response.get("model") and response["images"]:
+                enhanced_description=clean_and_format_description(response.get("description"))
                 vehicle_listing = VehicleListing.objects.create(
                     user=user,
                     list_id=list_id,
@@ -102,7 +103,7 @@ def import_url_from_gumtree(request):
                     model=response["model"],
                     price=response.get("price"),
                     transmission=response["transmission"],
-                    description=response.get("description"),
+                    description=enhanced_description,
                     exterior_colour=response["exterior_colour"],
                     interior_colour=response["interior_colour"],
                     condition=response["condition"],
@@ -151,7 +152,6 @@ def all_vehicle_listing(request):
     if request.method == 'POST':
         data = json.loads(request.body)
         email = data[0].get('email')  # Access first item since you're sending array
-        print(f"email: {email}")
         if not email:
             return JsonResponse({'error': 'Email is required'}, status=400)
 
@@ -409,9 +409,11 @@ def facebook_profile_listings(request):
 def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebook_profile_listing_instance):
     """Get listings using the function"""
     count=0
+    incoming_list_ids = set()
     for current_listing_key in listings:
         current_listing=listings[current_listing_key]
         already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
+        incoming_list_ids.add(str(current_listing["id"]))
         if already_listed:
             continue
         time.sleep(random.uniform(1,2))
@@ -419,6 +421,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
             count+=1
+            enhanced_description=clean_and_format_description(vehicleListing.get("description"))
             VehicleListing.objects.create(
                 user=user,
                 facebook_profile=facebook_profile_listing_instance,
@@ -434,7 +437,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                 price=vehicleListing.get("price"),
                 transmission=vehicleListing["transmission"],
                 condition=vehicleListing["condition"],
-                description=vehicleListing.get("description"),
+                description=enhanced_description,
                 images=vehicleListing["images"],
                 url=current_listing["url"],
                 location=vehicleListing.get("location"),
@@ -443,6 +446,17 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                 interior_colour=vehicleListing["interior_colour"],
                 seller_profile_id=seller_id
             )
+    
+    #Mark already exist listing who are not present in profile listings as sold
+    #Mark missing listings as SOLD
+    existing_listings = VehicleListing.objects.filter(
+        user=user, seller_profile_id=seller_id
+    ).exclude(list_id__in=incoming_list_ids)
+    if existing_listings:
+        for listing in existing_listings:
+            if listing.status != "sold":
+                listing.status = "sold"
+                listing.save()
     facebook_profile_listing_instance.status="completed"
     facebook_profile_listing_instance.processed_listings=count
     facebook_profile_listing_instance.save()
