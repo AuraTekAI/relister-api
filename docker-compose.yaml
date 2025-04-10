@@ -24,12 +24,9 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
-    command: redis-server --databases 2
+    command: redis-server --databases 2 --requirepass 123
     healthcheck:
-      test:
-        - CMD
-        - redis-cli
-        - ping
+      test: ["CMD", "redis-cli", "-a", "123", "ping"]
       retries: 3
       timeout: 5s
     networks:
