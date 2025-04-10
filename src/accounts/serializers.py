@@ -119,6 +119,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
+        #Email case-insensitive and ignore spaces at the end
+        email = attrs.get('email', '').strip()  # Remove spaces at the ends
+        attrs['email'] = email.lower()  # Convert to lowercase for case-insensitivity
+        attrs['password'] = attrs.get("password", '')
         data = super().validate(attrs)
         user = self.user
         
