@@ -1,4 +1,4 @@
-from .gumtree_scraper import get_listings,get_gumtree_listings,clean_and_format_description
+from .gumtree_scraper import get_listings,get_gumtree_listings,format_car_description
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
@@ -89,7 +89,7 @@ def import_url_from_gumtree(request):
             import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
             response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
             if response and response.get("year") and response.get("make") and response.get("model") and response["images"]:
-                enhanced_description=clean_and_format_description(response.get("description"))
+                enhanced_description=format_car_description(response.get("description"))
                 vehicle_listing = VehicleListing.objects.create(
                     user=user,
                     list_id=list_id,
@@ -421,7 +421,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
             count+=1
-            enhanced_description=clean_and_format_description(vehicleListing.get("description"))
+            enhanced_description=format_car_description(vehicleListing.get("description"))
             VehicleListing.objects.create(
                 user=user,
                 facebook_profile=facebook_profile_listing_instance,

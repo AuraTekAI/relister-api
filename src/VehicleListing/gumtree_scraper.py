@@ -6,6 +6,7 @@ import time
 import random
 import threading
 from django.conf import settings
+from bs4 import BeautifulSoup
 import re
 
 logging = logging.getLogger('gumtree')
@@ -16,20 +17,24 @@ def extract_seller_id(profile_url):
     seller_id = profile_url.split('/')[-1]
     return seller_id
 
-def clean_and_format_description(raw_description):
-    if not raw_description:
-        return ""
-    # Replace all variations of <br> with newline
-    text = re.sub(r'<br\s*/?>', '\n', raw_description)
-    # Replace asterisk-style bullet points with •
-    text = re.sub(r'\n\s*\*\s*', '\n• ', text)
-    # Preserve "***" separator with spacing before and after
-    text = re.sub(r'\n*\*{3,}\n*', '\n\n***\n\n', text)
-    # Collapse 3+ newlines to just 2 for clean spacing
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    # Remove leading/trailing whitespace
-    text = text.strip()
-    return text
+def format_car_description(description):
+    """
+    Convert raw car description by replacing <br> tags with line breaks/spaces.
+
+    Args:
+        description (str): The raw HTML-formatted description.
+
+    Returns:
+        str: Clean description with <br> tags replaced by line breaks.
+    """
+    # Replace all <br> and <br/> tags with line breaks
+    description = re.sub(r'(?i)<br\s*/?>', '\n', description)
+
+    # Strip remaining HTML tags (if any)
+    soup = BeautifulSoup(description, "html.parser")
+    cleaned_text = soup.get_text()
+
+    return cleaned_text.strip()
 
 
 def get_listings(url,user,import_url_instance):
@@ -60,7 +65,7 @@ def get_listings(url,user,import_url_instance):
             price=int(response_data["adPriceData"]["amount"])
             seller_id=response_data["adPosterData"]["randomUserId"] 
             description=response_data["description"]
-            enhanced_description=clean_and_format_description(description)
+            enhanced_description=format_car_description(description)
             location=response_data["adLocationData"]["suburb"]
             body_type=dict_data["Body Type"]
             fuel_type=dict_data["Fuel Type"]
@@ -156,7 +161,7 @@ def get_gumtree_listing_details(listing_id):
             model=category_info.get("Model")
             make=category_info.get("Make") 
         description=response_data.get("description")
-        enhanced_description=clean_and_format_description(description) 
+        enhanced_description=format_car_description(description) 
         listing_details = {
             "title": response_data.get("adHeadingData", {}).get("title"),
             "price": int(response_data.get("adPriceData", {}).get("amount")),
