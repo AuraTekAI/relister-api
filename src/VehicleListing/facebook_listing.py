@@ -346,8 +346,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
     try:    
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=session_cookie)
+            browser = p.chromium.launch(headless=True,args=["--start-maximized"])
+            context = browser.new_context(storage_state=session_cookie,viewport={"width": 1920, "height": 1080})
             page = context.new_page()
 
             # Navigate to the vehicle listing page
@@ -592,8 +592,8 @@ def perform_search_and_delete(search_for,session_cookie):
     """Perform search and delete listing"""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=session_cookie)
+            browser = p.chromium.launch(headless=True,args=["--start-maximized"])
+            context = browser.new_context(storage_state=session_cookie,viewport={"width": 1920, "height": 1080})
             page = context.new_page()
             page.goto("https://www.facebook.com/marketplace/you/selling")
             page.wait_for_timeout(5000)
@@ -619,9 +619,7 @@ def perform_search_and_delete(search_for,session_cookie):
             if matches_found > 0:
                 logging.info(f"Success (Attempt 1): Found ({matches_found}) matches for ({search_for})")
                 # Open the "More options" menu
-                more_options = page.locator(
-                "//div[contains(@class, 'x1n2onr6')]//div[contains(@class, 'x1ja2u2z')]//div[@aria-label and contains(@aria-label, 'More options')]"
-            ).first
+                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
                 more_options.click()
                 page.wait_for_timeout(2000)
 
@@ -663,9 +661,7 @@ def perform_search_and_delete(search_for,session_cookie):
             if matches_found > 0:
                 logging.info(f"Success (Attempt 2): Found ({matches_found}) matches for ({search_for})")
                 # Open the "More options" menu
-                more_options = page.locator(
-                    "//div[contains(@class, 'x1n2onr6')]//div[contains(@class, 'x1ja2u2z')]//div[@aria-label and contains(@aria-label, 'More options')]"
-                ).first
+                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
                 more_options.click()
                 page.wait_for_timeout(2000)
 
@@ -708,6 +704,105 @@ def perform_search_and_delete(search_for,session_cookie):
                 return  True, "didnt_find_anything_displayed"
     except Exception as e:
         logging.error(f"Error in perform_search_and_delete: {e}")
+        return False, str(e)
+    
+
+def Renew_listing(search_for,session_cookie):
+    """Perform search and delete listing"""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True,args=["--start-maximized"])
+            context = browser.new_context(storage_state=session_cookie,viewport={"width": 1920, "height": 1080})
+            page = context.new_page()
+            page.goto("https://www.facebook.com/marketplace/you/selling")
+            page.wait_for_timeout(5000)
+            logging.info("Navigated to Facebook Marketplace vehicle listing page.")
+            random_sleep(3, 5)
+            if not search_for.strip():
+                return False, "Search value is required"
+            
+            
+            input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+            input_element = page.locator(input_locator).first
+
+            if not input_element.is_visible():
+                return False, "Search input not found"
+
+            logging.info(f"Your Listings: Search: {search_for}")
+            input_element.click()
+            input_element.fill(search_for)
+            page.wait_for_timeout(5000)
+            # Search for the listing
+
+            matches_found = get_count_of_elements_with_text(search_for,page)
+            if matches_found > 0:
+                logging.info(f"Success (Attempt 1): Found ({matches_found}) matches for ({search_for})")
+                # Open the "More options" menu
+                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
+
+                more_options.wait_for(state="visible", timeout=5000)
+                more_options.click()
+                logging.info("✅ Clicked on 'More options' button successfully")
+                # Select "Renew (7 days)" from the menu
+                # renew_option = page.locator(
+                #     "//div[@role='menuitem']//span[contains(text(), 'Renew (7 days)')]//ancestor::div[@role='menuitem']")
+                # if renew_option and renew_option.is_visible():
+                #     logging.info(f"Renew 7 days button is visible for this listing {search_for}")
+                #     return False, "Not Renew Listed now, Retry after 24 hours"
+
+                # Select "Renew listing" from the menu
+                renew_option = page.locator("//span[text()='Renew listing']/parent::div").first
+                renew_option.wait_for(state="visible", timeout=8000)
+    
+                if renew_option.is_visible():
+                    logging.info(f"Renew button is visible for this listing: {search_for}")
+                    renew_option.click()
+                    logging.info("Successfully clicked on the Renew button.")
+                    random_sleep(3, 5)
+                    return True, "Renew Listed Successfully"
+                else:
+                    logging.warning(f"Renew button found but not visible for: {search_for}")
+                    return False, "Renew Button not visible"
+            #second attempt
+            page.wait_for_timeout(5000)  # Wait for another 5 seconds
+            matches_found = get_count_of_elements_with_text(search_for,page)
+            if matches_found > 0:
+                logging.info(f"Success (Attempt 2): Found ({matches_found}) matches for ({search_for})")
+                # Open the "More options" menu
+                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
+                more_options.click()
+                page.wait_for_timeout(2000)
+
+                # # Make retry for Select "Renew  (7 days)" from the menu
+                # renew_option = page.locator(
+                #     "//div[@role='menuitem']//span[contains(text(), 'Renew (7 days)')]//ancestor::div[@role='menuitem']",
+                #     state="visible",timeout=5000
+                # )
+                # if renew_option and renew_option.is_visible():
+                #     logging.info(f"Renew 7 days button is visible for this listing {search_for}")
+                #     return False, "Not Renew Listed now, Retry after 24 hours"
+
+                # Make Retry for Select "Renew listing" from the menu
+                renew_option = page.locator("//span[text()='Renew listing']/parent::div").first
+                renew_option.wait_for(state="visible", timeout=8000)
+    
+                if renew_option.is_visible():
+                    logging.info(f"Renew button is visible for this listing: {search_for}")
+                    renew_option.click()
+                    logging.info("Successfully clicked on the Renew button.")
+                    random_sleep(3, 5)
+                    return True, "Renew Listed Successfully"
+                else:
+                    logging.warning(f"Renew button found but not visible for: {search_for}")
+                    return False, "Renew Button not visible"          
+            #do not find anything
+            didnt_find_locator = "text='We didn't find anything'"
+            if page.locator(didnt_find_locator).is_visible():
+                logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
+                return  False, "didnt_find_anything_displayed"
+            return False, "Failed to relist the listing"
+    except Exception as e:
+        logging.error(f"Error in perform_search and renew the listings: {e}")
         return False, str(e)
 
 def get_count_of_elements_with_text( search_for,page):

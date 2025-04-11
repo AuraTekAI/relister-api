@@ -66,6 +66,7 @@ class VehicleListing(models.Model):
     url = models.URLField(null=True,blank=True)
     seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
     status = models.CharField(max_length=255, null=True)
+    renew_date=models.JSONField(null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

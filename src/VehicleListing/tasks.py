@@ -4,7 +4,7 @@ from VehicleListing.facebook_listing import create_marketplace_listing
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
-from VehicleListing.facebook_listing import perform_search_and_delete, get_facebook_profile_listings
+from VehicleListing.facebook_listing import perform_search_and_delete, get_facebook_profile_listings, Renew_listing
 from VehicleListing.gumtree_scraper import get_gumtree_listings
 from VehicleListing.views import facebook_profile_listings_thread
 import time
@@ -24,8 +24,10 @@ def create_pending_facebook_marketplace_listing_task(self):
                 time.sleep(random.randint(2,5))
                 credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
                 if credentials and credentials.session_cookie != {}:
-                    already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing).first()
+                    already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing,status="success").first()
                     if already_listed:
+                        listing.status="completed"
+                        listing.save()
                         logger.info(f"Listing already exists for the user {listing.user.email}")
                         continue
                     else:
@@ -54,7 +56,8 @@ def relist_facebook_marketplace_listing_task(self):
     """Relist 7 days old facebook marketplace listings"""
     logger.info("Relisting 7 days old facebook marketplace listings")
     current_date = datetime.now().date()
-    seven_days_ago = current_date - timedelta(days=7)
+    current_datetime=datetime.now()
+    seven_days_ago = current_date - timedelta(minutes=2)
     pending_listings = VehicleListing.objects.filter(status="completed", updated_at__date__lte=seven_days_ago).all()
     if pending_listings:
         for listing in pending_listings:
@@ -64,19 +67,17 @@ def relist_facebook_marketplace_listing_task(self):
             credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
             if credentials and credentials.session_cookie != {}:
                 logger.info(f"Credentials found for the user {listing.user.email}")
-                response = perform_search_and_delete(search_query,credentials.session_cookie)
+                response = Renew_listing(search_query,credentials.session_cookie)
                 if response[0]:
-                    logger.info(f"Relisting found and deleted for the user {listing.user.email}")
-                    listing_created, message = create_marketplace_listing(listing,credentials.session_cookie)
-                    if listing_created:
-                        logger.info(f"Relisting created successfully for the user {listing.user.email}")
-                        listing.updated_at = datetime.now()
-                        listing.save()
-                    else:
-                        logger.info(f"Relisting failed for the user {listing.user.email}")
-                        listing.status="failed"
-                        listing.updated_at = datetime.now()
-                        listing.save()
+                    logger.info(f"Relisting found and Relist/Renew for the user {listing.user.email}")
+                    listing.updated_at = datetime.now()
+                    if not isinstance(listing.renew_date, list):
+                        listing.renew_date = []
+                    listing.renew_date.append(current_datetime.isoformat())
+                    listing.save()
+                else:
+                    logger.info(f"{response[1]}")
+                    logger.info(f"Failed to renew the listing, Retry attempt after 24 hours")
             else:
                 logger.info(f"No facebook credentials found for the user {listing.user.email}")
                 continue
@@ -88,16 +89,18 @@ def relist_facebook_marketplace_listing_task(self):
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
 def create_failed_facebook_marketplace_listing_task(self):
     """Create failed facebook marketplace listings"""
-    pending_listings = VehicleListing.objects.filter(status="failed").all()
-    if pending_listings:
-        for listing in pending_listings:
+    failed_listings = VehicleListing.objects.filter(status="failed").all()
+    if failed_listings:
+        for listing in failed_listings:
             try:
                 logger.info(f"Creating failed facebook marketplace listing for the user {listing.user.email}")
                 time.sleep(random.randint(2,5))
                 credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
                 if credentials and credentials.session_cookie != {}:
-                    already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing).first()
+                    already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing, status="success").first()
                     if already_listed:
+                        listing.status="completed"
+                        listing.save()
                         logger.info(f"Listing already exists for the user {listing.user.email}")
                         continue
                     else:
