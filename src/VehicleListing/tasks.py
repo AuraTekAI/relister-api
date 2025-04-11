@@ -57,7 +57,7 @@ def relist_facebook_marketplace_listing_task(self):
     logger.info("Relisting 7 days old facebook marketplace listings")
     current_date = datetime.now().date()
     current_datetime=datetime.now()
-    seven_days_ago = current_date - timedelta(minutes=2)
+    seven_days_ago = current_date - timedelta(days=7)
     pending_listings = VehicleListing.objects.filter(status="completed", updated_at__date__lte=seven_days_ago).all()
     if pending_listings:
         for listing in pending_listings:
