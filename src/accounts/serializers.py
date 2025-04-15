@@ -107,9 +107,31 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs['password'] != attrs['confirm_password']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
-        
-        if not attrs.get('gumtree_dealarship_url') and not attrs.get('facebook_dealership_url'):
+        gumtree_profile_url=attrs.get('gumtree_dealarship_url')
+        facebook_profile_url=attrs.get('facebook_dealership_url')
+        if not gumtree_profile_url  and not facebook_profile_url:
             raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        #Facebook URL Validation
+        if facebook_profile_url:
+            expected_prefixes = [
+                "https://www.facebook.com/marketplace/profile/",
+                "https://web.facebook.com/marketplace/profile/"
+            ]
+            if not any(facebook_profile_url.startswith(prefix) for prefix in expected_prefixes):
+                raise serializers.ValidationError({
+                    'facebook_dealership_url': 'Invalid Facebook profile URL. It must start with a valid Facebook Marketplace profile path.'
+                })
+        
+        # Gumtree URL validation
+        gumtree_profile_url = attrs.get('gumtree_dealarship_url')
+        if gumtree_profile_url:
+            expected_gumtree_prefix = "https://www.gumtree.com.au/web/s-user"
+            if not gumtree_profile_url.startswith(expected_gumtree_prefix):
+                raise serializers.ValidationError({
+                    'gumtree_dealarship_url': 'Invalid Gumtree profile URL. It must start with "https://www.gumtree.com.au/web/s-user".'
+                })
+
+        
         
         return attrs
 

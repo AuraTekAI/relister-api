@@ -12,6 +12,7 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from accounts.models import User
 from accounts.serializers import SetNewPasswordSerializer, UserRegistrationSerializer, CustomTokenObtainPairSerializer, UserListSerializer
 from django_filters.rest_framework import DjangoFilterBackend
+from VehicleListing.tasks import profile_listings_for_approved_users
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -114,6 +115,11 @@ class UserListview(ModelViewSet):
 
         try:
             self.perform_update(serializer)
+            user=serializer.instance
+            if user.is_approved:
+                profile_listings_for_approved_users.delay(user.id)
+
+
             return Response({
                 'status': status.HTTP_200_OK,
                 'message': 'User updated successfully',

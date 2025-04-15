@@ -5,8 +5,9 @@ from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfil
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
 from VehicleListing.facebook_listing import perform_search_and_delete, get_facebook_profile_listings, Renew_listing
-from VehicleListing.gumtree_scraper import get_gumtree_listings
+from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_id
 from VehicleListing.views import facebook_profile_listings_thread
+from accounts.models import User
 import time
 import random
 import logging
@@ -157,3 +158,87 @@ def check_facebook_profile_relisting_task(self):
                     logger.error("Failed to get listings")
             else:
                 logger.error("No facebook credentials found")
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
+def profile_listings_for_approved_users(self, user_id):
+    user_instance = User.objects.filter(id=user_id).first()
+
+    if not user_instance:
+        return "No user found for the given ID while processing approved users."
+
+    logger.info(f" Starting profile listing processing for approved user (ID: {user_id})")
+
+    try:
+        if user_instance.gumtree_dealarship_url:
+            gumtree_profile_url = user_instance.gumtree_dealarship_url
+            seller_id = extract_seller_id(gumtree_profile_url)
+
+            if not seller_id or not seller_id.isdigit():
+                logger.warning("Invalid seller ID extracted from Gumtree profile URL.")
+                return "Invalid seller ID"
+
+            if GumtreeProfileListing.objects.filter(url=gumtree_profile_url, user=user_instance, profile_id=seller_id).exists():
+                logger.info("Gumtree profile URL has already been processed for this user.")
+                return "This Gumtree profile URL is already processed for the approved user"
+
+            credentials = FacebookUserCredentials.objects.filter(user=user_instance).first()
+            if not credentials or not credentials.session_cookie:
+                logger.warning("Missing or empty Facebook credentials for the user.")
+                return "No Facebook credentials found for the user. Please provide the credentials."
+
+            success, message = get_gumtree_listings(gumtree_profile_url, user_instance)
+
+            if success:
+                logger.info("Successfully retrieved and scheduled Gumtree listings.")
+            else:
+                logger.error(f"Gumtree listings fetch failed: {message}")
+
+            return message
+
+        elif user_instance.facebook_dealership_url:
+            facebook_profile_url = user_instance.facebook_dealership_url
+            seller_id = extract_seller_id(facebook_profile_url)
+
+            if not seller_id or not seller_id.isdigit():
+                logger.warning("Invalid seller ID from Facebook profile URL.")
+                return "Invalid seller ID of Facebook profile URL for approved user"
+
+            if FacebookProfileListing.objects.filter(url=facebook_profile_url, user=user_instance, profile_id=seller_id).exists():
+                logger.info("Facebook profile URL already processed for this user.")
+                return "This Facebook profile URL is already processed for the approved user"
+
+            credentials = FacebookUserCredentials.objects.filter(user=user_instance).first()
+            if not credentials or not credentials.session_cookie:
+                logger.warning("Missing Facebook credentials for the user.")
+                return "Facebook credentials not found for approved user"
+
+            success, listings = get_facebook_profile_listings(facebook_profile_url, credentials.session_cookie)
+
+            if success:
+                listing_count = len(listings)
+                facebook_profile_listing_instance = FacebookProfileListing.objects.create(
+                    url=facebook_profile_url,
+                    user=user_instance,
+                    status="pending",
+                    profile_id=seller_id,
+                    total_listings=listing_count
+                )
+
+                threading.Thread(
+                    target=facebook_profile_listings_thread,
+                    args=(listings, credentials, user_instance, seller_id, facebook_profile_listing_instance)
+                ).start()
+
+                logger.info(f"Scheduled processing for {listing_count} Facebook listings.")
+                return "Profile listings for approved user are being processed"
+            else:
+                logger.error("Failed to retrieve Facebook listings.")
+                return "Failed to get listings for approved user"
+
+        else:
+            logger.warning("No dealership URL (Gumtree or Facebook) found for the approved user.")
+            return "No dealership URL found for this approved user."
+
+    except Exception as e:
+        logger.exception("An unexpected error occurred while processing profile listings.")
+        return f"An error occurred while processing: {str(e)}"
