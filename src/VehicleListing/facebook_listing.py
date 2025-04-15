@@ -848,8 +848,8 @@ def get_facebook_profile_listings(profile_url,session_cookie):
     """Get all listings from any Facebook Marketplace profile URL."""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=session_cookie)
+            browser = p.chromium.launch(headless=True,args=["--start-maximized"])
+            context = browser.new_context(storage_state=session_cookie, viewport={"width": 1920, "height": 1080})
             page = context.new_page()
             # Set shorter timeout for navigation
             page.set_default_timeout(20000)
@@ -988,7 +988,7 @@ def extract_facebook_listing_details(current_listing, session):
                 "model": None,
                 "price": None,
                 "mileage": current_listing["mileage"],
-                "description": None,
+                "description": "No Description Provided",
                 "images": [],
                 "location": None,
                 "transmission": "Automatic transmission",
