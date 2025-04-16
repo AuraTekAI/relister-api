@@ -120,9 +120,12 @@ def import_url_from_gumtree(request):
                     'message': "Extracted data successfully and listing created in facebook is in progress"
                 }
                 return JsonResponse(user_data, status=200)
+            elif not response.get("year") or not response.get("make") or not response.get("model") or not response["images"]:
+                import_url_instance.delete()
+                return JsonResponse({'error': 'Failed to extract required Facebook listing details. Please verify and save your Facebook login session, check the URL, and try again.'}, status=200)
             else:
                 import_url_instance.delete()
-                return JsonResponse({'error': 'Failed to extract facebook listing details, Please check the URL and try again'}, status=200)
+                return JsonResponse({'error': 'Failed to extract Facebook listing details. Please verify and save your Facebook login session, check the URL, and try again.'}, status=200)
         # Extract Gumtree data from URL
         else:
             import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
