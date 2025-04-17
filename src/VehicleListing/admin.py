@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice
 
 class FacebookListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'listing', 'status', 'error_message', 'created_at', 'updated_at')
@@ -20,7 +20,7 @@ class ListingUrlAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'year', 'make', 'model', 'status', 'seller_profile_id','renew_date','created_at', 'updated_at')
+    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','renew_date','created_at', 'updated_at')
     search_fields = ('user__email', 'year', 'make', 'model')
     list_filter = ('user',)
 
@@ -34,9 +34,23 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'url')
     list_filter = ('user',)
 
+class RelistingFacebooklistingAdmin(admin.ModelAdmin):
+    list_display = ("user","listing","relisting_date")
+    search_fields = ('user__email',)
+    list_filter = ('user',)
+
+class InvoiceAdmin(admin.ModelAdmin):
+    list_display = ("invoice_id", "user", "total_amount", "created_at", "updated_at")
+    search_fields = ("invoice_id", "user__email")
+    list_filter = ("created_at", "updated_at")
+    readonly_fields = ("invoice_id", "created_at", "updated_at")
+    ordering = ("-created_at",)
+
+admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(VehicleListing, VehicleListingAdmin)
 admin.site.register(ListingUrl, ListingUrlAdmin)
 admin.site.register(FacebookListing, FacebookListingAdmin)
 admin.site.register(FacebookUserCredentials, FacebookUserCredentialsAdmin)
 admin.site.register(GumtreeProfileListing, GumtreeProfileListingAdmin)
 admin.site.register(FacebookProfileListing, FacebookProfileListingAdmin)
+admin.site.register(RelistingFacebooklisting,RelistingFacebooklistingAdmin)

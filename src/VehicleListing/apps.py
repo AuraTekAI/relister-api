@@ -68,3 +68,13 @@ def create_periodic_task(sender, **kwargs):
             "task": "VehicleListing.tasks.check_gumtree_profile_relisting_task",
         },
     )
+
+    crontab_schedule, _ = CrontabSchedule.objects.get_or_create(minute=0, hour=0, day_of_month="last")
+    PeriodicTask.objects.update_or_create(
+        name="Send_invoices_to_user",
+        defaults={
+            "crontab": crontab_schedule,
+            "task": "VehicleListing.tasks.generate_and_send_monthly_invoices",
+            "interval": None,
+        },
+    )

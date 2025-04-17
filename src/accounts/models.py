@@ -1,4 +1,5 @@
 from django.db import models
+from decimal import Decimal
 from django.contrib.auth.models import (
     BaseUserManager,
     AbstractBaseUser,
@@ -59,6 +60,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_approved = models.BooleanField(default=False)
     
     # Extra information
+    rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))
     last_login = models.DateTimeField(verbose_name="last login", auto_now=True)
     is_superuser = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
