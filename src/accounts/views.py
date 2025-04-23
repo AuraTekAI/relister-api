@@ -109,15 +109,19 @@ class UserListview(ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
+        #instance before update
         instance = self.get_object()
+        user_approved=instance.is_approved
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
 
         try:
             self.perform_update(serializer)
             user=serializer.instance
-            if user.is_approved:
+            #proccess the approved user profile urls
+            if user.is_approved and not user_approved:
                 profile_listings_for_approved_users.delay(user.id)
+
 
 
             return Response({

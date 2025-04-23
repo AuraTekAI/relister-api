@@ -1,0 +1,31 @@
+<h2>Invoice #: {{ invoice_id }}</h2>
+<p>Date: {{ invoice_date }}</p>
+<p>Bill To: {{ user_name }}</p>
+<h3>Total Amount Due: {{ total_due }}</h3>
+
+<table border="1" cellpadding="5" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Car ID</th>
+            <th>Car Name</th>
+            <th>Number of Times Relisted</th>
+            <th>Relist Dates & Times</th>
+            <th>Total</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in invoice_rows %}
+        <tr>
+            <td>{{ row.car_id }}</td>
+            <td>{{ row.car_name }}</td>
+            <td>{{ row.relist_count }}</td>
+            <td>{{ row.relist_dates }}</td>
+            <td>{{ row.total }}</td>
+        </tr>
+        {% endfor %}
+        <tr>
+            <td colspan="4"><strong>Total</strong></td>
+            <td><strong>{{ total_due }}</strong></td>
+        </tr>
+    </tbody>
+</table>

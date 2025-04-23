@@ -26,7 +26,7 @@ class UserAdmin(UserAdmin):
     list_filter = ("is_superuser", "groups")
 
     add_fieldsets = (
-        (None, {"classes": ("wide",), "fields": ("email", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved")}),
+        (None, {"classes": ("wide",), "fields": ("email", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved",)}),
         ("Security", {"fields": ("password1", "password2")}),
         (
             "Permissions",

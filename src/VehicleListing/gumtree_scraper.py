@@ -50,6 +50,9 @@ def get_listings(url,user,import_url_instance):
         try:
             dict_data = {}
             response = client.get(base_url)
+            if response.status_code == 402:
+                logging.error(f"402 response code received: Check your Zenrows API key{response.status_code}")
+                return None
             if response.status_code != 200:
                 logging.info(f"Response status code is not 200: {response}")
                 return None
@@ -142,6 +145,9 @@ def get_gumtree_listing_details(listing_id):
 
     try:
         response = client.get(base_url)
+        if response.status_code == 402:
+            logging.error(f"402 response code received: Check your Zenrows API key{response.status_code}")
+            return None
         if response.status_code != 200:
             logging.error(f"Non-200 response code received: {response.status_code}")
             return None
