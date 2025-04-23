@@ -71,8 +71,45 @@ services:
     command: >
       sh -c "
          python /app/src/manage.py migrate &&
-         celery -A relister beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler &
-         celery -A relister worker --loglevel=info --hostname=relister_worker@%h -Q scheduling_queue,error_handler_queue,generic_email_queue, -E --concurrency=10"
+         celery -A relister beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    networks:
+      - internal_network
+
+  celery-worker-scheduling:
+    container_name: celery-worker-scheduling
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - redis
+      - web
+    command: >
+      sh -c "celery -A relister worker --loglevel=info --hostname=scheduling@%h -Q scheduling_queue -E --concurrency=5"
+    networks:
+      - internal_network
+
+  celery-worker-relister:
+    container_name: celery-worker-relister
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - redis
+      - web
+    command: >
+      sh -c "celery -A relister worker --loglevel=info --hostname=email@%h -Q relister_queue -E --concurrency=5"
     networks:
       - internal_network
 
