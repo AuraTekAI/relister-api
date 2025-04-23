@@ -11,7 +11,7 @@ from VehicleListing.views import facebook_profile_listings_thread
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from relister.settings import EMAIL_HOST_USER
+from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS
 from openpyxl import Workbook
 import uuid
 import time
@@ -30,7 +30,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"Creating pending facebook marketplace listing for the user {listing.user.email}")
                 time.sleep(random.randint(2,5))
                 credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
-                if credentials and credentials.session_cookie != {}:
+                if credentials and credentials.session_cookie != {} and credentials.status:
                     already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing,status="success").first()
                     if already_listed:
                         listing.status="completed"
@@ -40,16 +40,31 @@ def create_pending_facebook_marketplace_listing_task(self):
                     else:
                         listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
                         if listing_created:
+                            credentials.status = True
+                            credentials.retry_count = 0
+                            credentials.save()
                             logger.info(f"Listing created successfully for the user {listing.user.email}")
                             FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
                             listing.status="completed"
                             listing.save()
                         else:
-                            logger.info(f"Listing failed for the user {listing.user.email}")
-                            FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
-                            listing.status="failed"
-                            listing.save()
+                            if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                                credentials.retry_count += 1
+                                credentials.save()
+                                logger.info(f"Listing failed for the user {listing.user.email}")
+                                FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                                listing.status="failed"
+                                listing.save()
+                            else:
+                                credentials.status = False
+                                credentials.save()
+                                logger.info(f"Listing failed for the user {listing.user.email}")
+                                FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                                listing.status="failed"
+                                listing.save()
                 else:
+                    credentials.status = False
+                    credentials.save()
                     logger.info(f"No credentials found for the user {listing.user.email}")
             except Exception as e:
                 logger.info(f"Error creating pending facebook marketplace listing for the user {listing.user.email}")
@@ -63,35 +78,74 @@ def relist_facebook_marketplace_listing_task(self):
     """Relist 7 days old facebook marketplace listings"""
     logger.info("Relisting 7 days old facebook marketplace listings")
     current_date = datetime.now().date()
-    current_datetime=datetime.now()
     seven_days_ago = current_date - timedelta(days=7)
-    pending_listings = VehicleListing.objects.filter(status="completed", updated_at__date__lte=seven_days_ago).all()
-    if pending_listings:
-        for listing in pending_listings:
-            logger.info(f"Relisting 7 days old facebook marketplace listing for the user {listing.user.email}")
-            time.sleep(random.randint(2,5))
-            search_query = listing.year + " " + listing.make + " " + listing.model
-            credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
-            if credentials and credentials.session_cookie != {}:
-                logger.info(f"Credentials found for the user {listing.user.email}")
-                response = Renew_listing(search_query,credentials.session_cookie)
-                if response[0]:
-                    logger.info(f"Relisting found and Relist/Renew for the user {listing.user.email}")
-                    listing.updated_at = datetime.now()
-                    if not isinstance(listing.renew_date, list):
-                        listing.renew_date = []
-                    listing.renew_date.append(current_datetime.isoformat())
-                    listing.save()
-                    RelistingFacebooklisting.objects.create(user=listing.user, listing=listing, relisting_date=datetime.now())
-                else:
-                    logger.info(f"{response[1]}")
-                    logger.info(f"Failed to renew the listing, Retry attempt after 24 hours")
-            else:
-                logger.info(f"No facebook credentials found for the user {listing.user.email}")
-                continue
-    else:
-        logger.info("No 7 days old listings found for facebook marketplace")
 
+    # Combine pending listings and old relistings processing
+    listings_to_process = list(VehicleListing.objects.filter(
+        status="completed", updated_at__date__lte=seven_days_ago, is_relist=False
+    )) + list(RelistingFacebooklisting.objects.filter(
+        relisting_date__date__lte=seven_days_ago, listing__status="completed", last_relisting_status=False
+    ))
+
+    if not listings_to_process:
+        logger.info("No 7 days old listings found for facebook marketplace")
+        return
+
+    for item in listings_to_process:
+        if isinstance(item, VehicleListing):
+            listing = item
+            user = listing.user
+            search_query = f"{listing.year} {listing.make} {listing.model}"
+        else:
+            relisting = item
+            listing = relisting.listing
+            user = relisting.user
+            search_query = f"{listing.year} {listing.make} {listing.model}"
+
+        logger.info(f"Processing relisting for user {user.email}")
+        time.sleep(random.randint(2, 5))
+
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        if not credentials or credentials.session_cookie == {} or not credentials.status:
+            if credentials:
+                credentials.status = False
+                credentials.save()
+            logger.info(f"No valid facebook credentials found for user {user.email}")
+            continue
+
+        logger.info(f"Credentials found for user {user.email}")
+        response = Renew_listing(search_query, credentials.session_cookie)
+
+        if response[0] == 1:
+            credentials.status = True
+            credentials.retry_count = 0
+            credentials.save()
+            logger.info(f"Relisting successful for user {user.email}")
+
+            if isinstance(item, VehicleListing):
+                listing.is_relist = True
+                listing.save()
+                RelistingFacebooklisting.objects.create(user=user, listing=listing, relisting_date=datetime.now(), last_relisting_status=False)
+            else:
+                relisting.updated_at = datetime.now()
+                relisting.last_relisting_status = True
+                relisting.save()
+                RelistingFacebooklisting.objects.create(user=user, listing=listing, relisting_date=datetime.now(), last_relisting_status=False)
+
+        elif response[0] == 2:
+            logger.info(f"No relisting found for user {user.email}")
+            listing.status = "sold"
+            listing.save()
+
+        else:
+            if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                credentials.retry_count += 1
+                credentials.save()
+                logger.info(f"Failed to renew the listing for user {user.email}, retrying...")
+            else:
+                credentials.status = False
+                credentials.save()
+                logger.info(f"Failed to renew the listing for user {user.email}, max retries reached")
 
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='scheduling_queue')
@@ -104,7 +158,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"Creating failed facebook marketplace listing for the user {listing.user.email}")
                 time.sleep(random.randint(2,5))
                 credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
-                if credentials and credentials.session_cookie != {}:
+                if credentials and credentials.session_cookie != {} and credentials.status:
                     already_listed = FacebookListing.objects.filter(user=listing.user, listing=listing, status="success").first()
                     if already_listed:
                         listing.status="completed"
@@ -114,16 +168,31 @@ def create_failed_facebook_marketplace_listing_task(self):
                     else:
                         listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
                         if listing_created:
+                            credentials.status = True
+                            credentials.retry_count = 0
+                            credentials.save()
                             logger.info(f"Created listing successfully for the user {listing.user.email}")
                             FacebookListing.objects.create(user=listing.user, listing=listing, status="success",error_message=message)
                             listing.status="completed"
                             listing.save()
                         else:
-                            logger.info(f"Failed to create listing for the user {listing.user.email}")
-                            FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
-                            listing.status="failed"
-                            listing.save()
+                            if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                                credentials.retry_count += 1
+                                credentials.save()
+                                logger.info(f"Failed to create listing for the user {listing.user.email}")
+                                FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                                listing.status="failed"
+                                listing.save()
+                            else:
+                                credentials.status = False
+                                credentials.save()
+                                logger.info(f"Failed to create listing for the user {listing.user.email}")
+                                FacebookListing.objects.create(user=listing.user, listing=listing, status="failed", error_message=message)
+                                listing.status="failed"
+                                listing.save()
                 else:
+                    credentials.status = False
+                    credentials.save()
                     logger.info(f"No facebook credentials found for the user {listing.user.email}")
             except Exception as e:
                 logger.info(f"Error creating failed facebook marketplace listing for the user {listing.user.email}")
@@ -156,14 +225,26 @@ def check_facebook_profile_relisting_task(self):
         for facebook_profile_listing_instance in facebook_profile_listings:
             time.sleep(random.randint(1,3))
             credentials = FacebookUserCredentials.objects.filter(user=facebook_profile_listing_instance.user).first()
-            if credentials:
+            if credentials and credentials.session_cookie != {} and credentials.status:
                 success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url,credentials.session_cookie)
                 if success:
+                    credentials.status = True
+                    credentials.retry_count = 0
+                    credentials.save()
                     thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,facebook_profile_listing_instance.user,facebook_profile_listing_instance.profile_id,facebook_profile_listing_instance))
                     thread.start()
                 else:
-                    logger.error("Failed to get listings")
+                    if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                        credentials.retry_count += 1
+                        credentials.save()
+                        logger.error("Failed to get listings")
+                    else:
+                        credentials.status = False
+                        credentials.save()
+                        logger.error("Failed to get listings")
             else:
+                credentials.status = False
+                credentials.save()
                 logger.error("No facebook credentials found")
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
@@ -188,10 +269,12 @@ def profile_listings_for_approved_users(self, user_id):
                 logger.info("Gumtree profile URL has already been processed for this user.")
                 return "This Gumtree profile URL is already processed for the approved user"
 
-            credentials = FacebookUserCredentials.objects.filter(user=user_instance).first()
-            if not credentials or not credentials.session_cookie:
-                logger.warning("Missing or empty Facebook credentials for the user.")
-                return "No Facebook credentials found for the user. Please provide the credentials."
+            # credentials = FacebookUserCredentials.objects.filter(user=user_instance).first()
+            # if not credentials or not credentials.session_cookie:
+            #     credentials.status = False
+            #     credentials.save()
+            #     logger.warning("Missing or empty Facebook credentials for the user.")
+            #     return "No Facebook credentials found for the user. Please provide the credentials."
 
             success, message = get_gumtree_listings(gumtree_profile_url, user_instance)
 
@@ -215,7 +298,9 @@ def profile_listings_for_approved_users(self, user_id):
                 return "This Facebook profile URL is already processed for the approved user"
 
             credentials = FacebookUserCredentials.objects.filter(user=user_instance).first()
-            if not credentials or not credentials.session_cookie:
+            if not credentials or not credentials.session_cookie or credentials.status == False or credentials.session_cookie == {}:
+                credentials.status = False
+                credentials.save()
                 logger.warning("Missing Facebook credentials for the user.")
                 return "Facebook credentials not found for approved user"
 
@@ -267,15 +352,13 @@ def generate_and_send_monthly_invoices(self):
                 continue
             facebook_listing_dict = {}
             total_due = 0
-            rate = current_user.rate
             username = current_user.contact_person_name
             invoice_rows = []
 
             # Listings and Relistings
             facebook_listings = VehicleListing.objects.filter(
-                user=current_user, status="completed",
-                created_at__gte=cutoff_date,
-                renew_date__isnull=True
+                user=current_user, status__in=["completed","sold"],
+                updated_at__gte=cutoff_date
             )
             relist_facebook_listing = RelistingFacebooklisting.objects.filter(
                 user=current_user,
@@ -291,6 +374,7 @@ def generate_and_send_monthly_invoices(self):
                     "year": listing.year,
                     "make": listing.make,
                     "model": listing.model,
+                    "rate": listing.rate,
                     "user": listing.user,
                     "listing_date": [listing.created_at],
                     "Relisting_time": 1
@@ -309,6 +393,7 @@ def generate_and_send_monthly_invoices(self):
                         "year": listing.year,
                         "make": listing.make,
                         "model": listing.model,
+                        "rate": listing.rate,
                         "user": listing.user,
                         "listing_date": [relisting.relisting_date],
                         "Relisting_time": 1
@@ -320,7 +405,7 @@ def generate_and_send_monthly_invoices(self):
                 car_name = f"{data['year']} {data['make']} {data['model']}"
                 times_relisted = data["Relisting_time"]
                 relist_dates = ", ".join([d.strftime("%d/%m/%Y %I:%M %p") for d in data["listing_date"]])
-                total = rate * times_relisted
+                total = data["rate"] * times_relisted
                 total_due += total
 
                 invoice_rows.append({

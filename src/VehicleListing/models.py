@@ -1,5 +1,6 @@
 from django.db import models
 from accounts.models import User
+from decimal import Decimal
 
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -14,6 +15,8 @@ class ListingUrl(models.Model):
 class FacebookUserCredentials(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     session_cookie = models.JSONField(null=True,blank=True,default=dict)
+    status = models.BooleanField(default=False)
+    retry_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -66,7 +69,8 @@ class VehicleListing(models.Model):
     url = models.URLField(null=True,blank=True)
     seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
     status = models.CharField(max_length=255, null=True)
-    renew_date=models.JSONField(null=True,blank=True)
+    is_relist = models.BooleanField(default=False)
+    rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -84,8 +88,11 @@ class FacebookListing(models.Model):
     
 class RelistingFacebooklisting(models.Model):
     listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
-    user=user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     relisting_date=models.DateTimeField(null=True,blank=True)
+    last_relisting_status = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.listing.make} {self.listing.model}"

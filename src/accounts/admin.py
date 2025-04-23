@@ -9,7 +9,6 @@ class UserAdmin(UserAdmin):
         "email",
         "dealership_name",
         "contact_person_name",
-        "rate",
         "last_login",
         "is_superuser",
         "is_approved",
@@ -19,7 +18,7 @@ class UserAdmin(UserAdmin):
     # Define the fields that will be editable on the user change form in the admin
     fieldsets = (
         (None, {'fields': ('email', 'password', 'is_approved')}),
-        ('Personal Info', {'fields': ['dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url',"rate"]}),
+        ('Personal Info', {'fields': ['dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url']}),
         ('Permissions', {'fields': ('is_superuser', 'is_staff', 'is_active', 'groups', 'user_permissions')}),
         ('Important Dates', {'fields': ('last_login',)}),
     )
@@ -27,7 +26,7 @@ class UserAdmin(UserAdmin):
     list_filter = ("is_superuser", "groups")
 
     add_fieldsets = (
-        (None, {"classes": ("wide",), "fields": ("email", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved","rate",)}),
+        (None, {"classes": ("wide",), "fields": ("email", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved",)}),
         ("Security", {"fields": ("password1", "password2")}),
         (
             "Permissions",
