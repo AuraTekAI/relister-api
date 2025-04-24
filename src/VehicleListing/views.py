@@ -689,3 +689,15 @@ def get_montly_listings_report(request):
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_facebook_session_status(request):
+    """Get Facebook session status"""
+    if request.method == 'GET':
+        user = request.user
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        if credentials: 
+            return JsonResponse({'facebook_session_status': credentials.status}, status=200)
+        else:
+            return JsonResponse({'facebook_session_status': False}, status=200)
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
