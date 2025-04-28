@@ -90,6 +90,7 @@ class RelistingFacebooklisting(models.Model):
     listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     relisting_date=models.DateTimeField(null=True,blank=True)
+    status=models.CharField(max_length=255, null=True)
     last_relisting_status = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
