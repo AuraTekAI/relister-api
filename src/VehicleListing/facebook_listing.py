@@ -53,129 +53,117 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
 
 
 def select_dropdown_option(page, field_name, option_text):
-    """Helper function to select dropdown options with random delays."""
-    logging.info(f"Selecting {field_name}...")
-    try:
-        # Multiple selectors for finding the dropdown
-        dropdown_selectors = [
-            f"//span[contains(text(), '{field_name}')]/ancestor::label",
-            f"//label[@aria-label='{field_name}' and @role='combobox']",
-            f"//span[text()='{field_name}']/ancestor::label[@role='combobox']",
-            f"//div[contains(@class, 'x1n2onr6')]//label[contains(.,'{field_name}')]",
-            f"//label[contains(., '{field_name}')][@role='combobox']",
-            f"//span[contains(text(), '{field_name}')]/ancestor::label"
-        ]
+    """Selects a dropdown option with retries, visibility checks, and logging."""
+    max_retries = 3
+    logging.info(f"Selecting '{field_name}' with option '{option_text}'...")
 
-        dropdown = None
-        for selector in dropdown_selectors:
-            try:
-                dropdown = page.locator(selector).first
-                if dropdown.is_visible():
+    dropdown_selectors = [
+        f"//span[contains(text(), '{field_name}')]/ancestor::label",
+        f"//label[@aria-label='{field_name}' and @role='combobox']",
+        f"//span[text()='{field_name}']/ancestor::label[@role='combobox']",
+        f"//div[contains(@class, 'x1n2onr6')]//label[contains(.,'{field_name}')]",
+        f"//label[contains(., '{field_name}')][@role='combobox']",
+        f"//span[contains(text(), '{field_name}')]/ancestor::label"
+    ]
+
+    option_selectors = [
+        f"//div[@role='option' or @role='listbox']//span[contains(text(), '{option_text}')]",
+        f"//div[@role='option'][contains(.,'{option_text}')]",
+        f"//div[@role='option' or @role='listbox'][contains(.,'{option_text}')]"
+    ]
+
+    for attempt in range(1, max_retries + 1):
+        logging.info(f"Attempt {attempt} of {max_retries} to select '{field_name}'.")
+
+        try:
+            dropdown = None
+            for selector in dropdown_selectors:
+                try:
+                    dropdown = page.locator(selector).first
+                    dropdown.wait_for(state="visible", timeout=5000)
                     dropdown.scroll_into_view_if_needed()
                     dropdown.click()
+                    logging.debug(f"Clicked dropdown using selector: {selector}")
                     random_sleep(1, 2)
-                    
-                    # Try to select the option
-                    option_selectors = [
-                        f"//div[@role='option' or @role='listbox']//span[contains(text(), '{option_text}')]",
-                        f"//div[@role='option'][contains(.,'{option_text}')]",
-                        f"//div[@role='option' or @role='listbox'][contains(.,'{option_text}')]"
-                    ]
-                    for option_selector in option_selectors:
-                        try:
-                            option = page.locator(option_selector).first
-                            if option.is_visible():
-                                option.scroll_into_view_if_needed()
-                                option.click()
-                                logging.info(f"{field_name} selected successfully.")
-                                random_sleep(1, 2)
-                                return True
-                        except Exception as e:
-                            logging.warning(f"Failed with option selector {option_selector}: {e}")
-                            continue
-                    
-                    # If no option found, try filling and pressing Enter
-                    dropdown.fill(option_text)
-                    dropdown.press("Enter")
-                    logging.info(f"{field_name} filled and entered.")
+                    break
+                except Exception as e:
+                    logging.debug(f"Dropdown selector failed: {selector} => {e}")
+
+            if not dropdown:
+                raise Exception(f"Unable to locate visible dropdown for field '{field_name}'")
+
+            # Try selecting the option
+            for option_selector in option_selectors:
+                try:
+                    option = page.locator(option_selector).first
+                    option.wait_for(state="visible", timeout=5000)
+                    option.scroll_into_view_if_needed()
+                    option.click()
+                    logging.info(f"Option '{option_text}' selected for field '{field_name}'.")
                     random_sleep(1, 2)
-                    return True
-                    
-            except Exception as e:
-                logging.warning(f"Failed with dropdown selector {selector}: {e}")
-                continue
-        
-        if not dropdown:
-            raise Exception(f"Could not find {field_name} dropdown with any selector")
-            
-    except Exception as e:
-        logging.error(f"Error selecting {field_name}: {e}")
-        raise
+                    return True, f"{field_name} = {option_text} selected successfully"
+                except Exception as e:
+                    logging.debug(f"Option selector failed: {option_selector} => {e}")
+                    continue
 
-def select_vehicle_type(page,vehicle_details):
-    """Select the vehicle type (Car/Truck) with random delays."""
-    logging.info("Selecting vehicle type...")
-    try:
-        if vehicle_details["Mileage"]:
-            vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
-            vehicle_dropdown.scroll_into_view_if_needed()
-            vehicle_dropdown.click()
-            random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+            # Fallback: Fill and Enter
+            dropdown.fill(option_text)
+            dropdown.press("Enter")
+            logging.info(f"Filled and submitted '{option_text}' for field '{field_name}'.")
+            random_sleep(1, 2)
+            return True, f"{field_name} = {option_text} entered manually"
 
-            car_option = page.locator("//div[@role='option'][contains(.,'Car/Truck')]").first
-            if car_option.is_visible():
-                car_option.scroll_into_view_if_needed()
-                car_option.click()
-                logging.info("Vehicle type (Car/Truck) selected successfully.")
-                random_sleep(1, 2)
-                return True,"Car/Truck"
-            else:
-                car_option = page.locator("//div[@role='option'][contains(.,'Car/van')]").first
-                if car_option.is_visible():
-                    if vehicle_details["Make"].lower() in ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]:
-                        car_option.scroll_into_view_if_needed()
-                        car_option.click()
-                        logging.info("Vehicle type (Car/van) selected successfully.")
-                        random_sleep(1, 2)
-                        return True,"Car/van"
-                    else:
-                        car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
-                        if car_option_other.is_visible():
-                            car_option_other.scroll_into_view_if_needed()
-                            car_option_other.click()
-                            logging.info("Vehicle type (Other) selected successfully.")
-                            random_sleep(1, 2)
-                            return True,"Other"
-                        else:
-                            logging.info("No suitable vehicle type option found.")
-                            return False,"No suitable vehicle type option found."
-                else:
-                    car_option_other = page.locator("//div[@role='option'][contains(.,'Other')]").first
-                    if car_option_other.is_visible():
-                        car_option_other.scroll_into_view_if_needed()
-                        car_option_other.click()
-                        logging.info("Vehicle type (Other) selected successfully.")
-                        random_sleep(1, 2)
-                        return True,"Other"
-                    else:
-                        logging.info("No suitable vehicle type option found.")
-                        return False,"No suitable vehicle type option found."
+        except PlaywrightTimeoutError as te:
+            logging.warning(f"Timeout on attempt {attempt} for field '{field_name}': {te}")
+        except Exception as e:
+            logging.error(f"Error on attempt {attempt} for field '{field_name}': {e}")
+
+        if attempt < max_retries:
+            wait_time = random.uniform(1, 3)
+            logging.info(f"Retrying after {wait_time:.2f}s...")
+            time.sleep(wait_time)
         else:
+            error_msg = f"Failed to select '{field_name}' with option '{option_text}' after {max_retries} attempts."
+            logging.critical(error_msg)
+            return False, error_msg
+
+
+def select_vehicle_type(page):
+    """Select the vehicle type (Car/Truck) with retries, timeout handling, and enhanced logging."""
+    logging.info("Attempting to select vehicle type...")
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            logging.info(f"Attempt {attempt} of {max_retries}")
+
             vehicle_dropdown = page.locator("//span[contains(text(), 'Vehicle type')]/ancestor::label").first
+            vehicle_dropdown.wait_for(state="visible", timeout=7000)
             vehicle_dropdown.scroll_into_view_if_needed()
             vehicle_dropdown.click()
-            random_sleep(0.5, 1)  # Random delay after clicking the dropdown
+            logging.debug("Clicked on vehicle type dropdown.")
+            random_sleep(0.5, 1)
 
             car_option = page.locator("//div[@role='option'][contains(.,'Other')]").first
+            car_option.wait_for(state="visible", timeout=7000)
             car_option.scroll_into_view_if_needed()
             car_option.click()
-
             logging.info("Vehicle type (Other) selected successfully.")
-            random_sleep(1, 2)  # Random delay after selecting the option
-            return True,"Other"
-    except Exception as e:
-        logging.error(f"Error selecting vehicle type: {e}")
-        raise
+            random_sleep(1, 2)
+
+            return True, "Other"
+
+        except PlaywrightTimeoutError as te:
+            logging.warning(f"Timeout waiting for element on attempt {attempt}: {te}")
+        except Exception as e:
+            logging.error(f"Error on attempt {attempt}: {e}")
+
+        if attempt < max_retries:
+            wait_time = random.uniform(1, 3)
+            logging.info(f"Retrying after {wait_time:.2f} seconds...")
+            time.sleep(wait_time)
+        else:
+            logging.info("Failed to select vehicle type after all retries.")
+            return False, "Failed to select vehicle type after all retries."
 
 def handle_login_info_modal(page):
     """Handle the 'Save your login info' modal if it appears."""
@@ -351,7 +339,11 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             page = context.new_page()
 
             # Navigate to the vehicle listing page
-            page.goto("https://www.facebook.com/marketplace/create/vehicle", timeout=60000)
+            try:
+                page.goto("https://www.facebook.com/marketplace/create/vehicle", timeout=60000)
+            except Exception as e:
+                logging.error(f"Timeout error navigating to Facebook Marketplace vehicle listing page: {e}")
+                return False, "Timeout error navigating to Facebook Marketplace vehicle listing page"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(2, 3)  # Random delay after page load
             
@@ -372,29 +364,27 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 "Price": str(vehicle_listing.price) if vehicle_listing.price else None,
                 "Location": vehicle_listing.location,
                 "Mileage": str(vehicle_listing.mileage) if vehicle_listing.mileage else None,
-                "Description": vehicle_listing.description if vehicle_listing.description else "No description provided"
+                "Description": vehicle_listing.description if vehicle_listing.description else "No description provided."
             }
-            description_lines = vehicle_details["Description"].splitlines()
-            mileage_text = "Mileage: " + vehicle_details["Mileage"] + "km"
+            if vehicle_details["Mileage"]:
+                description_lines = vehicle_details["Description"].splitlines()
+                mileage_text = "Mileage: " + vehicle_details["Mileage"] + "km"
 
-            # Check if mileage is already in description (case-insensitive)
-            if mileage_text.lower() not in vehicle_details["Description"].lower():
-                # First line of description
-                first_line = description_lines[0].strip()
-
-                # Check if the first line starts with "*** FINANCE FROM" (case-insensitive)
-                if first_line.upper().startswith("*** FINANCE FROM"):
-                    # Insert mileage after the first line
-                    description_lines.insert(1, mileage_text)
-                else:
+                # Check if mileage is already in description (case-insensitive)
+                if mileage_text.lower() not in vehicle_details["Description"].lower():
                     # Insert mileage as the first line
-                    description_lines.insert(0, mileage_text)
-
-                # Update the description
-                vehicle_details["Description"] = "\n".join(description_lines)
+                    description_lines.insert(0, mileage_text)                        
+    
+                    # Update the description
+                    vehicle_details["Description"] = "\n".join(description_lines)
 
             # Select vehicle type
-            result = select_vehicle_type(page,vehicle_details)
+            result = select_vehicle_type(page)
+            if result[0]:
+                logging.info(f"Vehicle type selected successfully: {result[1]}")
+            else:
+                logging.info(f"Failed to select vehicle type: {result[1]}")
+                return False, result[1]
             random_sleep(2, 3)
 
             index = 0
@@ -433,33 +423,20 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             
 
             # Fill form fields
-            select_dropdown_option(page, "Year", vehicle_details["Year"])
-            # vehicle_make_list = ["Alfa Romeo","Alpina","Aston Martin","Bentley","Chrysler","Daewoo","Ferrari","FIAT","Dodge","Ford","Honda","Hyundai","Hummer","INFINITI","Isuzu","Jaguar","Jeep","Kia","Lamborghini","Land Rover","Lexus","Lotus","MINI","Mercedes-Benz","Maserati","McLaren","Mitsubishi","Nissan","Plymouth","Pontiac","Porsche","Rolls-Royce","Saab","Smart","Subaru","Suzuki","Toyota","Tesla","Volkswagen","Volvo"]
-            # lower_make_list= ["alfa romeo", "alpina", "aston martin", "bentley", "chrysler", "daewoo", "ferrari", "fiat", "dodge", "ford", "honda", "hyundai", "hummer", "infiniti", "isuzu", "jaguar", "jeep", "kia", "lamborghini", "land rover", "lexus", "lotus", "mini", "mercedes-benz", "maserati", "mclaren", "mitsubishi", "nissan", "plymouth", "pontiac", "porsche", "rolls-royce", "saab", "smart", "subaru", "suzuki", "toyota", "tesla", "volkswagen", "volvo"]
-            # if result[1] == "Car/van":
-            #     if vehicle_listing.make.lower() in lower_make_list:
-            #         select_dropdown_option(page, "Make", vehicle_make_list[lower_make_list.index(vehicle_listing.make.lower())])
-            #     else:
-            #         logging.info(f"Make {vehicle_listing.make} not found in the list")
-            #         return False, f"Make {vehicle_listing.make} not found in the list"
-            # else:
+            result = select_dropdown_option(page, "Year", vehicle_details["Year"])
+            if result[0]:
+                logging.info(f"Year selected successfully: {result[1]}")
+            else:
+                logging.info(f"Failed to select Year: {result[1]}")
+                return False, result[1]
+
             handle_make_field(page, vehicle_listing.make)
 
             # Input fields with their selectors
             input_fields = {
-                # "Make": [
-                #     # "//input[@id=':r31:']",
-                #     "//span[contains(text(), 'Make')]/following-sibling::input",
-                #     "//div[contains(@class, 'xjbqb8w')]//input[contains(@class, 'x1i10hfl')]"
-                # ],
                 "Model": [
                     # "//input[@id=':r34:']",
                     "//span[contains(text(), 'Model')]/following-sibling::input",
-                    "//div[contains(@class, 'xjbqb8w')]//input[contains(@class, 'x1i10hfl')]"
-                ],
-                "Mileage": [
-                    # "//input[@id=':r3f:']",
-                    "//span[contains(text(), 'Mileage')]/following-sibling::input",
                     "//div[contains(@class, 'xjbqb8w')]//input[contains(@class, 'x1i10hfl')]"
                 ],
                 "Price": [
@@ -481,77 +458,17 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             }
 
             for field, selectors in input_fields.items():
-                # if field == "Make" and result[1] == "Car/Truck":
-                #     continue
-                if field == "Mileage" and result[1] == "Other":
-                    continue
                 if field == "Location" and not vehicle_details["Location"]:
                     continue
-                if field != "Mileage":
-                    fill_input_field(
-                        page,
-                        field,
-                        vehicle_details[field],
-                        selectors,
-                        use_suggestion=(field in ["Make", "Model", "Location"]),
-                        use_tab=(field in ["Mileage", "Price", "Description"])
-                    )
-                else:
-                    if vehicle_details["Mileage"] and result[1] != "Other":
-                        fill_input_field(
-                            page,
-                            field,
-                            vehicle_details[field],
-                            selectors,
-                            use_suggestion=(field in ["Make", "Model", "Location"]),
-                            use_tab=(field in ["Mileage", "Price", "Description"])
-                        )
-                    else:
-                        continue
-                        
-            if vehicle_details['Mileage'] and result[1] != "Other":
-                # Select body style dropdown
-                if vehicle_listing.variant in ["Coupe", "Sedan", "SUV", "Truck","Hatchback","Convertible","Minivan","Small Car", "Wagon"]:
-                    select_dropdown_option(page, "Body style", vehicle_listing.variant)
-                else:
-                    select_dropdown_option(page, "Body style", "Other")
+                fill_input_field(
+                    page,
+                    field,
+                    vehicle_details[field],
+                    selectors,
+                    use_suggestion=(field in [ "Model", "Location"]),
+                    use_tab=(field in ["Price", "Description"])
+                )
                 
-                # Select fuel type dropdown
-                if vehicle_listing.fuel_type in ["Petrol", "Diesel","Gasoline","Flex","Plug-in Hybrid","Electric", "Hybrid"]:
-                    select_dropdown_option(page, "Fuel type", vehicle_listing.fuel_type)
-                elif vehicle_listing.fuel_type == "Petrol - Premium Unleaded":
-                    select_dropdown_option(page, "Fuel type", "Petrol")
-                elif vehicle_listing.fuel_type == "Petrol - Regular Unleaded":
-                    select_dropdown_option(page, "Fuel type", "Petrol")
-                else:
-                    select_dropdown_option(page, "Fuel type", "Other")
-            
-                # Select vehicle condition dropdown
-                if vehicle_listing.condition:
-                    select_dropdown_option(page, "Vehicle condition", vehicle_listing.condition)
-                else:
-                    select_dropdown_option(page, "Vehicle condition", "Excellent")
-            
-                # Select transmission dropdown
-                if vehicle_listing.transmission in ["Automatic Transmission", "Automatic"]:
-                    select_dropdown_option(page, "Transmission", "Automatic transmission")
-                elif vehicle_listing.transmission in ["Manual Transmission", "Manual"]:
-                    select_dropdown_option(page, "Transmission", "Manual transmission")
-
-                else:
-                    select_dropdown_option(page, "Transmission", "Automatic transmission")
-                
-                #Select interior and exterior color
-                if result[1] == "Car/van":
-                    if vehicle_listing.color and vehicle_listing.color in ["White", "Black", "Grey", "Red", "Blue", "Green", "Brown", "Orange","Gold","Pink","Purple","Tan","Turquoise","Yellow","Charcoal","Beige","Burgundy","Silver","Off white","Other"]:
-                        select_dropdown_option(page, "Interior colour", "Grey")
-                        select_dropdown_option(page, "Exterior colour", vehicle_listing.color)
-                    elif vehicle_listing.exterior_colour and vehicle_listing.interior_colour:
-                        select_dropdown_option(page, "Interior colour", vehicle_listing.interior_colour)
-                        select_dropdown_option(page, "Exterior colour", vehicle_listing.exterior_colour)
-                    else:
-                        select_dropdown_option(page, "Interior colour", "Other")
-                        select_dropdown_option(page, "Exterior colour", "Other")
 
             # Submit form
             for button_text in ["Next", "Publish"]:
@@ -586,7 +503,6 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
         return False, str(e)
 
 
-
 def is_logged_in(page):
     """Check if the user is logged in."""
     try:
@@ -607,205 +523,111 @@ def handle_cookie_consent(page):
             logging.info("Cookie consent handled.")
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
-        
-def perform_search_and_delete(search_for,session_cookie):
-    """Perform search and delete listing"""
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True,args=["--start-maximized"])
-            context = browser.new_context(storage_state=session_cookie,viewport={"width": 1920, "height": 1080})
-            page = context.new_page()
-            page.goto("https://www.facebook.com/marketplace/you/selling")
-            page.wait_for_timeout(5000)
-            logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(3, 5)
-            if not search_for.strip():
-                return False, "Search value is required"
-            
-            
-            input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
-            input_element = page.locator(input_locator).first
 
-            if not input_element.is_visible():
-                return False, "Search input not found"
-
-            logging.info(f"Your Listings: Search: {search_for}")
-            input_element.click()
-            input_element.fill(search_for)
-            page.wait_for_timeout(5000)
-            # Search for the listing
-
-            matches_found = get_count_of_elements_with_text(search_for,page)
-            if matches_found > 0:
-                logging.info(f"Success (Attempt 1): Found ({matches_found}) matches for ({search_for})")
-                # Open the "More options" menu
-                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
-                more_options.click()
-                page.wait_for_timeout(2000)
-
-                # Select "Delete listing" from the menu
-                delete_option = page.wait_for_selector(
-                    "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
-                    state="visible",
-                )
-                delete_option.click()
-                page.wait_for_timeout(2000)
-                success,message = find_and_click_delete_button(page)
-                if success:
-                    logging.info(f"{message}")
-                    # Handle post-deletion actions
-                    logging.info("Clicking 'I'd rather not answer'...")
-                    not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                    if not_answer_button and not_answer_button.is_visible():
-                        not_answer_button.click()
-                        page.wait_for_timeout(2000)
-                    else:   
-                        logging.warning("'I'd rather not answer' button not found.")
-                        return True, "I'd rather not answer' button not found. but successfully delte the product"
-
-                    logging.info("Clicking 'Next'...")
-                    next_button = page.locator("//*[text()='Next']").first
-                    if next_button and next_button.is_visible():
-                        next_button.click()
-                        page.wait_for_timeout(2000)
-                        logging.info("Process completed successfully.")
-                        return True, "Successfully deleted the  listing"
-                    else:
-                        logging.warning("'Next' button not found.")
-                        return True, "'Next' button not found.but successfully delte the product"
-                else:
-                    return False,message
-            #second attempt
-            page.wait_for_timeout(5000)  # Wait for another 5 seconds
-            matches_found = get_count_of_elements_with_text(search_for,page)
-            if matches_found > 0:
-                logging.info(f"Success (Attempt 2): Found ({matches_found}) matches for ({search_for})")
-                # Open the "More options" menu
-                more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
-                more_options.click()
-                page.wait_for_timeout(2000)
-
-                # Select "Delete listing" from the menu
-                delete_option = page.wait_for_selector(
-                    "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
-                    state="visible",
-                )
-                delete_option.click()
-                page.wait_for_timeout(2000)
-                success,message = find_and_click_delete_button(page)
-                if success:
-                    logging.info(f"{message}")
-                    # Handle post-deletion actions
-                    logging.info("Clicking 'I'd rather not answer'...")
-                    not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                    if not_answer_button and not_answer_button.is_visible():
-                        not_answer_button.click()
-                        page.wait_for_timeout(2000)
-                    else:
-                        logging.warning("'I'd rather not answer' button not found.")
-                        return True, "I'd rather not answer' button not found. but successfully delte the product"
-
-                    logging.info("Clicking 'Next'...")
-                    next_button = page.locator("//*[text()='Next']").first
-                    if next_button and next_button.is_visible():
-                        next_button.click()
-                        page.wait_for_timeout(2000)
-                        logging.info("Process completed successfully.")
-                        return True, "Successfully deleted the  listing"
-                    else:
-                        logging.warning("'Next' button not found.")
-                        return True, "'Next' button not found.but successfully delte the product"
-                else:
-                    return False,message            
-            #do not find anything
-            didnt_find_locator = "text='We didn't find anything'"
-            if page.locator(didnt_find_locator).is_visible():
-                logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
-                return  True, "didnt_find_anything_displayed"
-    except Exception as e:
-        logging.error(f"Error in perform_search_and_delete: {e}")
-        return False, str(e)
-    
-
-def Renew_listing(search_for, session_cookie):
-    """Perform search and renew listing"""
+def perform_search_and_delete(search_for, session_cookie):
+    """Perform search and delete listing with retry and timeout handling"""
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--start-maximized"])
             context = browser.new_context(storage_state=session_cookie, viewport={"width": 1920, "height": 1080})
             page = context.new_page()
-            page.goto("https://www.facebook.com/marketplace/you/selling")
-            page.wait_for_timeout(5000)
+            try:
+                page.goto("https://www.facebook.com/marketplace/you/selling", timeout=30000)
+            except Exception as e:
+                logging.error(f"Timeout error navigating to Facebook Marketplace: {e}")
+                browser.close()
+                return 0, "Timeout error navigating to Facebook Marketplace"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(3, 5)
+
             if not search_for.strip():
-                logging.info("Closing the browser")
+                browser.close()
                 return 0, "Search value is required"
 
             input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
             input_element = page.locator(input_locator).first
 
             if not input_element.is_visible():
-                logging.info("Closing the browser")
+                browser.close()
                 return 0, "Search input not found"
 
-            logging.info(f"Your Listings: Search: {search_for}")
             input_element.click()
             input_element.fill(search_for)
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(3000)
 
-            if attempt_renew(page, search_for):
-                logging.info("Closing the browser")
-                browser.close()
-                return 1, "Renew Listed Successfully"
+            for attempt in range(1, 2):
+                matches_found = get_count_of_elements_with_text(search_for, page)
+                if matches_found > 0:
+                    logging.info(f"Success (Attempt {attempt}): Found ({matches_found}) matches for ({search_for})")
+                    try:
+                        more_options = page.locator(
+                            f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]"
+                        ).first
+                        more_options.click()
+                        page.wait_for_timeout(2000)
 
-            # Second attempt
-            page.wait_for_timeout(5000)
-            if attempt_renew(page, search_for):
-                logging.info("Closing the browser")
-                browser.close()
-                return 1, "Renew Listed Successfully"
+                        delete_option = page.wait_for_selector(
+                            "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
+                            state="visible",
+                            timeout=5000,
+                        )
+                        delete_option.click()
+                        page.wait_for_timeout(2000)
 
-            # Check if nothing was found
-            didnt_find_locator = "text='We didn't find anything'"
-            if page.locator(didnt_find_locator).is_visible():
+                        success, message = find_and_click_delete_button(page)
+                        if success:
+                            logging.info(f"{message}")
+                            not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+                            if not_answer_button and not_answer_button.is_visible():
+                                not_answer_button.click()
+                                page.wait_for_timeout(2000)
+                            else:
+                                logging.warning("'I'd rather not answer' button not found.")
+                                browser.close()
+                                return 1, "'I'd rather not answer' button not found, but successfully deleted the product"
+
+                            next_button = page.locator("//*[text()='Next']").first
+                            if next_button and next_button.is_visible():
+                                next_button.click()
+                                page.wait_for_timeout(2000)
+                                logging.info("Process completed successfully.")
+                                browser.close()
+                                return 1, "Successfully deleted the listing"
+                            else:
+                                logging.warning("'Next' button not found.")
+                                browser.close()
+                                return 1, "'Next' button not found, but successfully deleted the product"
+                        else:
+                            logging.warning("Failed to click delete button.")
+                            browser.close()
+                            return 0, message
+
+                    except PlaywrightTimeoutError as toe:
+                        logging.error(f"Timeout during delete flow (Attempt {attempt}): {toe}")
+                        continue
+                    except Exception as e:
+                        logging.error(f"Error in delete flow (Attempt {attempt}): {e}")
+                        continue
+
+                page.wait_for_timeout(5000)  # Wait between retries
+
+            # Final check if nothing was found
+            if page.locator("text='We didn't find anything'").is_visible():
                 logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
+                browser.close()
                 return 2, "didnt_find_anything_displayed"
-            logging.info("Closing the browser")
+
+            logging.info("No match found after 2 attempts.")
             browser.close()
-            return False, "Failed to relist the listing"
+            return 0, "No matching listing found"
+
     except Exception as e:
-        logging.error(f"Error in perform_search and renew the listings: {e}")
+        logging.error(f"Unhandled error in perform_search_and_delete: {e}")
+        if 'browser' in locals():
+            browser.close()
         return 0, str(e)
 
-def attempt_renew(page, search_for):
-    """Attempt to renew a listing"""
-    matches_found = get_count_of_elements_with_text(search_for, page)
-    if matches_found > 0:
-        logging.info(f"Found ({matches_found}) matches for ({search_for})")
-        more_options = page.locator(f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]").first
 
-        try:
-            more_options.wait_for(state="visible", timeout=10000)
-            more_options.click()
-            logging.info("Clicked on 'More options' button successfully")
-        except TimeoutError:
-            logging.error("Timeout waiting for 'More options' to become visible.")
-            return False
-
-        renew_option = page.locator("//span[text()='Renew listing']/parent::div").first
-        renew_option.wait_for(state="visible", timeout=10000)
-
-        if renew_option.is_visible():
-            logging.info(f"Renew button is visible for this listing: {search_for}")
-            renew_option.click()
-            logging.info("Successfully clicked on the Renew button.")
-            random_sleep(3, 5)
-            return True
-        else:
-            logging.warning(f"Renew button found but not visible for: {search_for}")
-            return False
-    return False
 
 def get_count_of_elements_with_text( search_for,page):
     """Get count of elements with text"""

@@ -35,7 +35,7 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
-    list_display = ("user","listing","relisting_date","last_relisting_status","created_at","updated_at")
+    list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
     search_fields = ('user__email',)
     list_filter = ('user',)
     ordering = ('-relisting_date',)
