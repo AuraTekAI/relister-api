@@ -90,7 +90,7 @@ services:
       - redis
       - web
     command: >
-      sh -c "celery -A relister worker --loglevel=info --hostname=scheduling@%h -Q scheduling_queue -E --concurrency=5"
+      sh -c "celery -A relister worker --loglevel=info --hostname=scheduling@%h -Q scheduling_queue -E --concurrency=1"
     networks:
       - internal_network
 
@@ -109,7 +109,7 @@ services:
       - redis
       - web
     command: >
-      sh -c "celery -A relister worker --loglevel=info --hostname=email@%h -Q relister_queue -E --concurrency=5"
+      sh -c "celery -A relister worker --loglevel=info --hostname=email@%h -Q relister_queue -E --concurrency=1"
     networks:
       - internal_network
 

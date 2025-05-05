@@ -10,13 +10,13 @@ class FacebookListingAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class FacebookUserCredentialsAdmin(admin.ModelAdmin):
-    list_display = ('user','session_cookie', 'created_at', 'updated_at')
+    list_display = ('user','session_cookie','status','status_reminder', 'created_at', 'updated_at')
     search_fields = ('user__email',)
     list_filter = ('user',)
 
 class ListingUrlAdmin(admin.ModelAdmin):
-    list_display = ('user', 'url', 'status', 'error_message', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'url')
+    list_display = ('user', 'url', 'listing_id', 'status', 'error_message', 'created_at', 'updated_at')
+    search_fields = ('user__email', 'url','listing_id')
     list_filter = ('user',)
 
 class VehicleListingAdmin(admin.ModelAdmin):

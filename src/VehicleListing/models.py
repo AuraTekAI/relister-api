@@ -5,6 +5,7 @@ from decimal import Decimal
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
+    listing_id = models.CharField(max_length=255,null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=255, null=True)
@@ -16,6 +17,7 @@ class FacebookUserCredentials(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     session_cookie = models.JSONField(null=True,blank=True,default=dict)
     status = models.BooleanField(default=False)
+    status_reminder = models.BooleanField(default=False)
     retry_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
