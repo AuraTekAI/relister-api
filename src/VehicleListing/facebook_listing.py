@@ -205,7 +205,7 @@ def is_element_visible(page, selector):
         return False
     
 
-def click_button_when_enabled(page, button_text: str, max_attempts=3, wait_time=2):
+def click_button_when_enabled(page, button_text: str, max_attempts=3, wait_time=3):
     try:
         # Locate the button using XPath
         button = page.locator(
@@ -346,7 +346,8 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 return False, "Timeout error navigating to Facebook Marketplace vehicle listing page"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(2, 3)  # Random delay after page load
-            
+            logging.info("Page loaded successfully.")
+            logging.info(f"create market place listing for {vehicle_listing.list_id} and for user {vehicle_listing.user.email} and vehicle title is {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}")
             # Quick check for modal and handle if exists
             handle_login_info_modal(page)
 
@@ -385,7 +386,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select vehicle type: {result[1]}")
                 return False, result[1]
-            random_sleep(2, 3)
+            random_sleep(3, 4)
 
             index = 0
             if vehicle_listing.images:
@@ -415,14 +416,13 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     image_input = page.locator("//input[@type='file']").first
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(3, 4)  # Random delay after uploading images
+                    random_sleep(7, 8)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 return False, "No images found."
-            random_sleep(2, 3)
+            random_sleep(3, 4)
             
 
-            # Fill form fields
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
             if result[0]:
                 logging.info(f"Year selected successfully: {result[1]}")
@@ -472,13 +472,14 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=2)
+                random_sleep(10,15)
+                success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=3)
                 if not success:
                     # Optionally handle the failure
                     return False, message
                 else:
                     # Add random sleep if needed
-                    random_sleep(3, 5)
+                    random_sleep(10, 15)
 
             # Close browser
             browser.close()
@@ -524,8 +525,126 @@ def handle_cookie_consent(page):
     except Exception as e:
         logging.warning(f"No cookie banner found or already accepted: {e}")
 
-def perform_search_and_delete(search_for, session_cookie):
+
+def extract_listings_with_status(text):
+    """
+    Extracts structured listings including title, price, date, and status.
+    Returns a list of dicts: title, price, listing_date, status.
+    """
+    listing_pattern = r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))'
+    matches = re.findall(listing_pattern, text, re.DOTALL)
+
+    listings = []
+    for title, price, listing_date, tail in matches:
+        title_clean = title.strip().replace('\xa0', ' ')
+        tail_clean = tail.lower().replace('\xa0', ' ')
+
+        if "mark as sold" in tail_clean:
+            status = "Mark as sold"
+        elif "mark as available" in tail_clean:
+            status = "Mark as available"
+        else:
+            status = None
+
+        listings.append({
+            'title': title_clean,
+            'price': "".join(filter(str.isdigit, price)),
+            'listing_date': listing_date,
+            'status': status
+        })
+
+    return listings
+
+def get_count_of_elements_with_text(search_for, page):
+    """Get count of elements with text"""
+    return len(get_elements_with_text(search_for, page))
+
+def get_elements_with_text(search_for, page):
+    """Get elements with text and enriched listing info"""
+    locator = f"text={search_for}"
+    elements = page.locator(locator).all()
+    search_listings = []
+
+    for el in elements:
+        try:
+            parent = el.evaluate_handle("node => node.closest('div[class*=\"x78zum5\"]')")
+            if not parent:
+                continue
+
+            title_el = parent.query_selector('span[style*="-webkit-line-clamp: 2"]')
+            title = title_el.text_content().strip() if title_el else None
+
+            price_el = parent.query_selector("span:has-text('AU$')")
+            price = "".join(filter(str.isdigit, price_el.inner_text())) if price_el else None
+
+            if title and price and price_el:
+                search_listings.append({
+                    "title": title,
+                    "price": price,
+                    "element": el,
+                    "price_element": price_el,
+                    "status": None,
+                    "date": None
+                })
+
+        except Exception as e:
+            logging.error(f"Error parsing element: {e}")
+            continue
+
+    filter_listings_with_date = []
+    try:
+        # active_el = page.query_selector("span:has-text('Active')")
+        # print(active_el.text_content())
+        # if active_el:
+        #     filter_listings_with_date = extract_listings_with_status(active_el.text_content())
+
+        sold_el = page.query_selector("span:has-text('Listed on')")
+        # print(sold_el.text_content())
+        if sold_el:
+            filter_listings_with_date += extract_listings_with_status(sold_el.text_content())
+        # date=page.query_selector("span:has-text('Listed on')")
+        # print(date.text_content())
+
+    except Exception as e:
+        logging.error(f"Error extracting listing metadata: {e}")
+
+    # Match and enrich
+    for search in search_listings:
+        for record in filter_listings_with_date:
+            if (search['title'].lower() == record['title'].lower()
+                and search['price'] == record['price']):
+                search['date'] = record['listing_date']
+                search['status'] = record['status']
+                break
+    print("search_listings",search_listings)
+    print("filter_listings_with_date",filter_listings_with_date)
+    return search_listings
+
+def perform_search_and_delete(search_for, listing_price, listing_date, session_cookie):
     """Perform search and delete listing with retry and timeout handling"""
+
+    def handle_post_delete_flow(page, browser):
+        try:
+            not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+            if not_answer_button and not_answer_button.is_visible():
+                not_answer_button.click()
+                random_sleep(2, 3)
+            else:
+                logging.warning("'I'd rather not answer' button not found.")
+                return 1, "'I'd rather not answer' button not found, but successfully deleted the product"
+
+            next_button = page.locator("//*[text()='Next']").first
+            if next_button and next_button.is_visible():
+                next_button.click()
+                random_sleep(2, 3)
+                logging.info("Process completed successfully.")
+                return 1, "Successfully deleted the listing"
+            else:
+                logging.warning("'Next' button not found.")
+                return 1, "'Next' button not found, but successfully deleted the product"
+        finally:
+            browser.close()
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--start-maximized"])
@@ -555,69 +674,64 @@ def perform_search_and_delete(search_for, session_cookie):
             input_element.fill(search_for)
             page.wait_for_timeout(3000)
 
-            for attempt in range(1, 2):
-                matches_found = get_count_of_elements_with_text(search_for, page)
-                if matches_found > 0:
-                    logging.info(f"Success (Attempt {attempt}): Found ({matches_found}) matches for ({search_for})")
-                    try:
-                        more_options = page.locator(
-                            f"//div[contains(@aria-label, 'More options') and contains(@aria-label, '{search_for}')]"
-                        ).first
-                        more_options.click()
-                        page.wait_for_timeout(2000)
+            formatted_date = listing_date.strftime("%d/%m")
+            matches_found = get_count_of_elements_with_text(search_for, page)
 
-                        delete_option = page.wait_for_selector(
-                            "//div[@role='menuitem']//span[contains(text(), 'Delete listing')]//ancestor::div[@role='menuitem']",
-                            state="visible",
-                            timeout=5000,
-                        )
-                        delete_option.click()
-                        page.wait_for_timeout(2000)
+            if matches_found == 0:
+                if page.locator("text='We didn't find anything'").is_visible():
+                    logging.info("Detected 'We didn't find anything'")
+                    browser.close()
+                    return 2, "didnt_find_anything_displayed"
+                else:
+                    browser.close()
+                    return 2, "No matching listing found"
 
-                        success, message = find_and_click_delete_button(page)
-                        if success:
-                            logging.info(f"{message}")
-                            not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
-                            if not_answer_button and not_answer_button.is_visible():
-                                not_answer_button.click()
-                                page.wait_for_timeout(2000)
+            logging.info(f"Found {matches_found} match(es) for '{search_for}'")
+            elements = get_elements_with_text(search_for, page)
+
+            for element in elements:
+                try:
+                    title_match = element['title'] and element['title'].lower() == search_for.lower()
+                    price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
+                    date_match = element['date'] == formatted_date
+                    status = element.get('status', '').lower()
+
+                    if title_match and price_match and date_match:
+                        if status == "mark as sold":
+                            logging.info(f"Deleting listing: {element['title']} - {element['price']}")
+
+                            price_element = element.get('price_element')
+                            if price_element and price_element.is_visible():
+                                price_element.click()
+                                random_sleep(3, 5)
+
+                                success, message = find_and_click_delete_button(page)
+                                if not success:
+                                    browser.close()
+                                    return 0, message
+
+                                delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                                if delete_buttons:
+                                    target_button = delete_buttons[2]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(3, 4)
+                                        return handle_post_delete_flow(page, browser)
+                                logging.error("Delete button not found or not visible.")
+                                browser.close()
+                                return 0, "Delete button not found"
                             else:
-                                logging.warning("'I'd rather not answer' button not found.")
                                 browser.close()
-                                return 1, "'I'd rather not answer' button not found, but successfully deleted the product"
+                                return 0, "Price element not found or not visible"
 
-                            next_button = page.locator("//*[text()='Next']").first
-                            if next_button and next_button.is_visible():
-                                next_button.click()
-                                page.wait_for_timeout(2000)
-                                logging.info("Process completed successfully.")
-                                browser.close()
-                                return 1, "Successfully deleted the listing"
-                            else:
-                                logging.warning("'Next' button not found.")
-                                browser.close()
-                                return 1, "'Next' button not found, but successfully deleted the product"
-                        else:
-                            logging.warning("Failed to click delete button.")
+                        elif status == "mark as available":
+                            logging.info("Listing is already marked as available.")
                             browser.close()
-                            return 0, message
+                            return 2, "This listing is already sold"
+                except Exception as e:
+                    logging.error(f"Error evaluating listing match: {e}")
+                    continue
 
-                    except PlaywrightTimeoutError as toe:
-                        logging.error(f"Timeout during delete flow (Attempt {attempt}): {toe}")
-                        continue
-                    except Exception as e:
-                        logging.error(f"Error in delete flow (Attempt {attempt}): {e}")
-                        continue
-
-                page.wait_for_timeout(5000)  # Wait between retries
-
-            # Final check if nothing was found
-            if page.locator("text='We didn't find anything'").is_visible():
-                logging.info("Success (Attempt 3): Detected 'We didn't find anything'")
-                browser.close()
-                return 2, "didnt_find_anything_displayed"
-
-            logging.info("No match found after 2 attempts.")
             browser.close()
             return 0, "No matching listing found"
 
@@ -628,17 +742,6 @@ def perform_search_and_delete(search_for, session_cookie):
         return 0, str(e)
 
 
-
-def get_count_of_elements_with_text( search_for,page):
-    """Get count of elements with text"""
-    return len(get_elements_with_text(search_for,page))
-
-def get_elements_with_text(search_for,page):
-    """Get elements with text"""
-    locator_case_sensitive = f"text={search_for}"
-    locator_case_insensitive = f"text=/.*{search_for}.*/i"
-    elements = page.locator(locator_case_sensitive).all()
-    return elements if elements else page.locator(locator_case_insensitive).all()
 
 def find_and_click_delete_button(page):
     """Find and click the 'Delete' button"""
@@ -861,9 +964,8 @@ def extract_price(page, listing):
         if element:
             text = element.inner_text()
             logging.info(f"Price text: {text}")
-            # price_str = "".join(filter(str.isdigit, text))
             if text:
-                listing["price"] = text
+                listing["price"] = "".join(filter(str.isdigit, text))
     except Exception as e:
         logging.error(f"Error extracting price: {e}")
 
