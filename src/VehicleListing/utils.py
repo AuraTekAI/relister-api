@@ -18,15 +18,14 @@ def send_status_reminder_email(facebook_user):
     
     # Create HTML invoice (use a template if desired)
     if facebook_user.status_reminder == False:
-        html_invoice = render_to_string("listings/status_reminder_template.html", {
+        html_content = render_to_string("listings/facebook_session_status_reminder.html", {
             "user_name": facebook_user.user.contact_person_name,
         })
-        logger.info(" - HTML invoice rendered.")
 
         # Send email
         email = EmailMessage(
             subject=f"Reminder: Facebook login session",
-            body=html_invoice,
+            body=html_content,
             from_email=EMAIL_HOST_USER,
             to=[facebook_user.user.email]
         )
