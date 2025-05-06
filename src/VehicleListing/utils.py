@@ -120,7 +120,7 @@ def retry_failed_relistings(seven_days_ago):
                 send_status_reminder_email(credentials)
             logger.warning(f"No valid credentials for user {relisting.user.email}")
             continue
-
+        time.sleep(random.randint(20,30))
         listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
         now = timezone.now()
         if listing_created:

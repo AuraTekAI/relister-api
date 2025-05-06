@@ -42,6 +42,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                         continue
                     else:
                         logger.info(f"Creating listing for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                        time.sleep(random.randint(20,30))
                         listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
                         if listing_created:
                             update_credentials_success(credentials)
@@ -134,11 +135,13 @@ def relist_facebook_marketplace_listing_task(self):
 
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query}")
+        time.sleep(random.randint(20,30))
         response = perform_search_and_delete(search_query,relisting_price, relisting_date,credentials.session_cookie)
 
         if response[0] == 1:  # Deletion successful
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            time.sleep(random.randint(20,30))
             listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
             if listing_created:
@@ -176,6 +179,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                         logger.info(f"Listing already exists for the user {listing.user.email}")
                         continue
                     else:
+                        time.sleep(random.randint(20,30))
                         listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
                         if listing_created:
                             update_credentials_success(credentials)

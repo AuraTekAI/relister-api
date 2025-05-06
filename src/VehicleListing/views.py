@@ -352,6 +352,7 @@ def create_facebook_listing(vehicle_listing):
         if credentials and credentials.session_cookie != {} and credentials.status:
             already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing,).first()
             if not already_listed:
+                time.sleep(random.randint(20,30))
                 listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
                 if listing_created:
                     FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
@@ -496,7 +497,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         incoming_list_ids.add(str(current_listing["id"]))
         if already_listed:
             continue
-        time.sleep(random.uniform(1,2))
+        time.sleep(random.uniform(10,20))
         # Get listings using the function
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
@@ -579,7 +580,11 @@ class FacebookProfileListingViewSet(ModelViewSet):
                 return JsonResponse({'error': 'Facebook credentials not found, please login again'}, status=404)
             session_cookie = credentials.session_cookie
             for current_listing in facebook_profile_vehicle_listings:
-                year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
+                temp_list=[]
+                temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
+                temp_list.append(current_listing.price)
+                temp_list.append(current_listing.updated_at)
+                year_make_model_list.append(temp_list)
         facebook_profile_listing.delete()
         if year_make_model_list:
             # Initialize a queue for the user if it doesn't exist
@@ -627,7 +632,11 @@ class GumtreeProfileListingViewSet(ModelViewSet):
                 return JsonResponse({'error': 'Facebook credentials not found, please login again'}, status=404)
             session_cookie = credentials.session_cookie
             for current_listing in gumtree_profile_vehicle_listings:
-                year_make_model_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
+                temp_list=[]
+                temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
+                temp_list.append(current_listing.price)
+                temp_list.append(current_listing.updated_at)
+                year_make_model_list.append(temp_list)
         gumtree_profile_listing.delete()
         if year_make_model_list:
             # Initialize a queue for the user if it doesn't exist
@@ -648,9 +657,11 @@ def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
     """Delete multiple vehicle listings"""
     if session_cookie:
         for current_listing in year_make_model_list:
-            search_query = current_listing
-            perform_search_and_delete(search_query,session_cookie)
-            time.sleep(random.uniform(2,3))
+            search_query = current_listing[0]
+            price=current_listing[1]
+            listing_date=current_listing[2]
+            perform_search_and_delete(search_query,price,listing_date,session_cookie)
+            time.sleep(random.uniform(20,30))
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_montly_listings_report(request):
