@@ -21,71 +21,149 @@ import logging
 import threading
 logger = logging.getLogger('facebook_listing_cronjob')
 
+# @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
+# def create_pending_facebook_marketplace_listing_task(self):
+#     """Create pending Facebook Marketplace listings."""
+
+#     pending_listings = list(VehicleListing.objects.filter(status="pending").all())
+#     logger.info(f"Found {len(pending_listings)} pending listings for Facebook Marketplace")
+
+#     if not pending_listings:
+#         logger.info("No pending listings found for Facebook Marketplace")
+#         return
+#     # Create a list of dicts with each pending listing and the user's last listing time
+#     pending_listings_with_time = [
+#         {'listing': listing, 'last_listing_time': listing.user.last_facebook_listing_time}
+#         for listing in pending_listings
+#     ]
+#     while pending_listings_with_time:
+#         for current_listing in pending_listings_with_time:
+#             listing = current_listing['listing']
+#             user = listing.user
+#             last_time = current_listing['last_listing_time']      
+#             try:
+#                 logger.info(f"Creating listing for user {user.email}: {listing.year} {listing.make} {listing.model}")
+#                 time.sleep(random.randint(2, 5))
+#                 credentials = FacebookUserCredentials.objects.filter(user=user).first()
+#                 if not credentials or not credentials.session_cookie or not credentials.status:
+#                     if credentials:
+#                         credentials.status = False
+#                         credentials.save()
+#                         send_status_reminder_email(credentials)
+#                     logger.info(f"No valid credentials for user {user.email}")
+#                     pending_listings_with_time.remove(current_listing)
+#                     continue
+#                 # Skip if already created successfully
+#                 if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
+#                     listing.status = "completed"
+#                     listing.save()
+#                     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
+#                     pending_listings_with_time.remove(current_listing)
+#                     continue
+#                 # Attempt listing creation but first check if user is eligible to create a new listing based on time.
+#                 time.sleep(random.randint(20, 30))
+#                 if not should_create_listing(last_time):
+#                     logger.info(f"Skipping user {user.email} due to 10-minute rule")
+#                     continue  # Will retry in next loop
+#                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
+
+#                 if listing_created:
+#                     update_credentials_success(credentials)
+#                     FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
+#                     listing.status = "completed"
+#                     listing.updated_at = timezone.now()
+#                     listing.save()
+#                     user.last_facebook_listing_time = timezone.now()
+#                     user.save()
+#                     current_listing['last_listing_time'] = timezone.now()
+#                     logger.info(f"Listing created: {user.email} - {listing.year} {listing.make} {listing.model}")
+#                     pending_listings_with_time.remove(current_listing)
+#                 else:
+#                     FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
+#                     listing.status = "failed"
+#                     listing.save()
+#                     credentials.retry_count += 1
+#                     credentials.save()
+#                     if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+#                         credentials.status = False
+#                         credentials.save()
+#                     logger.info(f"Listing failed: {user.email} - {listing.year} {listing.make} {listing.model}")
+#                     pending_listings_with_time.remove(current_listing)
+#             except Exception as e:
+#                 logger.exception(f"Error processing listing for user {listing.user.email}: {e}")
+#                 pending_listings_with_time.remove(current_listing)
+#                 continue
+#     logger.info("Completed processing all pending listings")
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def create_pending_facebook_marketplace_listing_task(self):
     """Create pending Facebook Marketplace listings."""
 
-    pending_listings = list(VehicleListing.objects.filter(status="pending").all())
+    pending_listings = list(VehicleListing.objects.filter(status="pending").select_related("user"))
     logger.info(f"Found {len(pending_listings)} pending listings for Facebook Marketplace")
 
     if not pending_listings:
         logger.info("No pending listings found for Facebook Marketplace")
         return
-    while pending_listings:
-        for listing in pending_listings:
-            user = listing.user
-            try:
-                logger.info(f"Creating listing for user {user.email}: {listing.year} {listing.make} {listing.model}")
-                time.sleep(random.randint(2, 5))
-                credentials = FacebookUserCredentials.objects.filter(user=user).first()
-                if not credentials or not credentials.session_cookie or not credentials.status:
-                    if credentials:
-                        credentials.status = False
-                        credentials.save()
-                        send_status_reminder_email(credentials)
-                    logger.info(f"No valid credentials for user {user.email}")
-                    pending_listings.remove(listing)
-                    continue
-                # Skip if already created successfully
-                if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-                    listing.status = "completed"
-                    listing.save()
-                    logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    pending_listings.remove(listing)
-                    continue
-                # Attempt listing creation but first check if user is eligible to create a new listing based on time.
-                time.sleep(random.randint(20, 30))
-                if not should_create_listing(user):
-                    logger.info(f"Skipping user {user.email} due to 10-minute rule")
-                    continue  # Will retry in next loop
-                listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
-                if listing_created:
-                    update_credentials_success(credentials)
-                    FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
-                    listing.status = "completed"
-                    listing.updated_at = timezone.now()
-                    listing.save()
-                    user.last_facebook_listing_time = timezone.now()
-                    user.save()
-                    logger.info(f"Listing created: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    pending_listings.remove(listing)
-                else:
-                    FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
-                    listing.status = "failed"
-                    listing.save()
-                    credentials.retry_count += 1
+    while pending_listings:
+        listing = pending_listings.pop(0)
+        user = listing.user
+
+        try:
+            logger.info(f"Processing pending listing: {user.email} - {listing.year} {listing.make} {listing.model}")
+            time.sleep(random.randint(2, 5))
+
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+
+            if not credentials or not credentials.session_cookie or not credentials.status:
+                if credentials:
+                    credentials.status = False
                     credentials.save()
-                    if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
-                        credentials.status = False
-                        credentials.save()
-                    logger.info(f"Listing failed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    pending_listings.remove(listing)
-            except Exception as e:
-                logger.exception(f"Error processing listing for user {listing.user.email}: {e}")
-                pending_listings.remove(listing)
+                    send_status_reminder_email(credentials)
+                logger.info(f"Invalid credentials for {user.email}")
                 continue
-    logger.info("Completed processing all pending listings")
+
+            if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
+                listing.status = "completed"
+                listing.save()
+                logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
+                continue
+
+            time.sleep(random.randint(20, 30))
+
+            if not should_create_listing(user):
+                logger.info(f"10-minute cooldown for user {user.email}")
+                pending_listings.append(listing)  # Re-queue for later
+                continue
+
+            created, message = create_marketplace_listing(listing, credentials.session_cookie)
+            now = timezone.now()
+
+            if created:
+                update_credentials_success(credentials)
+                FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
+                listing.status = "completed"
+                listing.updated_at = now
+                listing.save()
+                user.last_facebook_listing_time = now
+                user.save()
+                logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
+            else:
+                FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
+                listing.status = "failed"
+                listing.save()
+                credentials.retry_count += 1
+                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                    credentials.status = False
+                credentials.save()
+                logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
+
+        except Exception as e:
+            logger.exception(f"Error creating listing for {user.email}: {e}")
+            continue
+
+    logger.info("Completed all pending Facebook listings.")
+
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def relist_facebook_marketplace_listing_task(self):
@@ -162,72 +240,76 @@ def relist_facebook_marketplace_listing_task(self):
     logger.info(f"Now, Relisting failed listing")
     retry_failed_relistings(seven_days_ago)
 
+
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def create_failed_facebook_marketplace_listing_task(self):
-    """Create failed Facebook Marketplace listings"""
-    
-    failed_listings = list(VehicleListing.objects.filter(status="failed").all())
+    """Create failed Facebook Marketplace listings."""
+
+    failed_listings = list(VehicleListing.objects.filter(status="failed").select_related("user"))
     logger.info(f"Found {len(failed_listings)} failed listings for Facebook Marketplace")
 
     if not failed_listings:
         logger.info("No failed listings found for Facebook Marketplace")
         return
-    while failed_listings:
-        for listing in failed_listings:
-            user = listing.user
-            try:
-                logger.info(f"Creating listing for user {user.email}: {listing.year} {listing.make} {listing.model}")
-                time.sleep(random.randint(2, 5))
-                credentials = FacebookUserCredentials.objects.filter(user=user).first()
-                if not credentials or not credentials.session_cookie or not credentials.status:
-                    if credentials:
-                        credentials.status = False
-                        credentials.save()
-                        send_status_reminder_email(credentials)
-                    logger.info(f"No valid credentials for user {user.email}")
-                    failed_listings.remove(listing)
-                    continue
-                # Skip if already created successfully
-                if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-                    listing.status = "completed"
-                    listing.save()
-                    logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    failed_listings.remove(listing)
-                    continue
-                # Check if user is eligible to create a new listing based on time.
-                time.sleep(random.randint(20, 30))
-                if not should_create_listing(user):
-                    logger.info(f"Skipping user {user.email} due to 10-minute rule")
-                    continue  # Will retry in next loop
-                # Attempt listing creation
-                listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
-                if listing_created:
-                    update_credentials_success(credentials)
-                    FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
-                    listing.status = "completed"
-                    listing.updated_at = timezone.now()
-                    listing.save()
-                    user.last_facebook_listing_time = timezone.now()
-                    user.save()
-                    logger.info(f"Listing created: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    failed_listings.remove(listing)
-                else:
-                    FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
-                    listing.status = "failed"
-                    listing.save()
-                    credentials.retry_count += 1
+    while failed_listings:
+        listing = failed_listings.pop(0)
+        user = listing.user
+
+        try:
+            logger.info(f"Processing failed listing: {user.email} - {listing.year} {listing.make} {listing.model}")
+            time.sleep(random.randint(2, 5))
+
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+
+            if not credentials or not credentials.session_cookie or not credentials.status:
+                if credentials:
+                    credentials.status = False
                     credentials.save()
-                    if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
-                        credentials.status = False
-                        credentials.save()
-                    logger.info(f"Listing failed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                    failed_listings.remove(listing)
-            except Exception as e:
-                logger.exception(f"Error processing listing for user {listing.user.email}: {e}")
-                failed_listings.remove(listing)
+                    send_status_reminder_email(credentials)
+                logger.info(f"Invalid credentials for {user.email}")
                 continue
-    logger.info("Completed processing all failed listings")
+
+            if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
+                listing.status = "completed"
+                listing.save()
+                logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
+                continue
+
+            time.sleep(random.randint(20, 30))
+
+            if not should_create_listing(user):
+                logger.info(f"10-minute cooldown for user {user.email}")
+                failed_listings.append(listing)  # Re-queue for later
+                continue
+
+            created, message = create_marketplace_listing(listing, credentials.session_cookie)
+            now = timezone.now()
+
+            if created:
+                update_credentials_success(credentials)
+                FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
+                listing.status = "completed"
+                listing.updated_at = now
+                listing.save()
+                user.last_facebook_listing_time = now
+                user.save()
+                logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
+            else:
+                FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
+                listing.status = "failed"
+                listing.save()
+                credentials.retry_count += 1
+                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                    credentials.status = False
+                credentials.save()
+                logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
+
+        except Exception as e:
+            logger.exception(f"Error creating listing for {user.email}: {e}")
+            continue
+
+    logger.info("Completed all pending Facebook listings.")
 
 @shared_task(bind=True, base=CustomExceptionHandler,queue='relister_queue')
 def check_gumtree_profile_relisting_task(self):

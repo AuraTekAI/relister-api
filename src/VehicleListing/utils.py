@@ -9,6 +9,7 @@ from datetime import timedelta
 from .models import FacebookUserCredentials, RelistingFacebooklisting
 from .tasks import create_marketplace_listing
 from relister.settings import MAX_RETRIES_ATTEMPTS
+from accounts.models import User
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -143,6 +144,7 @@ def update_credentials_success(credentials):
 
 def should_create_listing(user):
     """Check if user is eligible to create a new listing based on time."""
+    user=User.objects.filter(id=user.id).first()
     if not user.last_facebook_listing_time:
         return True
     return timezone.now() - user.last_facebook_listing_time >= timedelta(minutes=10)
