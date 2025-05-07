@@ -60,6 +60,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_approved = models.BooleanField(default=False)
     
     # Extra information
+    last_facebook_listing_time = models.DateTimeField(null=True, blank=True)
     last_login = models.DateTimeField(verbose_name="last login", auto_now=True)
     is_superuser = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)

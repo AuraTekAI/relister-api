@@ -5,6 +5,7 @@ from relister.settings import EMAIL_HOST_USER
 import time
 import random
 from django.utils import timezone
+from datetime import timedelta
 from .models import FacebookUserCredentials, RelistingFacebooklisting
 from .tasks import create_marketplace_listing
 from relister.settings import MAX_RETRIES_ATTEMPTS
@@ -139,3 +140,9 @@ def update_credentials_success(credentials):
     credentials.status = True
     credentials.retry_count = 0
     credentials.save()
+
+def should_create_listing(user):
+    """Check if user is eligible to create a new listing based on time."""
+    if not user.last_facebook_listing_time:
+        return True
+    return timezone.now() - user.last_facebook_listing_time >= timedelta(minutes=10)

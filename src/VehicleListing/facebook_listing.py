@@ -266,7 +266,7 @@ def handle_make_field(page, make_value):
                 input_element.clear()
                 human_like_typing(input_element, make_value)
                 logging.info("Filled 'Make' via input: %s", make_value)
-                random_sleep(1, 2)
+                random_sleep(2, 3)
                 return True
         except Exception as e:
             logging.warning(f"Failed input selector {selector}: {e}")
@@ -290,7 +290,7 @@ def handle_make_field(page, make_value):
                 if dropdown.is_visible():
                     dropdown.scroll_into_view_if_needed()
                     dropdown.click()
-                    random_sleep(1, 2)
+                    random_sleep(2, 3)
 
                     # Try to select option
                     option_selectors = [
@@ -305,7 +305,7 @@ def handle_make_field(page, make_value):
                                 option.scroll_into_view_if_needed()
                                 option.click()
                                 logging.info(f"Selected 'Make' from dropdown: {display_make}")
-                                random_sleep(1, 2)
+                                random_sleep(2,3)
                                 return True
                         except Exception as e:
                             logging.warning(f"Failed option selector {option_selector}: {e}")
@@ -386,7 +386,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select vehicle type: {result[1]}")
                 return False, result[1]
-            random_sleep(3, 4)
+            random_sleep(4, 5)
 
             index = 0
             if vehicle_listing.images:
@@ -416,11 +416,11 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     image_input = page.locator("//input[@type='file']").first
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(7, 8)  # Random delay after uploading images
+                    random_sleep(9, 12)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 return False, "No images found."
-            random_sleep(3, 4)
+            random_sleep(4, 5)
             
 
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
