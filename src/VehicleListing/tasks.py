@@ -54,10 +54,10 @@ def create_pending_facebook_marketplace_listing_task(self):
                     pending_listings.remove(listing)
                     continue
                 # Attempt listing creation but first check if user is eligible to create a new listing based on time.
+                time.sleep(random.randint(20, 30))
                 if not should_create_listing(user):
                     logger.info(f"Skipping user {user.email} due to 10-minute rule")
                     continue  # Will retry in next loop
-                time.sleep(random.randint(20, 30))
                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
                 if listing_created:
@@ -195,11 +195,11 @@ def create_failed_facebook_marketplace_listing_task(self):
                     failed_listings.remove(listing)
                     continue
                 # Check if user is eligible to create a new listing based on time.
+                time.sleep(random.randint(20, 30))
                 if not should_create_listing(user):
                     logger.info(f"Skipping user {user.email} due to 10-minute rule")
                     continue  # Will retry in next loop
                 # Attempt listing creation
-                time.sleep(random.randint(20, 30))
                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
                 if listing_created:
