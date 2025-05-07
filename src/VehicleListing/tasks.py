@@ -34,10 +34,6 @@ def create_pending_facebook_marketplace_listing_task(self):
     while pending_listings:
         for listing in pending_listings:
             user = listing.user
-            if not should_create_listing(user):
-                logger.info(f"Skipping user {user.email} due to 10-minute rule")
-                continue  # Will retry in next loop
-
             try:
                 logger.info(f"Creating listing for user {user.email}: {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(2, 5))
@@ -57,7 +53,10 @@ def create_pending_facebook_marketplace_listing_task(self):
                     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                     pending_listings.remove(listing)
                     continue
-                # Attempt listing creation
+                # Attempt listing creation but first check if user is eligible to create a new listing based on time.
+                if not should_create_listing(user):
+                    logger.info(f"Skipping user {user.email} due to 10-minute rule")
+                    continue  # Will retry in next loop
                 time.sleep(random.randint(20, 30))
                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
@@ -176,10 +175,6 @@ def create_failed_facebook_marketplace_listing_task(self):
     while failed_listings:
         for listing in failed_listings:
             user = listing.user
-            if not should_create_listing(user):
-                logger.info(f"Skipping user {user.email} due to 10-minute rule")
-                continue  # Will retry in next loop
-
             try:
                 logger.info(f"Creating listing for user {user.email}: {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(2, 5))
@@ -199,6 +194,10 @@ def create_failed_facebook_marketplace_listing_task(self):
                     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                     failed_listings.remove(listing)
                     continue
+                # Check if user is eligible to create a new listing based on time.
+                if not should_create_listing(user):
+                    logger.info(f"Skipping user {user.email} due to 10-minute rule")
+                    continue  # Will retry in next loop
                 # Attempt listing creation
                 time.sleep(random.randint(20, 30))
                 listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
@@ -226,6 +225,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                     failed_listings.remove(listing)
             except Exception as e:
                 logger.exception(f"Error processing listing for user {listing.user.email}: {e}")
+                failed_listings.remove(listing)
                 continue
     logger.info("Completed processing all failed listings")
 
