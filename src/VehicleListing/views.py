@@ -35,18 +35,18 @@ def worker(user_id):
 
 def delete_facebook_profile_listing_worker(user_id):
     while True:
-        vehicle_listing,session_cookie = facebook_profile_user_queues[user_id].get()
-        if vehicle_listing is None or session_cookie is None:
+        year_make_model_list,session_cookie = facebook_profile_user_queues[user_id].get()
+        if year_make_model_list is None or session_cookie is None:
             break
-        delete_multiple_vehicle_listings(vehicle_listing,session_cookie)
+        delete_multiple_vehicle_listings(year_make_model_list,session_cookie)
         facebook_profile_user_queues[user_id].task_done()
 
 def delete_gumtree_profile_listing_worker(user_id):
     while True:
-        vehicle_listing,session_cookie = gumtree_profile_user_queues[user_id].get()
-        if vehicle_listing is None or session_cookie is None:
+        year_make_model_list,session_cookie = gumtree_profile_user_queues[user_id].get()
+        if year_make_model_list is None or session_cookie is None:
             break
-        delete_multiple_vehicle_listings(vehicle_listing,session_cookie)
+        delete_multiple_vehicle_listings(year_make_model_list,session_cookie)
         gumtree_profile_user_queues[user_id].task_done()
 
 @csrf_exempt
@@ -103,6 +103,7 @@ def import_url_from_gumtree(request):
                 vehicle_listing = VehicleListing.objects.create(
                     user=user,
                     list_id=list_id,
+                    gumtree_url=import_url_instance,
                     year=response["year"],
                     body_type="Other",
                     fuel_type=response["fuel_type"],
@@ -216,6 +217,45 @@ class ListingUrlViewSet(ModelViewSet):
             return ListingUrl.objects.all()
         else:
             return ListingUrl.objects.filter(user=user)
+        
+    def destroy(self, request, *args, **kwargs):
+        """Delete listing URL"""
+        instance = self.get_object()
+        import_url = ListingUrl.objects.filter(id=instance.id).first()  
+        vehicle_listing = VehicleListing.objects.filter(gumtree_url=import_url).first()
+        if vehicle_listing:
+            search_query = vehicle_listing.year + " " + vehicle_listing.make + " " + vehicle_listing.model
+            credentials = FacebookUserCredentials.objects.filter(user=vehicle_listing.user).first()
+            if vehicle_listing.status in ["pending", "failed", "sold"]:
+                import_url.delete()
+                vehicle_listing.delete()
+                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+            else:
+                if credentials and credentials.session_cookie and credentials.status:
+                    response = perform_search_and_delete(search_query, vehicle_listing.price, vehicle_listing.updated_at, credentials.session_cookie)
+                    if response[0] in [1, 2]:
+                        credentials.status = True
+                        credentials.retry_count = 0
+                        credentials.save()
+                        import_url.delete()
+                        vehicle_listing.delete()
+                        message = 'Listing deleted successfully' if response[0] == 1 else 'Listing already sold , Now deleted successfully'
+                        return JsonResponse({'message': message}, status=200)
+                    else:
+                        import_url.delete()
+                        vehicle_listing.delete()
+                        return JsonResponse({'error': 'Failed to find and delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
+                else:
+                    if credentials:
+                        credentials.status = False
+                        credentials.save()
+                        send_status_reminder_email(credentials)
+                    import_url.delete()
+                    vehicle_listing.delete()
+                    return JsonResponse({'error': 'No facebook credentials found for the user'}, status=200)
+        else:
+            import_url.delete()
+            return JsonResponse({'message': 'Listing URL deleted successfully but vehicle listing not found'}, status=200)
 
 class VehicleListingViewSet(ModelViewSet):
     """Get all vehicle listings with relisting dates"""
@@ -263,19 +303,14 @@ class VehicleListingViewSet(ModelViewSet):
                     vehicle_listing.delete()
                     return JsonResponse({'message': 'Listing already sold , Now deleted successfully'}, status=200)
                 else:
-                    if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
-                        credentials.retry_count += 1
-                        credentials.save()
-                        return JsonResponse({'error': response[1]}, status=200)
-                    else:
-                        credentials.status = False
-                        credentials.save()
-                        return JsonResponse({'error': response[1]}, status=200)
+                    vehicle_listing.delete()
+                    return JsonResponse({'error': 'Failed to delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
             else:
                 if credentials:
                     credentials.status = False
                     credentials.save()
                     send_status_reminder_email(credentials)
+                vehicle_listing.delete()
                 return JsonResponse({'error': 'No facebook credentials found for the user'}, status=200)
 
 class FacebookUserCredentialsViewSet(ModelViewSet):
@@ -591,7 +626,7 @@ class FacebookProfileListingViewSet(ModelViewSet):
             if user.id not in facebook_profile_user_queues:
                 facebook_profile_user_queues[user.id] = Queue()
                 threading.Thread(target=delete_facebook_profile_listing_worker, args=(user.id,), daemon=True).start()
-            facebook_profile_user_queues[user.id].put(year_make_model_list,session_cookie)
+            facebook_profile_user_queues[user.id].put((year_make_model_list,session_cookie))
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 class GumtreeProfileListingViewSet(ModelViewSet):
@@ -643,7 +678,7 @@ class GumtreeProfileListingViewSet(ModelViewSet):
             if user.id not in gumtree_profile_user_queues:
                 gumtree_profile_user_queues[user.id] = Queue()
                 threading.Thread(target=delete_gumtree_profile_listing_worker, args=(user.id,), daemon=True).start()
-            gumtree_profile_user_queues[user.id].put(year_make_model_list,session_cookie)
+            gumtree_profile_user_queues[user.id].put((year_make_model_list,session_cookie))
         return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
 
 def extract_seller_id(profile_url):

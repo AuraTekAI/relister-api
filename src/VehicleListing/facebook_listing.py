@@ -386,7 +386,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select vehicle type: {result[1]}")
                 return False, result[1]
-            random_sleep(4, 5)
+            random_sleep(5, 6)
 
             index = 0
             if vehicle_listing.images:
@@ -416,11 +416,11 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     image_input = page.locator("//input[@type='file']").first
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(9, 12)  # Random delay after uploading images
+                    random_sleep(12, 15)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 return False, "No images found."
-            random_sleep(4, 5)
+            random_sleep(6, 9)
             
 
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
@@ -429,8 +429,9 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select Year: {result[1]}")
                 return False, result[1]
-
+            random_sleep(3, 5)
             handle_make_field(page, vehicle_listing.make)
+            random_sleep(3, 5)
 
             # Input fields with their selectors
             input_fields = {
@@ -472,14 +473,14 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                random_sleep(10,15)
+                random_sleep(12,15)
                 success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=3)
                 if not success:
                     # Optionally handle the failure
                     return False, message
                 else:
                     # Add random sleep if needed
-                    random_sleep(10, 15)
+                    random_sleep(12, 15)
 
             # Close browser
             browser.close()
@@ -733,7 +734,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     continue
 
             browser.close()
-            return 0, "No matching listing found"
+            return 2, "No matching listing found"
 
     except Exception as e:
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")
