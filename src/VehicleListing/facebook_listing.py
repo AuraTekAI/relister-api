@@ -415,7 +415,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     # Upload images
                     random_sleep(12, 15)
                     image_input = page.locator("//input[@type='file']").first
-                    random_sleep(3, 5)
+                    random_sleep(5, 7)
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
                     random_sleep(50, 60)  # Random delay after uploading images
