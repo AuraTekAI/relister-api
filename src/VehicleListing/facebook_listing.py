@@ -376,6 +376,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 page.goto("https://www.facebook.com/marketplace/create/vehicle", timeout=60000)
             except Exception as e:
                 logging.error(f"Timeout error navigating to Facebook Marketplace vehicle listing page: {e}")
+                browser.close()
                 return False, "Timeout error navigating to Facebook Marketplace vehicle listing page"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(2, 3)  # Random delay after page load
@@ -388,6 +389,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             limit_reached_selector = "//span[@class='x1lliihq x6ikm8r x10wlt62 x1n2onr6']//span[contains(@class, 'x193iq5w') and text()='Limit reached']"
             if is_element_visible(page, limit_reached_selector):
                 logging.info("Limit reached element is visible.")
+                browser.close()
                 return False, "Limit reached"
             
             # Vehicle details
@@ -418,6 +420,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 logging.info(f"Vehicle type selected successfully: {result[1]}")
             else:
                 logging.info(f"Failed to select vehicle type: {result[1]}")
+                browser.close()
                 return False, result[1]
             random_sleep(3, 5)
 
@@ -443,6 +446,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                         return False, f"Error downloading the image: {e}"
                     # Check if the image was downloaded successfully
                     if not os.path.exists(local_image_path):
+                        browser.close()
                         return False, "Image download failed, file does not exist." 
 
                     # Upload images
@@ -453,6 +457,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     random_sleep(5, 6)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
+                browser.close()
                 return False, "No images found."
             random_sleep(5, 8)
             
@@ -462,6 +467,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 logging.info(f"Year selected successfully: {result[1]}")
             else:
                 logging.info(f"Failed to select Year: {result[1]}")
+                browser.close()
                 return False, result[1]
             random_sleep(3, 5)
             handle_make_field(page, vehicle_listing.make)
@@ -510,6 +516,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 logging.info("Images verified and uploaded successfully.")
             else:
                 logging.info("Images failed to upload.")
+                browser.close()
                 return False, "Images failed to upload."
                 
 
@@ -519,6 +526,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=3)
                 if not success:
                     # Optionally handle the failure
+                    browser.close()
                     return False, message
                 else:
                     # Add random sleep if needed
