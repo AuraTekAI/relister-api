@@ -266,7 +266,7 @@ def handle_make_field(page, make_value):
                 input_element.clear()
                 human_like_typing(input_element, make_value)
                 logging.info("Filled 'Make' via input: %s", make_value)
-                random_sleep(1, 2)
+                random_sleep(2, 3)
                 return True
         except Exception as e:
             logging.warning(f"Failed input selector {selector}: {e}")
@@ -290,7 +290,7 @@ def handle_make_field(page, make_value):
                 if dropdown.is_visible():
                     dropdown.scroll_into_view_if_needed()
                     dropdown.click()
-                    random_sleep(1, 2)
+                    random_sleep(2, 3)
 
                     # Try to select option
                     option_selectors = [
@@ -305,7 +305,7 @@ def handle_make_field(page, make_value):
                                 option.scroll_into_view_if_needed()
                                 option.click()
                                 logging.info(f"Selected 'Make' from dropdown: {display_make}")
-                                random_sleep(1, 2)
+                                random_sleep(2,3)
                                 return True
                         except Exception as e:
                             logging.warning(f"Failed option selector {option_selector}: {e}")
@@ -328,7 +328,40 @@ def handle_make_field(page, make_value):
     return False, "Failed to locate or interact with 'Make' field"
 
 
+def verify_uploaded_images_and_check_limit(page, max_images_threshold):
+    try:
+        logging.info("Checking for uploaded image elements...")
 
+        # Optimized selector targeting Facebook CDN image uploads
+        selector = "div.x1n2onr6.xh8yej3 img[src^='https://scontent']"
+
+        # Wait for any uploaded image to appear
+        page.wait_for_selector(selector, timeout=10000)
+        images = page.query_selector_all(selector)
+        logging.info(f"Found total image elements: {len(images)}")
+
+        unique_valid_urls = set()
+
+        for idx, img in enumerate(images):
+            src = img.get_attribute("src")
+            is_visible = img.is_visible()
+            is_loaded = page.evaluate("(img) => img.complete && img.naturalWidth > 0", img)
+
+            if is_visible and is_loaded and src:
+                unique_valid_urls.add(src)
+
+        logging.info(f"Unique, visible & loaded image URLs: {len(unique_valid_urls)}")
+
+        if len(unique_valid_urls) >= max_images_threshold:
+            logging.info(f" {len(unique_valid_urls)} images found (threshold: {max_images_threshold})")
+            return True
+        else:
+            logging.info(f"FAILED: {len(unique_valid_urls)} images found (threshold: {max_images_threshold})")
+            return False
+
+    except PlaywrightTimeoutError:
+        logging.info("Timeout: No uploaded image found")
+        return False
 
 def create_marketplace_listing(vehicle_listing,session_cookie):
     """Create a new listing on Facebook Marketplace with human-like interactions."""
@@ -386,7 +419,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select vehicle type: {result[1]}")
                 return False, result[1]
-            random_sleep(3, 4)
+            random_sleep(3, 5)
 
             index = 0
             if vehicle_listing.images:
@@ -414,13 +447,14 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
                     # Upload images
                     image_input = page.locator("//input[@type='file']").first
+                    random_sleep(3, 5)
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(7, 8)  # Random delay after uploading images
+                    random_sleep(5, 6)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 return False, "No images found."
-            random_sleep(3, 4)
+            random_sleep(5, 8)
             
 
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
@@ -429,8 +463,9 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
             else:
                 logging.info(f"Failed to select Year: {result[1]}")
                 return False, result[1]
-
+            random_sleep(3, 5)
             handle_make_field(page, vehicle_listing.make)
+            random_sleep(3, 5)
 
             # Input fields with their selectors
             input_fields = {
@@ -467,19 +502,27 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     selectors,
                     use_suggestion=(field in [ "Model", "Location"]),
                     use_tab=(field in ["Price", "Description"])
+
                 )
+            
+            result = verify_uploaded_images_and_check_limit(page, max_images_threshold=(len(vehicle_listing.images)//2) + 1)
+            if result:
+                logging.info("Images verified and uploaded successfully.")
+            else:
+                logging.info("Images failed to upload.")
+                return False, "Images failed to upload."
                 
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                random_sleep(10,15)
+                random_sleep(8,10)
                 success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=3)
                 if not success:
                     # Optionally handle the failure
                     return False, message
                 else:
                     # Add random sleep if needed
-                    random_sleep(10, 15)
+                    random_sleep(8, 10)
 
             # Close browser
             browser.close()
@@ -733,7 +776,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     continue
 
             browser.close()
-            return 0, "No matching listing found"
+            return 2, "No matching listing found"
 
     except Exception as e:
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")

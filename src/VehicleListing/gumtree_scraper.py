@@ -78,9 +78,9 @@ def get_listings(url,user,import_url_instance):
             if dict_data["Make, Model"]:
                 parts = dict_data["Make, Model"].split(" ", 1)  # Split into two parts at the first space
                 make = parts[0]  # First part
-                model = parts[1] if len(parts) > 1 else ""  # Remaining part
+                model = ' '.join(title.split(' ')[2:])
             else:
-                model=dict_data["Model"]
+                model=' '.join(title.split(' ')[2:])
                 make=dict_data["Make"]
             odo_meter=dict_data["Odometer"]
             mileage=int(''.join(filter(str.isdigit, odo_meter)))                
@@ -159,12 +159,13 @@ def get_gumtree_listing_details(listing_id):
 
         # Extract and structure data
         category_info = {item['name']: item['value'] for item in response_data.get("categoryInfo", [])}
+        title=response_data["adHeadingData"]["title"]
         if category_info.get("Make, Model"):
             parts = category_info.get("Make, Model").split(" ", 1)  # Split into two parts at the first space
             make = parts[0]  # First part
-            model = parts[1] if len(parts) > 1 else ""  # Remaining part
+            model = ' '.join(title.split(' ')[2:])
         else:
-            model=category_info.get("Model")
+            model=' '.join(title.split(' ')[2:])
             make=category_info.get("Make") 
         description=response_data.get("description")
         enhanced_description=format_car_description(description) 

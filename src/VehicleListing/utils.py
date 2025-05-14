@@ -5,9 +5,11 @@ from relister.settings import EMAIL_HOST_USER
 import time
 import random
 from django.utils import timezone
+from datetime import timedelta
 from .models import FacebookUserCredentials, RelistingFacebooklisting
 from .tasks import create_marketplace_listing
 from relister.settings import MAX_RETRIES_ATTEMPTS
+from accounts.models import User
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -18,15 +20,14 @@ def send_status_reminder_email(facebook_user):
     
     # Create HTML invoice (use a template if desired)
     if facebook_user.status_reminder == False:
-        html_invoice = render_to_string("listings/status_reminder_template.html", {
+        html_content = render_to_string("listings/facebook_session_status_reminder.html", {
             "user_name": facebook_user.user.contact_person_name,
         })
-        logger.info(" - HTML invoice rendered.")
 
         # Send email
         email = EmailMessage(
             subject=f"Reminder: Facebook login session",
-            body=html_invoice,
+            body=html_content,
             from_email=EMAIL_HOST_USER,
             to=[facebook_user.user.email]
         )
@@ -140,3 +141,10 @@ def update_credentials_success(credentials):
     credentials.status = True
     credentials.retry_count = 0
     credentials.save()
+
+def should_create_listing(user):
+    """Check if user is eligible to create a new listing based on time."""
+    user=User.objects.filter(id=user.id).first()
+    if not user.last_facebook_listing_time:
+        return True
+    return timezone.now() - user.last_facebook_listing_time >= timedelta(minutes=10)
