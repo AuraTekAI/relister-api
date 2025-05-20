@@ -642,32 +642,27 @@ def extract_listings_with_status(text):
 
     # Define fallback regex patterns from most specific to most generic
     patterns = [
-        # Pattern 1: With tip
-        (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
-        # Pattern 2: Without tip
-        (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
-        # Pattern 3: AU$ version (fallback)
+        # Pattern 1: AU$ version (fallback)
         (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
+        # Pattern 2: With tip
+        (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
+        # Pattern 3: Without tip
+        (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True)
     ]
 
     for pattern, convert_date in patterns:
         matches = re.findall(pattern, text, re.DOTALL)
         if matches:
             for match in matches:
-                if len(match) == 4 and 'Mark as' not in match[3]:
-                    # Old pattern where status needs to be inferred
-                    title, price, date, tail = match
-                    tail_clean = tail.lower().replace('\xa0', ' ')
-                    if "mark as sold" in tail_clean:
-                        status = "Mark as sold"
-                    elif "mark as available" in tail_clean:
-                        status = "Mark as available"
-                    else:
-                        status = None
+                # Old pattern where status needs to be inferred
+                title, price, date, tail = match
+                tail_clean = tail.lower().replace('\xa0', ' ')
+                if "mark as sold" in tail_clean:
+                    status = "Mark as sold"
+                elif "mark as available" in tail_clean:
+                    status = "Mark as available"
                 else:
-                    title, price, date, status = match
-                    status = status.strip()
-
+                    status = None
                 # Format date to DD/MM if needed
                 if convert_date:
                     month, day = date.strip().split('/')
