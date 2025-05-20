@@ -156,7 +156,7 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = "en-us"
 
 USE_I18N = True
-TIME_ZONE = 'America/Chicago'
+TIME_ZONE = 'Australia/Perth'
 USE_TZ = True
 
 ZENROWS_API_KEY = env('ZENROWS_API_KEY')

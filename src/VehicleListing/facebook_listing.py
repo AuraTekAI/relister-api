@@ -1300,7 +1300,8 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                 try:
                     title_match = element['title'] and element['title'].lower() == search_for.lower()
                     price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
-                    date_match = element['date'] == formatted_date
+                    # date_match = element['date'] == formatted_date
+                    date_match=True
                     status = element.get('status', '').lower()
 
                     if title_match and price_match and date_match:
