@@ -352,7 +352,7 @@ def verify_uploaded_images_and_check_limit(page, max_images_threshold):
 
         logging.info(f"Unique, visible & loaded image URLs: {len(unique_valid_urls)}")
 
-        if len(unique_valid_urls) >= max_images_threshold:
+        if len(unique_valid_urls) == max_images_threshold:
             logging.info(f" {len(unique_valid_urls)} images found (threshold: {max_images_threshold})")
             return True
         else:
@@ -451,16 +451,15 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
                     # Upload images
                     image_input = page.locator("//input[@type='file']").first
-                    random_sleep(3, 5)
+                    random_sleep(2,3)
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(5, 6)  # Random delay after uploading images
+                    random_sleep(2,3)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 browser.close()
                 return False, "No images found."
-            random_sleep(5, 8)
-            
+            random_sleep(2,3)
 
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
             if result[0]:
@@ -511,7 +510,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
                 )
             
-            result = verify_uploaded_images_and_check_limit(page, max_images_threshold=(len(vehicle_listing.images)//2) + 1)
+            result = verify_uploaded_images_and_check_limit(page, index)
             if result:
                 logging.info("Images verified and uploaded successfully.")
             else:
@@ -577,32 +576,110 @@ def handle_cookie_consent(page):
         logging.warning(f"No cookie banner found or already accepted: {e}")
 
 
+# def extract_listings_with_status(text):
+#     """
+#     Extracts structured listings including title, price, date, and status.
+#     Returns a list of dicts: title, price, listing_date, status.
+#     """
+#     listing_pattern = r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))'
+#     matches = re.findall(listing_pattern, text, re.DOTALL)
+
+#     listings = []
+#     if not matches:  # If no matches found, try a new pattern
+#         # Pattern to match title, price, listing date, and trailing status content
+#         pattern = r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)'
+#         matches = re.findall(pattern, text, re.DOTALL)
+#         if not matches:
+#             pattern = r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)'
+#             matches = re.findall(pattern, text, re.DOTALL)
+
+#             listings = []
+#             for title, price, date, status in matches:
+#                 listings.append({
+#                     'title': title.strip(),
+#                     'price': price.replace(',', ''),
+#                     'date': date,
+#                     'status': status
+#                 })
+#         else:
+#             listings = []
+#             for title, price, date, status in matches:
+#                 listings.append({
+#                     'title': title.strip(),
+#                     'price': price.replace(',', ''),
+#                     'date': date,
+#                     'status': status
+#                 })
+        
+#     else:
+#         for title, price, listing_date, tail in matches:
+#             title_clean = title.strip().replace('\xa0', ' ')
+#             tail_clean = tail.lower().replace('\xa0', ' ')
+
+#             if "mark as sold" in tail_clean:
+#                 status = "Mark as sold"
+#             elif "mark as available" in tail_clean:
+#                 status = "Mark as available"
+#             else:
+#                 status = None
+
+#             listings.append({
+#                 'title': title_clean,
+#                 'price': "".join(filter(str.isdigit, price)),
+#                 'date': listing_date,
+#                 'status': status
+#             })
+
+#     return listings
+
+
 def extract_listings_with_status(text):
     """
     Extracts structured listings including title, price, date, and status.
-    Returns a list of dicts: title, price, listing_date, status.
+    Returns a list of dicts: title, price, listing_date (in DD/MM), status.
     """
-    listing_pattern = r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))'
-    matches = re.findall(listing_pattern, text, re.DOTALL)
-
     listings = []
-    for title, price, listing_date, tail in matches:
-        title_clean = title.strip().replace('\xa0', ' ')
-        tail_clean = tail.lower().replace('\xa0', ' ')
 
-        if "mark as sold" in tail_clean:
-            status = "Mark as sold"
-        elif "mark as available" in tail_clean:
-            status = "Mark as available"
-        else:
-            status = None
+    # Define fallback regex patterns from most specific to most generic
+    patterns = [
+        # Pattern 1: With tip
+        (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
+        # Pattern 2: Without tip
+        (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
+        # Pattern 3: AU$ version (fallback)
+        (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
+    ]
 
-        listings.append({
-            'title': title_clean,
-            'price': "".join(filter(str.isdigit, price)),
-            'listing_date': listing_date,
-            'status': status
-        })
+    for pattern, convert_date in patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            for match in matches:
+                if len(match) == 4 and 'Mark as' not in match[3]:
+                    # Old pattern where status needs to be inferred
+                    title, price, date, tail = match
+                    tail_clean = tail.lower().replace('\xa0', ' ')
+                    if "mark as sold" in tail_clean:
+                        status = "Mark as sold"
+                    elif "mark as available" in tail_clean:
+                        status = "Mark as available"
+                    else:
+                        status = None
+                else:
+                    title, price, date, status = match
+                    status = status.strip()
+
+                # Format date to DD/MM if needed
+                if convert_date:
+                    month, day = date.strip().split('/')
+                    date = f"{day.zfill(2)}/{month.zfill(2)}"
+
+                listings.append({
+                    'title': title.strip().replace('\xa0', ' '),
+                    'price': re.sub(r'[^\d]', '', price),
+                    'date': date,
+                    'status': status
+                })
+            break  # Stop on first successful match
 
     return listings
 
@@ -626,6 +703,8 @@ def get_elements_with_text(search_for, page):
             title = title_el.text_content().strip() if title_el else None
 
             price_el = parent.query_selector("span:has-text('AU$')")
+            if not price_el:
+                price_el = parent.query_selector("span:has-text('A$')")
             price = "".join(filter(str.isdigit, price_el.inner_text())) if price_el else None
 
             if title and price and price_el:
@@ -644,31 +723,26 @@ def get_elements_with_text(search_for, page):
 
     filter_listings_with_date = []
     try:
-        # active_el = page.query_selector("span:has-text('Active')")
-        # print(active_el.text_content())
-        # if active_el:
-        #     filter_listings_with_date = extract_listings_with_status(active_el.text_content())
-
         sold_el = page.query_selector("span:has-text('Listed on')")
-        # print(sold_el.text_content())
         if sold_el:
+            logging.info(f"sold_el: {sold_el.text_content()}")
             filter_listings_with_date += extract_listings_with_status(sold_el.text_content())
-        # date=page.query_selector("span:has-text('Listed on')")
-        # print(date.text_content())
 
     except Exception as e:
         logging.error(f"Error extracting listing metadata: {e}")
+
+    # Corrected logging statement
+    logging.info(f"filter_listings_with_date: {filter_listings_with_date}")
 
     # Match and enrich
     for search in search_listings:
         for record in filter_listings_with_date:
             if (search['title'].lower() == record['title'].lower()
                 and search['price'] == record['price']):
-                search['date'] = record['listing_date']
+                search['date'] = record['date']
                 search['status'] = record['status']
                 break
-    print("search_listings",search_listings)
-    print("filter_listings_with_date",filter_listings_with_date)
+    logging.info(f"search_listings: {search_listings}")
     return search_listings
 
 def perform_search_and_delete(search_for, listing_price, listing_date, session_cookie):
@@ -1149,3 +1223,166 @@ def extract_about_the_vehicle(page, listing):
 
     except Exception as e:
         logging.error(f"Error extracting 'About the vehicle': {e}")
+
+
+
+def verify_facebook_listing_images_upload(search_for, listing_price, listing_date, session_cookie):
+    """Perform search and delete listing if image is not uploaded with retry and timeout handling"""
+
+    def handle_post_delete_flow(page, browser):
+        try:
+            not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+            if not_answer_button and not_answer_button.is_visible():
+                not_answer_button.click()
+                random_sleep(2, 3)
+            else:
+                logging.warning("'I'd rather not answer' button not found.")
+                return 0, "'I'd rather not answer' button not found, but successfully deleted the product"
+
+            next_button = page.locator("//*[text()='Next']").first
+            if next_button and next_button.is_visible():
+                next_button.click()
+                random_sleep(2, 3)
+                logging.info("Process completed successfully.")
+                return 0, "Successfully deleted the listing"
+            else:
+                logging.warning("'Next' button not found.")
+                return 0, "'Next' button not found, but successfully deleted the product"
+        finally:
+            browser.close()
+
+    try:
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--start-maximized"])
+            context = browser.new_context(storage_state=session_cookie, viewport={"width": 1920, "height": 1080})
+            page = context.new_page()
+            try:
+                page.goto("https://www.facebook.com/marketplace/you/selling", timeout=30000)
+            except Exception as e:
+                logging.error(f"Timeout error navigating to Facebook Marketplace: {e}")
+                browser.close()
+                return 4, "Timeout error navigating to Facebook Marketplace"
+            logging.info("Navigated to Facebook Marketplace vehicle listing page.")
+            random_sleep(3, 5)
+
+            if not search_for.strip():
+                browser.close()
+                return 4, "Search value is required"
+
+            input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+            input_element = page.locator(input_locator).first
+
+            if not input_element.is_visible():
+                browser.close()
+                return 4, "Search input not found"
+
+            input_element.click()
+            input_element.fill(search_for)
+            page.wait_for_timeout(3000)
+
+            formatted_date = listing_date.strftime("%d/%m")
+            matches_found = get_count_of_elements_with_text(search_for, page)
+
+            if matches_found == 0:
+                if page.locator("text='We didn't find anything'").is_visible():
+                    logging.info("Detected 'We didn't find anything'")
+                    browser.close()
+                    return 2, "didnt_find_anything_displayed"
+                else:
+                    browser.close()
+                    return 2, "No matching listing found"
+
+            logging.info(f"Found {matches_found} match(es) for '{search_for}'")
+            elements = get_elements_with_text(search_for, page)
+
+            for element in elements:
+                try:
+                    title_match = element['title'] and element['title'].lower() == search_for.lower()
+                    price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
+                    date_match = element['date'] == formatted_date
+                    status = element.get('status', '').lower()
+
+                    if title_match and price_match and date_match:
+                        if status == "mark as sold":
+                            logging.info(f"Deleting listing: {element['title']} - {element['price']}")
+                            price_element = element.get('price_element')
+                            if price_element and price_element.is_visible():
+                                price_element.click()
+                                random_sleep(3, 5)
+                                if is_image_uploaded(page):
+                                    browser.close()
+                                    return 1, "Image is uploaded and visible"
+                                else:
+                                    logging.info("Image is not uploaded")
+
+                                    success, message = find_and_click_delete_button(page)
+                                    if not success:
+                                        browser.close()
+                                        return 4, message
+
+                                    delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                                    if delete_buttons:
+                                        target_button = delete_buttons[2]
+                                        if target_button.is_visible():
+                                            target_button.click()
+                                            random_sleep(3, 4)
+                                            return handle_post_delete_flow(page, browser)
+                                    logging.error("Delete button not found or not visible.")
+                                    browser.close()
+                                    return 4, "Delete button not found"
+                            else:
+                                browser.close()
+                                return 4, "Price element not found or not visible"
+
+                        elif status == "mark as available":
+                            logging.info("Listing is already marked as available.")
+                            browser.close()
+                            return 3, "This listing is already marked as available"
+                        else:
+                            logging.info(f"Got unexpected listing status: {status}")
+                            browser.close()
+                            return 4, "Got unexpected listing status"
+                    else:
+                        logging.info(f"Listing does not match: {element['title']} - {element['price']} - {element['date']}")
+                        continue
+                except Exception as e:
+                    logging.error(f"Error evaluating listing match: {e}")
+                    continue
+
+            browser.close()
+            return 2, "No matching listing found"
+
+    except Exception as e:
+        logging.error(f"Unhandled error in perform_search_and_delete: {e}")
+        if 'browser' in locals():
+            browser.close()
+        return 4, str(e)
+
+def is_image_uploaded(page):
+    """
+    Check if an image is uploaded by verifying the presence of the image element.
+    """
+    try:
+        # Define the selector for the image element
+        image_selector = "div.xpyat2d.x1exxlbk img[src^='https://scontent']"
+        
+        # Wait for the image element to be visible
+        logging.info("Waiting for image element to be visible...")
+        image_element = page.wait_for_selector(image_selector, timeout=10000, state="visible")
+        
+        # Check if the image element is visible
+        if image_element:
+            # Get the image src attribute
+            image_src = image_element.get_attribute("src")
+            logging.info(f"Image is uploaded and visible. Image URL: {image_src}")
+            return True
+        else:
+            logging.info("Image is not uploaded.")
+            return False
+    except PlaywrightTimeoutError:
+        logging.warning("Timeout: Image element not found within 10 seconds.")
+        return False
+    except Exception as e:
+        logging.error(f"Error checking image upload status: {e}")
+        return False

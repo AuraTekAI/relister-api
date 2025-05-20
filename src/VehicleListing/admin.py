@@ -20,7 +20,7 @@ class ListingUrlAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','created_at', 'updated_at')
+    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','has_images','created_at', 'updated_at')
     search_fields = ('user__email', 'year', 'make', 'model')
     list_filter = ('user',)
 

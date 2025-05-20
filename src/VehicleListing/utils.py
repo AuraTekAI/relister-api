@@ -45,9 +45,12 @@ def send_status_reminder_email(facebook_user):
 def create_or_update_relisting_entry(listing, user, relisting=None):
     now = timezone.now()
     if not relisting:
+        listing.has_images = False
         listing.is_relist = True
         listing.save()
     else:
+        relisting.listing.has_images = False
+        relisting.listing.save()
         relisting.updated_at = now
         relisting.last_relisting_status = True
         relisting.save()
@@ -127,6 +130,8 @@ def retry_failed_relistings(seven_days_ago):
         if listing_created:
             update_credentials_success(credentials)
             relisting.status = "completed"
+            relisting.listing.has_images = False
+            relisting.listing.save()
             logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
         else:
             relisting.status = "failed"

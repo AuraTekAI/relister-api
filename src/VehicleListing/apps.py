@@ -61,6 +61,12 @@ class VehiclelistingConfig(AppConfig):
                     "interval": None,
                     "crontab": crontab_map["last_day"],
                 },
+                {
+                    "name": "Check_Images_Upload_Status",
+                    "task": "VehicleListing.tasks.check_images_upload_status",
+                    "interval": interval_map["daily"],
+                    "crontab": None,
+                },
             ]
 
             # Create or update each task
