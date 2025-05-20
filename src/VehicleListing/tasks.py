@@ -1,6 +1,6 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing
+from VehicleListing.facebook_listing import create_marketplace_listing, verify_facebook_listing_images_upload
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
@@ -570,3 +570,61 @@ def generate_and_send_monthly_invoices(self):
     except Exception as e:
         logger.exception(f"Error processing invoice for user {current_user.email}: {str(e)}")
     logger.info("Monthly invoice generation task completed.")
+
+
+
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def check_images_upload_status(self):
+    """Check images upload status"""
+    logger.info("Checking images upload status against listings")
+    vehicle_listings = list(VehicleListing.objects.filter(status="completeds", is_relist=False, has_images=False))
+    relistings = list(RelistingFacebooklisting.objects.filter(
+        listing__status="completed", listing__is_relist=True,
+        last_relisting_status=False,
+        status="completed", listing__has_images=False
+    ))
+    if vehicle_listings or relistings:
+        for item in vehicle_listings + relistings:
+            user = item.user if isinstance(item, VehicleListing) else item.user
+            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
+            credentials = FacebookUserCredentials.objects.filter(user=user).first()
+            if not credentials or not credentials.session_cookie or not credentials.status or credentials.session_cookie == {}:
+                if credentials:
+                    credentials.status = False
+                    credentials.save()
+                    send_status_reminder_email(credentials)
+                logger.warning(f"No valid Facebook credentials for user {user.email}")
+                continue
+            logger.info(f"Credentials found for user {user.email}")
+            search_query = f"{item.year} {item.make} {item.model}" if isinstance(item, VehicleListing) else f"{item.listing.year} {item.listing.make} {item.listing.model}"
+            logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
+            time.sleep(random.randint(15, 20))
+            response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.updated_at if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
+            if response[0] == 1:  #Image upload successful
+                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
+                item.has_images = True
+                item.save()
+            elif response[0] == 2: #Image upload failed
+                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has not published yet")
+                logger.info(f"Error: {response[1]}")
+                logger.info("retring attempt to check images upload status")
+                continue
+            elif response[0] == 3: #Image upload successful
+                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
+                logger.info(f"Error: {response[1]}")
+                item.status = "sold"
+                item.save()
+                continue
+            elif response[0] == 4: #Failed to check images upload status    
+                logger.info("failed to check images upload status. need to retry...")
+                logger.info(f"Error: {response[1]}")
+                continue
+            else: #Image upload failed
+                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
+                logger.info(f"Error: {response[1]}")
+                item.status = "failed"
+                item.save()
+                continue
+    else:
+        logger.info("No vehicle listings or relistings found for checking images upload status")
