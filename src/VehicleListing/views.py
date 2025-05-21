@@ -17,7 +17,7 @@ import time
 import random   
 from datetime import datetime, timedelta
 from queue import Queue
-from relister.settings import MAX_RETRIES_ATTEMPTS
+from django.conf import settings
 
 # dictionary which hold queues for each user
 user_queues = {}
@@ -138,7 +138,7 @@ def import_url_from_gumtree(request):
                 import_url_instance.delete()
                 return JsonResponse({'error': 'Failed to extract required Facebook listing details. Please verify and save your Facebook login session, check the URL, and try again.'}, status=200)
             else:
-                if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
                     credentials.retry_count += 1
                     credentials.save()
                     import_url_instance.delete()
@@ -387,7 +387,7 @@ def create_facebook_listing(vehicle_listing):
         if credentials and credentials.session_cookie != {} and credentials.status:
             already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing,).first()
             if not already_listed:
-                time.sleep(random.randint(20,30))
+                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
                 if listing_created:
                     FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
@@ -399,7 +399,7 @@ def create_facebook_listing(vehicle_listing):
                     vehicle_listing.save()
                     return True, "Listing created successfully"
                 else:
-                    if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                    if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
                         credentials.retry_count += 1
                         credentials.save()
                         vehicle_listing.status="failed"
@@ -508,7 +508,7 @@ def facebook_profile_listings(request):
             thread.start()
             return JsonResponse({'message': 'Profile Listings are being processed'}, status=200)
         else:
-            if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+            if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
                 credentials.retry_count += 1
                 credentials.save()
                 return JsonResponse({'error': 'Failed to get listings'}, status=200)
@@ -532,7 +532,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         incoming_list_ids.add(str(current_listing["id"]))
         if already_listed:
             continue
-        time.sleep(random.uniform(10,20))
+        time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         # Get listings using the function
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
@@ -696,7 +696,7 @@ def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
             price=current_listing[1]
             listing_date=current_listing[2]
             perform_search_and_delete(search_query,price,listing_date,session_cookie)
-            time.sleep(random.uniform(20,30))
+            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_montly_listings_report(request):

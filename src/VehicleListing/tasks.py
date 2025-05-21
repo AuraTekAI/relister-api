@@ -14,6 +14,7 @@ from django.template.loader import render_to_string
 from .utils import send_status_reminder_email,mark_listing_sold,retry_failed_relistings,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS
 from openpyxl import Workbook
+from django.conf import settings
 import uuid
 import time
 import random
@@ -111,7 +112,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 
         try:
             logger.info(f"Processing pending listing: {user.email} - {listing.year} {listing.make} {listing.model}")
-            time.sleep(random.randint(2, 5))
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
 
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
 
@@ -129,7 +130,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
 
-            time.sleep(random.randint(20, 30))
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
 
             if not should_create_listing(user):
                 logger.info(f"10-minute cooldown for user {user.email}")
@@ -204,7 +205,7 @@ def relist_facebook_marketplace_listing_task(self):
             relisting_date=listing.updated_at
 
         logger.info(f"Processing relisting for user {user.email}")
-        time.sleep(random.randint(2, 5))
+        time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
         credentials = FacebookUserCredentials.objects.filter(user=user).first()
         if not credentials or not credentials.session_cookie or not credentials.status or credentials.session_cookie == {}:
             if credentials:
@@ -216,13 +217,13 @@ def relist_facebook_marketplace_listing_task(self):
         logger.info(f"Credentials found for user {user.email}")
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query}")
-        time.sleep(random.randint(20,30))
+        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         response = perform_search_and_delete(search_query,relisting_price, relisting_date,credentials.session_cookie)
 
         if response[0] == 1:  # Deletion successful
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            time.sleep(random.randint(20,30))
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
             if listing_created:
@@ -258,7 +259,7 @@ def create_failed_facebook_marketplace_listing_task(self):
 
         try:
             logger.info(f"Processing failed listing: {user.email} - {listing.year} {listing.make} {listing.model}")
-            time.sleep(random.randint(2, 5))
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
 
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
 
@@ -276,7 +277,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
 
-            time.sleep(random.randint(20, 30))
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
 
             if not should_create_listing(user):
                 logger.info(f"10-minute cooldown for user {user.email}")
@@ -318,7 +319,7 @@ def check_gumtree_profile_relisting_task(self):
     gumtree_profile_listings = GumtreeProfileListing.objects.all()
     if gumtree_profile_listings:
         for gumtree_profile_listing in gumtree_profile_listings:
-            time.sleep(random.randint(1,3))
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
             logger.info(f"Checking gumtree profile relisting for the user {gumtree_profile_listing.user.email}")
             result, message = get_gumtree_listings(gumtree_profile_listing.url,gumtree_profile_listing.user)
             if result:
@@ -332,7 +333,7 @@ def check_facebook_profile_relisting_task(self):
     facebook_profile_listings = FacebookProfileListing.objects.all()
     if facebook_profile_listings:
         for facebook_profile_listing_instance in facebook_profile_listings:
-            time.sleep(random.randint(1,3))
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
             credentials = FacebookUserCredentials.objects.filter(user=facebook_profile_listing_instance.user).first()
             if credentials and credentials.session_cookie != {} and credentials.status:
                 success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url,credentials.session_cookie)
@@ -566,7 +567,7 @@ def generate_and_send_monthly_invoices(self):
             email.attach(f"Invoice_{invoice_id}.xlsx", file_stream.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             email.send()
             logger.info(f"Invoice #{invoice_id} sent to {current_user.email}")
-            time.sleep(random.randint(2,3))
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
     except Exception as e:
         logger.exception(f"Error processing invoice for user {current_user.email}: {str(e)}")
     logger.info("Monthly invoice generation task completed.")
@@ -578,6 +579,7 @@ def generate_and_send_monthly_invoices(self):
 def check_images_upload_status(self):
     """Check images upload status"""
     logger.info("Checking images upload status against listings")
+    VehicleListing.objects.filter(status="completed", has_images=False).update(has_images=True)
     vehicle_listings = list(VehicleListing.objects.filter(status="completed", is_relist=False, has_images=False))
     relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed", listing__is_relist=True,
@@ -599,7 +601,7 @@ def check_images_upload_status(self):
             logger.info(f"Credentials found for user {user.email}")
             search_query = f"{item.year} {item.make} {item.model}" if isinstance(item, VehicleListing) else f"{item.listing.year} {item.listing.make} {item.listing.model}"
             logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
-            time.sleep(random.randint(15, 20))
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.updated_at if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
             if response[0] == 1:  #Image upload successful
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
@@ -619,6 +621,11 @@ def check_images_upload_status(self):
             elif response[0] == 4: #Failed to check images upload status    
                 logger.info("failed to check images upload status. need to retry...")
                 logger.info(f"Error: {response[1]}")
+                continue
+            elif response[0] == 5: #facebook login failed
+                logger.info(f"Facebook login failed for user {user.email}. please check your credentials")
+                logger.info(f"Error: {response[1]}")
+                handle_retry_or_disable_credentials(credentials, user)
                 continue
             else: #Image upload failed
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
