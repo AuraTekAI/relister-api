@@ -622,6 +622,11 @@ def check_images_upload_status(self):
                 logger.info("failed to check images upload status. need to retry...")
                 logger.info(f"Error: {response[1]}")
                 continue
+            elif response[0] == 5: #facebook login failed
+                logger.info(f"Facebook login failed for user {user.email}. please check your credentials")
+                logger.info(f"Error: {response[1]}")
+                handle_retry_or_disable_credentials(credentials, user)
+                continue
             else: #Image upload failed
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
                 logger.info(f"Error: {response[1]}")

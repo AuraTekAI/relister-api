@@ -1256,7 +1256,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
             except Exception as e:
                 logging.error(f"Timeout error navigating to Facebook Marketplace: {e}")
                 browser.close()
-                return 4, "Timeout error navigating to Facebook Marketplace"
+                return 5, "Timeout error navigating to Facebook Marketplace"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
             random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
 
@@ -1269,7 +1269,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
 
             if not input_element.is_visible():
                 browser.close()
-                return 4, "Search input not found"
+                return 5, "Search input not found"
 
             input_element.click()
             input_element.fill(search_for)
@@ -1351,7 +1351,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")
         if 'browser' in locals():
             browser.close()
-        return 4, str(e)
+        return 5, str(e)
 
 def is_image_uploaded(page):
     """
