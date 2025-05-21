@@ -579,7 +579,6 @@ def generate_and_send_monthly_invoices(self):
 def check_images_upload_status(self):
     """Check images upload status"""
     logger.info("Checking images upload status against listings")
-    VehicleListing.objects.filter(status="completed", has_images=False).update(has_images=True)
     vehicle_listings = list(VehicleListing.objects.filter(status="completed", is_relist=False, has_images=False))
     relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed", listing__is_relist=True,
