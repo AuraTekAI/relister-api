@@ -6,12 +6,13 @@ import os
 import requests
 from relister.settings import IMAGES_DIR
 import re
+from django.conf import settings
 
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
     for char in text:
-        element.type(char, delay=random.uniform(2, 5))  
+        element.type(char, delay=random.uniform(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION))  
         time.sleep(random.uniform(0.0005, 0.005))
 
 def random_sleep(min_seconds, max_seconds):
@@ -48,13 +49,12 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
     if use_tab:
         input_element.press("Tab")
 
-    random_sleep(1, 2)  # Random delay after filling the field
+    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Random delay after filling the field
     return True
-
 
 def select_dropdown_option(page, field_name, option_text):
     """Selects a dropdown option with retries, visibility checks, and logging."""
-    max_retries = 3
+    max_retries = settings.MAX_RETRIES_ATTEMPTS
     logging.info(f"Selecting '{field_name}' with option '{option_text}'...")
 
     dropdown_selectors = [
@@ -84,7 +84,7 @@ def select_dropdown_option(page, field_name, option_text):
                     dropdown.scroll_into_view_if_needed()
                     dropdown.click()
                     logging.debug(f"Clicked dropdown using selector: {selector}")
-                    random_sleep(1, 2)
+                    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                     break
                 except Exception as e:
                     logging.debug(f"Dropdown selector failed: {selector} => {e}")
@@ -100,7 +100,7 @@ def select_dropdown_option(page, field_name, option_text):
                     option.scroll_into_view_if_needed()
                     option.click()
                     logging.info(f"Option '{option_text}' selected for field '{field_name}'.")
-                    random_sleep(1, 2)
+                    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                     return True, f"{field_name} = {option_text} selected successfully"
                 except Exception as e:
                     logging.debug(f"Option selector failed: {option_selector} => {e}")
@@ -110,7 +110,7 @@ def select_dropdown_option(page, field_name, option_text):
             dropdown.fill(option_text)
             dropdown.press("Enter")
             logging.info(f"Filled and submitted '{option_text}' for field '{field_name}'.")
-            random_sleep(1, 2)
+            random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             return True, f"{field_name} = {option_text} entered manually"
 
         except PlaywrightTimeoutError as te:
@@ -119,7 +119,7 @@ def select_dropdown_option(page, field_name, option_text):
             logging.error(f"Error on attempt {attempt} for field '{field_name}': {e}")
 
         if attempt < max_retries:
-            wait_time = random.uniform(1, 3)
+            wait_time = random.uniform(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             logging.info(f"Retrying after {wait_time:.2f}s...")
             time.sleep(wait_time)
         else:
@@ -141,14 +141,14 @@ def select_vehicle_type(page):
             vehicle_dropdown.scroll_into_view_if_needed()
             vehicle_dropdown.click()
             logging.debug("Clicked on vehicle type dropdown.")
-            random_sleep(0.5, 1)
+            random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             car_option = page.locator("//div[@role='option'][contains(.,'Other')]").first
             car_option.wait_for(state="visible", timeout=7000)
             car_option.scroll_into_view_if_needed()
             car_option.click()
             logging.info("Vehicle type (Other) selected successfully.")
-            random_sleep(1, 2)
+            random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             return True, "Other"
 
@@ -158,7 +158,7 @@ def select_vehicle_type(page):
             logging.error(f"Error on attempt {attempt}: {e}")
 
         if attempt < max_retries:
-            wait_time = random.uniform(1, 3)
+            wait_time = random.uniform(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             logging.info(f"Retrying after {wait_time:.2f} seconds...")
             time.sleep(wait_time)
         else:
@@ -179,7 +179,7 @@ def handle_login_info_modal(page):
                 if not_now_button:
                     not_now_button.click(force=True)
                     logging.info("Clicked 'Not now' button")
-                    random_sleep(1, 2)
+                    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             except Exception as e:
                 logging.warning(f"Failed to click 'Not now': {e}")
                 # Try close button as fallback
@@ -187,7 +187,7 @@ def handle_login_info_modal(page):
                     close_button = page.locator("div[aria-label='Close'][role='button']").first
                     close_button.click(force=True)
                     logging.info("Clicked close button")
-                    random_sleep(1, 2)
+                    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 except Exception as e:
                     logging.warning(f"Failed to click close button: {e}")
     except Exception:
@@ -266,7 +266,7 @@ def handle_make_field(page, make_value):
                 input_element.clear()
                 human_like_typing(input_element, make_value)
                 logging.info("Filled 'Make' via input: %s", make_value)
-                random_sleep(2, 3)
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 return True
         except Exception as e:
             logging.warning(f"Failed input selector {selector}: {e}")
@@ -290,7 +290,7 @@ def handle_make_field(page, make_value):
                 if dropdown.is_visible():
                     dropdown.scroll_into_view_if_needed()
                     dropdown.click()
-                    random_sleep(2, 3)
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
                     # Try to select option
                     option_selectors = [
@@ -305,7 +305,7 @@ def handle_make_field(page, make_value):
                                 option.scroll_into_view_if_needed()
                                 option.click()
                                 logging.info(f"Selected 'Make' from dropdown: {display_make}")
-                                random_sleep(2,3)
+                                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                 return True
                         except Exception as e:
                             logging.warning(f"Failed option selector {option_selector}: {e}")
@@ -315,7 +315,7 @@ def handle_make_field(page, make_value):
                     dropdown.fill(display_make)
                     dropdown.press("Enter")
                     logging.info("↩️ Typed and entered value in dropdown fallback")
-                    random_sleep(1, 2)
+                    random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                     return True
             except Exception as e:
                 logging.warning(f"Failed dropdown selector {selector}: {e}")
@@ -379,7 +379,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 browser.close()
                 return False, "Timeout error navigating to Facebook Marketplace vehicle listing page"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(2, 3)  # Random delay after page load
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Random delay after page load
             logging.info("Page loaded successfully.")
             logging.info(f"create market place listing for {vehicle_listing.list_id} and for user {vehicle_listing.user.email} and vehicle title is {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}")
             # Quick check for modal and handle if exists
@@ -422,7 +422,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 logging.info(f"Failed to select vehicle type: {result[1]}")
                 browser.close()
                 return False, result[1]
-            random_sleep(3, 5)
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             index = 0
             if vehicle_listing.images:
@@ -451,15 +451,15 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
                     # Upload images
                     image_input = page.locator("//input[@type='file']").first
-                    random_sleep(2,3)
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                     image_input.set_input_files(local_image_path)
                     logging.info("Photos uploaded successfully.")
-                    random_sleep(2,3)  # Random delay after uploading images
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Random delay after uploading images
             else:
                 logging.info("No images found.")
                 browser.close()
                 return False, "No images found."
-            random_sleep(2,3)
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             result = select_dropdown_option(page, "Year", vehicle_details["Year"])
             if result[0]:
@@ -468,9 +468,9 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                 logging.info(f"Failed to select Year: {result[1]}")
                 browser.close()
                 return False, result[1]
-            random_sleep(3, 5)
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             handle_make_field(page, vehicle_listing.make)
-            random_sleep(3, 5)
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             # Input fields with their selectors
             input_fields = {
@@ -521,7 +521,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
             # Submit form
             for button_text in ["Next", "Publish"]:
-                random_sleep(8,10)
+                random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
                 success, message = click_button_when_enabled(page, button_text, max_attempts=3, wait_time=3)
                 if not success:
                     # Optionally handle the failure
@@ -529,7 +529,7 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
                     return False, message
                 else:
                     # Add random sleep if needed
-                    random_sleep(8, 10)
+                    random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
 
             # Close browser
             browser.close()
@@ -569,7 +569,7 @@ def handle_cookie_consent(page):
             "//button[contains(text(), 'Allow') or contains(text(), 'Accept') or contains(text(), 'Okay')]"
         )
         if cookie_buttons.count() > 0:
-            random_sleep(0.5, 1.5)
+            random_sleep(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             cookie_buttons.first.click()
             logging.info("Cookie consent handled.")
     except Exception as e:
@@ -748,7 +748,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
             not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
             if not_answer_button and not_answer_button.is_visible():
                 not_answer_button.click()
-                random_sleep(2, 3)
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             else:
                 logging.warning("'I'd rather not answer' button not found.")
                 return 1, "'I'd rather not answer' button not found, but successfully deleted the product"
@@ -756,7 +756,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
             next_button = page.locator("//*[text()='Next']").first
             if next_button and next_button.is_visible():
                 next_button.click()
-                random_sleep(2, 3)
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 logging.info("Process completed successfully.")
                 return 1, "Successfully deleted the listing"
             else:
@@ -777,7 +777,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                 browser.close()
                 return 0, "Timeout error navigating to Facebook Marketplace"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(3, 5)
+            random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
 
             if not search_for.strip():
                 browser.close()
@@ -823,7 +823,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                             price_element = element.get('price_element')
                             if price_element and price_element.is_visible():
                                 price_element.click()
-                                random_sleep(3, 5)
+                                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
                                 success, message = find_and_click_delete_button(page)
                                 if not success:
@@ -835,7 +835,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                     target_button = delete_buttons[2]
                                     if target_button.is_visible():
                                         target_button.click()
-                                        random_sleep(3, 4)
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                         return handle_post_delete_flow(page, browser)
                                 logging.error("Delete button not found or not visible.")
                                 browser.close()
@@ -1006,7 +1006,7 @@ def is_convertible_to_int(value):
     except (ValueError, TypeError):
         return False
 
-def random_delay(min_time=1, max_time=3):
+def random_delay(min_time=settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, max_time=settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION):
     """
     Adds a randomized delay to mimic human behavior.
     """
@@ -1026,7 +1026,7 @@ def extract_facebook_listing_details(current_listing, session):
             page.goto(current_listing['url'], timeout=60000)
 
             # Mimic human behavior
-            random_delay(2, 5)
+            random_delay(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
             listing = {
                 "url": current_listing['url'],
@@ -1098,7 +1098,6 @@ def extract_year_make_model(page, listing):
         for element in elements:
             text = element.inner_text().strip()
             parts = text.split()
-            print(parts)
             if len(parts) >= 2:
                 try:
                     if is_convertible_to_int(parts[0]):
@@ -1127,7 +1126,7 @@ def extract_description(page, listing):
         see_more_button = page.query_selector("//*[text()='See more']")
         if see_more_button:
             see_more_button.click()
-            random_delay(1, 2)
+            random_delay(settings.SHORT_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.SHORT_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
         description_element = page.query_selector("//*[text()='See less']/../..")
         if description_element:
@@ -1229,7 +1228,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
             not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
             if not_answer_button and not_answer_button.is_visible():
                 not_answer_button.click()
-                random_sleep(2, 3)
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
             else:
                 logging.warning("'I'd rather not answer' button not found.")
                 return 0, "'I'd rather not answer' button not found, but successfully deleted the product"
@@ -1237,7 +1236,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
             next_button = page.locator("//*[text()='Next']").first
             if next_button and next_button.is_visible():
                 next_button.click()
-                random_sleep(2, 3)
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 logging.info("Process completed successfully.")
                 return 0, "Successfully deleted the listing"
             else:
@@ -1259,7 +1258,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                 browser.close()
                 return 4, "Timeout error navigating to Facebook Marketplace"
             logging.info("Navigated to Facebook Marketplace vehicle listing page.")
-            random_sleep(3, 5)
+            random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
 
             if not search_for.strip():
                 browser.close()
@@ -1295,8 +1294,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                 try:
                     title_match = element['title'] and element['title'].lower() == search_for.lower()
                     price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
-                    # date_match = element['date'] == formatted_date
-                    date_match=True
+                    date_match = element['date'] == formatted_date
                     status = element.get('status', '').lower()
 
                     if title_match and price_match and date_match:
@@ -1305,7 +1303,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                             price_element = element.get('price_element')
                             if price_element and price_element.is_visible():
                                 price_element.click()
-                                random_sleep(3, 5)
+                                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                 if is_image_uploaded(page):
                                     browser.close()
                                     return 1, "Image is uploaded and visible"
@@ -1322,7 +1320,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                         target_button = delete_buttons[2]
                                         if target_button.is_visible():
                                             target_button.click()
-                                            random_sleep(3, 4)
+                                            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                             return handle_post_delete_flow(page, browser)
                                     logging.error("Delete button not found or not visible.")
                                     browser.close()

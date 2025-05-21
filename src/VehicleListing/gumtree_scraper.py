@@ -275,7 +275,7 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
             logging.info(f"Listing already exists: {already_exists}")
             count+=1
             continue
-        time.sleep(random.uniform(1,3))
+        time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME,settings.SIMPLE_DELAY_END_TIME))
         result = get_gumtree_listing_details(listing_id)
         if result and not already_exists:
             count+=1

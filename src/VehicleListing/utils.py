@@ -10,6 +10,7 @@ from .models import FacebookUserCredentials, RelistingFacebooklisting
 from .tasks import create_marketplace_listing
 from relister.settings import MAX_RETRIES_ATTEMPTS
 from accounts.models import User
+from django.conf import settings
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -36,7 +37,7 @@ def send_status_reminder_email(facebook_user):
         facebook_user.status_reminder = True
         facebook_user.save()
         logger.info(f"Status reminder email sent to {facebook_user.user.email}")
-        time.sleep(random.randint(2,3))
+        time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
     else:   
         logger.info(f"Status reminder email already sent to {facebook_user.user.email}")
 
@@ -124,7 +125,7 @@ def retry_failed_relistings(seven_days_ago):
                 send_status_reminder_email(credentials)
             logger.warning(f"No valid credentials for user {relisting.user.email}")
             continue
-        time.sleep(random.randint(20,30))
+        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
         now = timezone.now()
         if listing_created:
