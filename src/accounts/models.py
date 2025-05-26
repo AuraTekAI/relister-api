@@ -58,6 +58,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     gumtree_dealarship_url = models.URLField(max_length=200, null=True, blank=True)
     facebook_dealership_url = models.URLField(max_length=200, null=True, blank=True)
     is_approved = models.BooleanField(default=False)
+    last_images_check_status_time = models.DateTimeField(null=True, blank=True)
     
     # Extra information
     last_facebook_listing_time = models.DateTimeField(null=True, blank=True)

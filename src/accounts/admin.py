@@ -14,6 +14,7 @@ class UserAdmin(UserAdmin):
         "is_approved",
         "is_active",
         "last_facebook_listing_time",
+        "last_images_check_status_time",
     )
     search_fields = ("email", "dealership_name", "contact_person_name", "is_approved")
     # Define the fields that will be editable on the user change form in the admin

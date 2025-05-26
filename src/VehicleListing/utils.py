@@ -154,3 +154,10 @@ def should_create_listing(user):
     if not user.last_facebook_listing_time:
         return True
     return timezone.now() - user.last_facebook_listing_time >= timedelta(minutes=10)
+
+def should_check_images_upload_status_time(user):
+    """Check if user is eligible to check images upload status time based on time."""
+    user=User.objects.filter(id=user.id).first()
+    if not user.last_images_check_status_time:
+        return True
+    return timezone.now() - user.last_images_check_status_time >= timedelta(minutes=10)
