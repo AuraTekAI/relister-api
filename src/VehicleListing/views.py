@@ -232,7 +232,7 @@ class ListingUrlViewSet(ModelViewSet):
                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
             else:
                 if credentials and credentials.session_cookie and credentials.status:
-                    response = perform_search_and_delete(search_query, vehicle_listing.price, vehicle_listing.updated_at, credentials.session_cookie)
+                    response = perform_search_and_delete(search_query, vehicle_listing.price, vehicle_listing.listed_on, credentials.session_cookie)
                     if response[0] in [1, 2]:
                         credentials.status = True
                         credentials.retry_count = 0
@@ -289,7 +289,7 @@ class VehicleListingViewSet(ModelViewSet):
             return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
         else:
             if credentials and credentials.session_cookie != {} and credentials.status:
-                response = perform_search_and_delete(search_query,vehicle_listing.price,vehicle_listing.updated_at,credentials.session_cookie)
+                response = perform_search_and_delete(search_query,vehicle_listing.price,vehicle_listing.listed_on,credentials.session_cookie)
                 if response[0] == 1:
                     credentials.status = True
                     credentials.retry_count = 0
@@ -395,6 +395,7 @@ def create_facebook_listing(vehicle_listing):
                     credentials.retry_count = 0
                     credentials.save()
                     vehicle_listing.status="completed"
+                    vehicle_listing.listed_on=datetime.now()
                     vehicle_listing.updated_at=datetime.now()
                     vehicle_listing.save()
                     return True, "Listing created successfully"
@@ -618,7 +619,7 @@ class FacebookProfileListingViewSet(ModelViewSet):
                 temp_list=[]
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
-                temp_list.append(current_listing.updated_at)
+                temp_list.append(current_listing.listed_on)
                 year_make_model_list.append(temp_list)
         facebook_profile_listing.delete()
         if year_make_model_list:
@@ -670,7 +671,7 @@ class GumtreeProfileListingViewSet(ModelViewSet):
                 temp_list=[]
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
-                temp_list.append(current_listing.updated_at)
+                temp_list.append(current_listing.listed_on)
                 year_make_model_list.append(temp_list)
         gumtree_profile_listing.delete()
         if year_make_model_list:

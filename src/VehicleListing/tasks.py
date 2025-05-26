@@ -126,6 +126,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 
             if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
                 listing.status = "completed"
+                listing.listed_on = timezone.now()
                 listing.save()
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
@@ -144,6 +145,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 update_credentials_success(credentials)
                 FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
                 listing.status = "completed"
+                listing.listed_on = now
                 listing.updated_at = now
                 listing.save()
                 user.last_facebook_listing_time = now
@@ -174,7 +176,7 @@ def relist_facebook_marketplace_listing_task(self):
     seven_days_ago = current_date - timedelta(days=7)
 
     vehicle_listings = VehicleListing.objects.filter(
-        status="completed", updated_at__date__lte=seven_days_ago, is_relist=False
+        status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
     )
     relistings = RelistingFacebooklisting.objects.filter(
         relisting_date__date__lte=seven_days_ago,
@@ -202,7 +204,7 @@ def relist_facebook_marketplace_listing_task(self):
             listing = item
             user = listing.user
             relisting_price = listing.price
-            relisting_date=listing.updated_at
+            relisting_date=listing.listed_on
 
         logger.info(f"Processing relisting for user {user.email}")
         time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
@@ -273,6 +275,7 @@ def create_failed_facebook_marketplace_listing_task(self):
 
             if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
                 listing.status = "completed"
+                listing.listed_on = timezone.now()
                 listing.save()
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
@@ -291,6 +294,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 update_credentials_success(credentials)
                 FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
                 listing.status = "completed"
+                listing.listed_on = now
                 listing.updated_at = now
                 listing.save()
                 user.last_facebook_listing_time = now
@@ -462,7 +466,7 @@ def generate_and_send_monthly_invoices(self):
             # Listings and Relistings
             facebook_listings = VehicleListing.objects.filter(
                 user=current_user, status__in=["completed","sold"],
-                updated_at__gte=cutoff_date
+                listed_on__gte=cutoff_date
             )
             relist_facebook_listing = RelistingFacebooklisting.objects.filter(
                 user=current_user,
@@ -601,7 +605,7 @@ def check_images_upload_status(self):
             search_query = f"{item.year} {item.make} {item.model}" if isinstance(item, VehicleListing) else f"{item.listing.year} {item.listing.make} {item.listing.model}"
             logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.updated_at if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
+            response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.listed_on if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
             if response[0] == 1:  #Image upload successful
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
                 item.has_images = True
