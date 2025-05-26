@@ -593,6 +593,7 @@ def check_images_upload_status(self):
         combined_listings = vehicle_listings + relistings
         while combined_listings:
             item = combined_listings.pop(0)
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
 
             # ⏱️ Cooldown logic
