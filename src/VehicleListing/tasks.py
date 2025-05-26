@@ -11,7 +11,7 @@ from VehicleListing.views import facebook_profile_listings_thread
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import send_status_reminder_email,mark_listing_sold,retry_failed_relistings,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing
+from .utils import send_status_reminder_email,mark_listing_sold,retry_failed_relistings,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS
 from openpyxl import Workbook
 from django.conf import settings
@@ -590,7 +590,16 @@ def check_images_upload_status(self):
         status="completed", listing__has_images=False
     ))
     if vehicle_listings or relistings:
-        for item in vehicle_listings + relistings:
+        combined_listings = vehicle_listings + relistings
+        while combined_listings:
+            item = combined_listings.pop(0)
+            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
+
+            # ⏱️ Cooldown logic
+            if not should_check_images_upload_status_time(item.user):
+                logger.info(f"10-minute cooldown for user {item.user.email}")
+                combined_listings.append(item)  # Requeue to check later
+                continue
             user = item.user if isinstance(item, VehicleListing) else item.user
             logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
@@ -606,6 +615,8 @@ def check_images_upload_status(self):
             logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.listed_on if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
+            user.last_images_check_status_time = timezone.now()
+            user.save()
             if response[0] == 1:  #Image upload successful
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
                 item.has_images = True
