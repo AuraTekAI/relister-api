@@ -8,6 +8,7 @@ import threading
 from django.conf import settings
 from bs4 import BeautifulSoup
 import re
+from .utils import get_full_state_name
 
 logging = logging.getLogger('gumtree')
 def extract_seller_id(profile_url):
@@ -70,6 +71,9 @@ def get_listings(url,user,import_url_instance):
             description=response_data["description"]
             enhanced_description=format_car_description(description)
             location=response_data["adLocationData"]["suburb"]
+            state=response_data["adLocationData"]["state"]
+            full_state_name=get_full_state_name(state)
+            location=f"{location}, {full_state_name}"
             body_type=dict_data["Body Type"]
             fuel_type=dict_data["Fuel Type"]
             color=dict_data["Colour"]
@@ -169,12 +173,16 @@ def get_gumtree_listing_details(listing_id):
             make=category_info.get("Make") 
         description=response_data.get("description")
         enhanced_description=format_car_description(description) 
+        location=response_data.get("adLocationData", {}).get("suburb")
+        state=response_data.get("adLocationData", {}).get("state")
+        full_state_name=get_full_state_name(state)
+        location=f"{location}, {full_state_name}"
         listing_details = {
             "title": response_data.get("adHeadingData", {}).get("title"),
             "price": int(response_data.get("adPriceData", {}).get("amount")),
             "description": enhanced_description,
             "image": [image.get("baseurl") for image in response_data.get("images", [])],
-            "location": response_data.get("adLocationData", {}).get("suburb"),
+            "location": location,
             "body_type": category_info.get("Body Type"),
             "fuel_type": category_info.get("Fuel Type"),
             "color": category_info.get("Colour"),

@@ -161,3 +161,39 @@ def should_check_images_upload_status_time(user):
     if not user.last_images_check_status_time:
         return True
     return timezone.now() - user.last_images_check_status_time >= timedelta(minutes=10)
+
+
+def get_full_state_name(input_state):
+    # Normalize input
+    state_input = input_state.strip().lower()
+
+    # Dictionary mapping all possible forms to their full names
+    state_mapping = {
+        'nsw': 'New South Wales',
+        'new south wales': 'New South Wales',
+        'n.s.w.': 'New South Wales',
+
+        'vic': 'Victoria',
+        'v': 'Victoria',
+        'victoria': 'Victoria',
+
+        'qld': 'Queensland',
+        'q': 'Queensland',
+        'queensland': 'Queensland',
+
+        'wa': 'Western Australia',
+        'w.a.': 'Western Australia',
+        'w': 'Western Australia',
+        'western australia': 'Western Australia',
+
+        'sa': 'South Australia',
+        's.a.': 'South Australia',
+        's': 'South Australia',
+        'south australia': 'South Australia',
+
+        'tas': 'Tasmania',
+        't': 'Tasmania',
+        'tasmania': 'Tasmania',
+    }
+
+    return state_mapping.get(state_input, input_state)
