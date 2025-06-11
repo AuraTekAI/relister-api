@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting
 import json
 from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details
 from .utils import send_status_reminder_email
@@ -232,7 +232,15 @@ class ListingUrlViewSet(ModelViewSet):
                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
             else:
                 if credentials and credentials.session_cookie and credentials.status:
-                    response = perform_search_and_delete(search_query, vehicle_listing.price, vehicle_listing.listed_on, credentials.session_cookie)
+                    if vehicle_listing.listed_on and not vehicle_listing.is_relist:
+                        listed_on = vehicle_listing.listed_on
+                    else:
+                        relisting=RelistingFacebooklisting.objects.filter(listing=vehicle_listing,status="completed",last_relisting_status=False).first()
+                        if relisting:
+                            listed_on = relisting.relisting_date
+                        else:
+                            listed_on = datetime.now()
+                    response = perform_search_and_delete(search_query, vehicle_listing.price, listed_on, credentials.session_cookie)
                     if response[0] in [1, 2]:
                         credentials.status = True
                         credentials.retry_count = 0
@@ -289,7 +297,15 @@ class VehicleListingViewSet(ModelViewSet):
             return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
         else:
             if credentials and credentials.session_cookie != {} and credentials.status:
-                response = perform_search_and_delete(search_query,vehicle_listing.price,vehicle_listing.listed_on,credentials.session_cookie)
+                if vehicle_listing.listed_on and not vehicle_listing.is_relist:
+                    listed_on = vehicle_listing.listed_on
+                else:
+                    relisting=RelistingFacebooklisting.objects.filter(listing=vehicle_listing,status="completed",last_relisting_status=False).first()
+                    if relisting:
+                        listed_on = relisting.relisting_date
+                    else:
+                        listed_on = vehicle_listing.listed_on
+                response = perform_search_and_delete(search_query,vehicle_listing.price,listed_on,credentials.session_cookie)
                 if response[0] == 1:
                     credentials.status = True
                     credentials.retry_count = 0
@@ -619,7 +635,15 @@ class FacebookProfileListingViewSet(ModelViewSet):
                 temp_list=[]
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
-                temp_list.append(current_listing.listed_on)
+                if current_listing.listed_on and not current_listing.is_relist:
+                    listed_on = current_listing.listed_on
+                else:
+                    relisting=RelistingFacebooklisting.objects.filter(listing=current_listing,status="completed",last_relisting_status=False).first()
+                    if relisting:
+                        listed_on = relisting.relisting_date
+                    else:
+                        listed_on = current_listing.listed_on
+                temp_list.append(listed_on)
                 year_make_model_list.append(temp_list)
         facebook_profile_listing.delete()
         if year_make_model_list:
@@ -671,7 +695,15 @@ class GumtreeProfileListingViewSet(ModelViewSet):
                 temp_list=[]
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
-                temp_list.append(current_listing.listed_on)
+                if current_listing.listed_on and not current_listing.is_relist:
+                    listed_on = current_listing.listed_on
+                else:
+                    relisting=RelistingFacebooklisting.objects.filter(listing=current_listing,status="completed",last_relisting_status=False).first()
+                    if relisting:
+                        listed_on = relisting.relisting_date
+                    else:
+                        listed_on = current_listing.listed_on
+                temp_list.append(listed_on)
                 year_make_model_list.append(temp_list)
         gumtree_profile_listing.delete()
         if year_make_model_list:

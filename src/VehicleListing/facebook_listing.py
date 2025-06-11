@@ -41,7 +41,8 @@ def fill_input_field(page, field_name, value, selectors, use_suggestion=False, u
 
     if use_suggestion:
         try:
-            suggestion = page.locator(f"//div[@role='option' or @role='listbox']//span[contains(text(), '{value}')]").first
+            city = value.split(',')[0].strip()
+            suggestion = page.locator(f"//div[@role='option' or @role='listbox']//span[contains(text(), '{city}')]").first
             suggestion.click()
         except:
             input_element.press("Enter")
