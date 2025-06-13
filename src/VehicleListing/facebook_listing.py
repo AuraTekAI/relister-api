@@ -633,6 +633,20 @@ def handle_cookie_consent(page):
 
 #     return listings
 
+def remove_prefix_case_insensitive(title: str, prefix: str) -> str:
+    """
+    Removes the given prefix from the start of the title, ignoring case.
+    Preserves the original casing of the remaining title.
+    """
+    title_stripped = title.lstrip()
+    prefix_len = len(prefix)
+
+    if title_stripped.lower().startswith(prefix.lower()):
+        return title_stripped[prefix_len:].lstrip()
+
+    return title_stripped
+
+
 
 def extract_listings_with_status(text):
     """
@@ -668,9 +682,10 @@ def extract_listings_with_status(text):
                 if convert_date:
                     month, day = date.strip().split('/')
                     date = f"{day.zfill(2)}/{month.zfill(2)}"
-
+                title = title.strip().replace('\xa0', ' ')
+                clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
                 listings.append({
-                    'title': title.strip().replace('\xa0', ' '),
+                    'title': clean_title,
                     'price': re.sub(r'[^\d]', '', price),
                     'date': date,
                     'status': status
@@ -740,6 +755,7 @@ def get_elements_with_text(search_for, page):
     # Match and enrich
     for search in search_listings:
         for record in filter_listings_with_date:
+            logging.info(f"matched the listing data: {search['title']} {search['price']} {record['title']} {record['price']} {record['date']} {record['status']}")
             if (search['title'].lower() == record['title'].lower()
                 and search['price'] == record['price']):
                 search['date'] = record['date']
@@ -1301,11 +1317,15 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
             for element in elements:
                 try:
                     title_match = element['title'] and element['title'].lower() == search_for.lower()
+                    logging.info(f"both titles are {element['title']} and {search_for}")
                     listing_price=str(listing_price)
                     logging.info(f"{element["price"]} and {listing_price} and type of listing_price: {type(listing_price)} and type of element['price']: {type(element['price'])}")
                     price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
+
                     date_match = element['date'] == formatted_date
+                    logging.info(f"both dates are {element['date']} and  from database{formatted_date}")
                     status = element.get('status', '').lower()
+                    logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
 
                     if title_match and price_match and date_match:
                         if status == "mark as sold":
