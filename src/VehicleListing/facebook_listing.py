@@ -681,7 +681,9 @@ def extract_listings_with_status(text):
 
 def get_count_of_elements_with_text(search_for, page):
     """Get count of elements with text"""
-    return len(get_elements_with_text(search_for, page))
+    length = len(get_elements_with_text(search_for, page))
+    logging.info(f"length of elements with text: {length}")
+    return length
 
 def get_elements_with_text(search_for, page):
     """Get elements with text and enriched listing info"""
@@ -696,9 +698,13 @@ def get_elements_with_text(search_for, page):
                 continue
 
             title_el = parent.query_selector('span[style*="-webkit-line-clamp: 2"]')
+            if not title_el:
+                title_el = parent.query_selector('span[style*="WebkitLineClamp: 2"]')
+            logging.info(f"title_el: {title_el}")
             title = title_el.text_content().strip() if title_el else None
 
             price_el = parent.query_selector("span:has-text('AU$')")
+            logging.info(f"price_el: {price_el}")
             if not price_el:
                 price_el = parent.query_selector("span:has-text('A$')")
             price = "".join(filter(str.isdigit, price_el.inner_text())) if price_el else None
@@ -729,6 +735,7 @@ def get_elements_with_text(search_for, page):
 
     # Corrected logging statement
     logging.info(f"filter_listings_with_date: {filter_listings_with_date}")
+    logging.info(f"search_listings before matching the listing data: {search_listings}")
 
     # Match and enrich
     for search in search_listings:
@@ -1294,6 +1301,8 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
             for element in elements:
                 try:
                     title_match = element['title'] and element['title'].lower() == search_for.lower()
+                    listing_price=str(listing_price)
+                    logging.info(f"{element["price"]} and {listing_price} and type of listing_price: {type(listing_price)} and type of element['price']: {type(element['price'])}")
                     price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
                     date_match = element['date'] == formatted_date
                     status = element.get('status', '').lower()
