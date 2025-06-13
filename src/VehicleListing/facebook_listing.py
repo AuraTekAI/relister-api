@@ -1344,14 +1344,27 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                     if not success:
                                         browser.close()
                                         return 4, message
-
+                                    #first Attempt
                                     delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
                                     if delete_buttons:
+                                        logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                        
                                         target_button = delete_buttons[2]
                                         if target_button.is_visible():
                                             target_button.click()
                                             random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                             return handle_post_delete_flow(page, browser)
+
+                                    #2nd Attempt
+                                    delete_buttons = page.locator("span:text('Delete')").all()
+                                    if delete_buttons:
+                                        logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                        target_button = delete_buttons[len(delete_buttons)-1]
+                                        if target_button.is_visible():
+                                            target_button.click()
+                                            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                            return handle_post_delete_flow(page, browser)
+                                    
                                     logging.error("Delete button not found or not visible.")
                                     browser.close()
                                     return 4, "Delete button not found"
