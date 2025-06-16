@@ -1745,7 +1745,7 @@ def verify_image_upload_restricted_listings(page,listing_title,listing_price,lis
                 
                 if not listing_details:
                     logging.warning("No restricted listings found with the specified title")
-                    return 0, "No restricted listings found with the specified title"
+                    return 2, "No restricted listings found with the specified title"
                 
                 logging.info(f"Found {len(listing_details)} initial restricted listings")
                 # Verify listings with exact matches
@@ -1758,7 +1758,7 @@ def verify_image_upload_restricted_listings(page,listing_title,listing_price,lis
                 
                 if not verified_listings:
                     logging.warning("No verified restricted listings found matching the criteria")
-                    return 0, "No verified restricted listings found matching the criteria"
+                    return 2, "No verified restricted listings found matching the criteria"
                 
                 logging.info(f"Found {len(verified_listings)} verified restricted listings matching criteria")
                 
@@ -1789,14 +1789,14 @@ def verify_image_upload_restricted_listings(page,listing_title,listing_price,lis
                 if deletion_success:
                     logging.info(f"Successfully deleted restricted listing: {target_listing['title']}")
                     logging.info(f"Message: {message}")
-                    return 2, "Successfully deleted the restricted listing"
+                    return 0, "Successfully deleted the restricted listing"
                 else:
                     logging.warning(f"Failed to delete restricted listing: {target_listing['title']} but image is not uploaded and message: {message}")
-                    return 3, "Failed to delete the restricted listing"
+                    return 4, "Failed to delete the restricted listing"
                 
     except Exception as e:
         logging.error(f"Error in verify_image_upload_restricted_listings: {str(e)}")
-        return 0, "Error in verify_image_upload_restricted_listings"
+        return 2, "Error in verify_image_upload_restricted_listings"
 
 
 def handle_post_delete_flow(page, browser):
@@ -1954,24 +1954,20 @@ def image_upload_verification(vehicle_listing):
                     result=verify_image_upload_restricted_listings(page,search_title,search_price,search_date)
                     if result[0] == 1:
                         logging.info(f"Restricted listing {search_title} has image uploaded successfully")
-                        vehicle_listing.has_images = True
-                        vehicle_listing.save()
                         browser.close()
                         logging.info("Browser closed successfully")
-                        return "Successfully verified image upload"
-                    elif result[0] == 2:
+                        return 1, "Successfully verified image upload"
+                    elif result[0] == 0:
                         logging.info(f"Restricted listing {search_title} has no image uploaded and deleted successfully")
-                        vehicle_listing.status = "failed"
-                        vehicle_listing.save()
                         browser.close()
                         logging.info("Browser closed successfully")
-                        return "Restricted listing has no image uploaded and deleted successfully"
-                    elif result[0] == 3:
+                        return 0, "Restricted listing has no image uploaded and deleted successfully"
+                    elif result[0] == 4:
                         logging.info(f"Restricted listing {search_title} has no image uploaded and failed to delete")
                         logging.info(f"Error: {result[1]}")
                         browser.close()
                         logging.info("Browser closed successfully")
-                        return "Restricted listing has no image uploaded and failed to delete"
+                        return 4, "Restricted listing has no image uploaded and failed to delete"
                     else:
                         logging.error(f"Error in image_upload_verification: {result[1]}")
                         logging.info("Listing not found in restricted listings. Retrying with search...")
@@ -1979,50 +1975,44 @@ def image_upload_verification(vehicle_listing):
                         result=image_upload_verification_with_search(page,browser,search_title, search_price, search_date)
                         if result[0] == 0:
                             logging.info(f"Approved listing {search_title} has no image uploaded and deleted successfully")
-                            vehicle_listing.status = "failed"
-                            vehicle_listing.save()
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "Approved listing has no image uploaded and deleted successfully"
+                            return 0, "Approved listing has no image uploaded and deleted successfully"
                         elif result[0] == 1:
                             logging.info(f"Approved listing {search_title} has image uploaded successfully")
-                            vehicle_listing.has_images = True
-                            vehicle_listing.save()
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "Successfully verified image upload"
+                            return 1, "Successfully verified image upload"
                         elif result[0] == 2:
                             logging.info(f"Approved listing {search_title} not found, Retrying daily one time")
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "Approved listing not found, Retrying daily one time"
+                            return 2, "Approved listing not found, Retrying daily one time"
                         elif result[0] == 3:
                             logging.info(f"Approved listing {search_title} has sold successfully")
-                            vehicle_listing.status = "sold"
-                            vehicle_listing.save()
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "Approved listing has sold successfully"
+                            return 3, "Approved listing has sold successfully"
                         elif result[0] == 4:
                             logging.info(f"Approved listing {search_title} has no image uploaded and failed to delete.. Retry attempt daily one time")
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "Approved listing has no image uploaded and failed to delete"
+                            return 4, "Approved listing has no image uploaded and failed to delete"
                         else:
                             logging.info("failed to verify image upload")
                             logging.info(f"Error: {result[1]}")
                             browser.close()
                             logging.info("Browser closed successfully")
-                            return "failed to verify image upload"
+                            return 5, "failed to verify image upload"
                 except Exception as e:
                     logging.error(f"Error in image_upload_verification: {e}")
                     browser.close()
                     logging.info("Browser closed successfully")
-                    return False,"Error in image_upload_verification"
+                    return 5,"Error in image_upload_verification"
 
         except Exception as e:
             logging.error(f"Error in image_upload_verification: {e}")
-            return False
+            return 5,"Error in image_upload_verification"
     else:
         logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is not completed")
-        return "Vehicle listing is not completed"
+        return 5, "Vehicle listing is not completed"

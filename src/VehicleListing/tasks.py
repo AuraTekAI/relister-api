@@ -1,13 +1,13 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing, verify_facebook_listing_images_upload, image_upload_verification
+from VehicleListing.facebook_listing import create_marketplace_listing
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
 from django.utils import timezone
 from VehicleListing.facebook_listing import get_facebook_profile_listings, perform_search_and_delete
 from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_id
-from VehicleListing.views import facebook_profile_listings_thread
+from VehicleListing.views import facebook_profile_listings_thread,image_verification
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
@@ -79,7 +79,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_upload_verification(listing)
+                image_verification(listing)
             else:
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
@@ -162,7 +162,7 @@ def relist_facebook_marketplace_listing_task(self):
                 logger.info(f"Relisting successful for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 create_or_update_relisting_entry(listing, user, relisting)
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_upload_verification(listing)
+                image_verification(listing)
             else:
                 logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 handle_failed_relisting(listing, user, relisting)
@@ -232,7 +232,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_upload_verification(listing)
+                image_verification(listing)
             else:
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
