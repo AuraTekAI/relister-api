@@ -685,8 +685,9 @@ def extract_listings_with_status(text):
                     date = f"{day.zfill(2)}/{month.zfill(2)}"
                 title = title.strip().replace('\xa0', ' ')
                 clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
+                cleaned_text = clean_title.replace("This listing is being reviewed.", "")
                 listings.append({
-                    'title': clean_title,
+                    'title': cleaned_text,
                     'price': re.sub(r'[^\d]', '', price),
                     'date': date,
                     'status': status
