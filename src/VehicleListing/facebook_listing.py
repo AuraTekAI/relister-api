@@ -7,6 +7,7 @@ import requests
 from relister.settings import IMAGES_DIR
 import re
 from django.conf import settings
+from VehicleListing.models import FacebookUserCredentials
 
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
@@ -864,6 +865,19 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                 logging.error("Delete button not found or not visible.")
                                 browser.close()
                                 return 0, "Delete button not found"
+                                                                    #2nd Attempt
+                                delete_buttons = page.locator("span:text('Delete')").all()
+                                if delete_buttons:
+                                    logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                    target_button = delete_buttons[len(delete_buttons)-1]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                        return handle_post_delete_flow(page, browser)
+                                    
+                                logging.error("Delete button not found or not visible.")
+                                browser.close()
+                                return 0, "Delete button not found"
                             else:
                                 browser.close()
                                 return 0, "Price element not found or not visible"
@@ -1423,3 +1437,591 @@ def is_image_uploaded(page):
     except Exception as e:
         logging.error(f"Error checking image upload status: {e}")
         return False
+
+
+
+def remove_prefix_case_insensitive(title: str, prefix: str) -> str:
+    """
+    Removes the given prefix from the start of the title, ignoring case.
+    Preserves the original casing of the remaining title.
+    """
+    title_stripped = title.lstrip()
+    prefix_len = len(prefix)
+
+    if title_stripped.lower().startswith(prefix.lower()):
+        return title_stripped[prefix_len:].lstrip()
+
+    return title_stripped
+
+
+
+def extract_listings_with_status(text):
+    """
+    Extracts structured listings including title, price, date, and status.
+    Returns a list of dicts: title, price, listing_date (in DD/MM), status.
+    """
+    listings = []
+
+    # Define fallback regex patterns from most specific to most generic
+    patterns = [
+        # Pattern 1: AU$ version (fallback)
+        (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
+        # Pattern 2: With tip
+        (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
+        # Pattern 3: Without tip
+        (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True)
+    ]
+
+    for pattern, convert_date in patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            for match in matches:
+                # Old pattern where status needs to be inferred
+                title, price, date, tail = match
+                tail_clean = tail.lower().replace('\xa0', ' ')
+                if "mark as sold" in tail_clean:
+                    status = "Mark as sold"
+                elif "mark as available" in tail_clean:
+                    status = "Mark as available"
+                else:
+                    status = None
+                # Format date to DD/MM if needed
+                if convert_date:
+                    month, day = date.strip().split('/')
+                    date = f"{day.zfill(2)}/{month.zfill(2)}"
+                title = title.strip().replace('\xa0', ' ')
+                clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
+                listings.append({
+                    'title': clean_title,
+                    'price': re.sub(r'[^\d]', '', price),
+                    'date': date,
+                    'status': status
+                })
+            break  # Stop on first successful match
+
+    return listings
+
+def extract_restricted_listing_details(page, title):
+    """
+    Extract details from a specific listing by its title and check for action required.
+    Returns a dictionary with listing details if found and requires action.
+    """
+    try:
+        # Find all elements with matching aria-label
+        listing_elements = page.query_selector_all(f'div[aria-label="{title}"]')
+        logging.info(f"Found {len(listing_elements)} elements with title: {title}")
+        listings=[]
+        
+        for listing_el in listing_elements:
+            # Check if this listing requires action
+            action_text = listing_el.query_selector('div.x1f6kntn.x117nqv4.xcly8g5')
+            if action_text and "Please take action on this listing" in action_text.text_content():
+                # Extract price
+                price_el = listing_el.query_selector('span[dir="auto"]:has-text("AU$")')
+                price = price_el.text_content().replace('AU$', '').strip() if price_el else None
+                if not price_el:
+                    price_el = listing_el.query_selector('span[dir="auto"]:has-text("A$")')
+                    price = price_el.text_content().replace('A$', '').strip() if price_el else None
+                if not price_el:
+                    price_el = listing_el.query_selector('span[dir="auto"]:has-text("PKR")')
+                    price = price_el.text_content().replace('PKR', '').strip() if price_el else None
+                
+                # Extract listed date
+                date_el = listing_el.query_selector('span:has-text("Listed on")')
+                listed_date = None
+                if date_el:
+                    date_text = date_el.text_content()
+                    date_match = re.search(r'Listed on (\d{1,2}/\d{1,2})', date_text)
+                    if date_match:
+                        listed_date = date_match.group(1)
+                
+                listings.append({
+                    'title': title,
+                    'price': price,
+                    'listed_date': listed_date,
+                    'requires_action': True,
+                    'element': listing_el  # Return the element for further use if needed
+                })
+        return listings
+        
+    except Exception as e:
+        logging.error(f"Error extracting listing details: {e}")
+        return None
+
+def check_restricted_listing_images(page, listings):
+    """
+    Check for images in each listing and add image URL to the listing details.
+    Returns updated listings with image information.
+    """
+    try:
+        for listing in listings:
+            try:
+                # Get the element from the listing
+                element = listing['element']
+                
+                # Click on the listing to open details
+                element.click()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Wait for details to load
+                
+                # Check for image using the specific selector
+                image_el = page.query_selector('div.xpyat2d.x1exxlbk img')
+                
+                if image_el:
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                    # Get image URL from src attribute
+                    image_url = image_el.get_attribute('src')
+                    listing['image_url'] = image_url
+                    logging.info(f"Found image for listing: {listing['title']}")
+                else:
+                    listing['image_url'] = None
+                    logging.info(f"No image found for listing: {listing['title']}")
+                
+                # Go back to listings page
+                page.go_back()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Wait for page to load
+                
+            except Exception as e:
+                logging.error(f"Error processing listing {listing['title']}: {e}")
+                listing['image_url'] = None
+                continue
+        
+        return listings
+        
+    except Exception as e:
+        logging.error(f"Error in check_listing_images: {e}")
+        return listings
+    
+
+def delete_restricted_listings_without_images(page, listing):
+    """
+    Delete listings that have no images (image_url is None).
+    Returns True if all deletions were successful, False otherwise.
+    """
+    try:
+        
+        if listing.get('image_url') is None:
+            logging.info(f"Processing deletion for restricted listing: {listing['title']}")
+                
+            # Get the element from the listing
+            element = listing['element']
+                
+            # Click on the listing to open details
+            element.click()
+            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Wait for details to load
+                
+            # First attempt with find_and_click_delete_button
+            success, message = find_and_click_delete_button(page)
+            if not success:
+                logging.error(f"Failed to delete restricted listing {listing['title']}: {message}")
+                return False, "Failed to delete the restricted listing"
+                
+            # First Attempt with specific selector
+            delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+            if delete_buttons:
+                logging.info(f"First attempt: Found {len(delete_buttons)} delete buttons")
+                target_button = delete_buttons[2]
+                if target_button.is_visible():
+                    target_button.click()
+                    logging.info(f"target_button: {target_button} is clicked successfully")
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                    return True, "Successfully deleted the restricted listing"
+                
+            # Second Attempt with alternative selector
+            delete_buttons = page.locator("span:text('Delete')").all()
+            if delete_buttons:
+                logging.info(f"Second attempt: Found {len(delete_buttons)} delete buttons")
+                target_button = delete_buttons[len(delete_buttons)-1]
+                if target_button.is_visible():
+                    target_button.click()
+                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                    return True, "Successfully deleted the restricted listing"   
+
+            else:
+                logging.error("Delete button not found or not visible.")
+                return False, "Delete button not found"
+        
+    except Exception as e:
+        logging.error(f"Error in delete_restricted_listings_without_images: {e}")
+        return False, "Failed to delete the restricted listing"
+
+def verify_restricted_listing_matches(listings, title, price, listing_date):
+    """
+    Verify listings against exact matches of title, price, and listing date.
+    Returns filtered list of matching listings.
+    """
+    try:
+        # Clean and normalize inputs
+        if price.startswith('AU$'):
+            clean_price = str(price).replace('AU$', '').replace(',', '').strip()
+        
+        elif price.startswith('PKR'):
+            clean_price = str(price).replace('PKR', '').replace(',', '').strip()
+        
+        elif price.startswith('A$'):
+            clean_price = str(price).replace('A$', '').replace(',', '').strip()
+        else:
+            clean_price = str(price)
+        clean_date = listing_date.strip()
+
+        
+        # Filter listings that match all criteria
+        logging.info(f"extract_restricted_listing_details: {listings} and details from database title: {title} and price: {clean_price} and listing_date: {clean_date}")
+        matching_listings = []  
+        for listing in listings:
+            # Clean listing price for comparison
+            if listing['price'] and listing['price'].startswith('AU$'):
+                listing_price = str(listing['price']).replace('AU$', '').replace(',', '').strip()
+            elif listing['price'] and listing['price'].startswith('PKR'):
+                listing_price = str(listing['price']).replace('PKR', '').replace(',', '').strip()
+            elif listing['price'] and listing['price'].startswith('A$'):
+                listing_price = str(listing['price']).replace('A$', '').replace(',', '').strip()
+            else:
+                listing_price = str(listing['price']).replace(',', '').strip()
+            logging.info(f"listing['listed_date']: {listing['listed_date']}")
+            # Check for exact matches
+            if (listing['title'] == title and 
+                listing_price == clean_price and 
+                listing['listed_date'] == clean_date):
+                matching_listings.append(listing)
+                logging.info(f"Found matching listing: {listing['title']}")
+            else:
+                logging.info(f"Listing {listing['title']} did not match criteria")
+        
+        logging.info(f"Found {len(matching_listings)} matching listings out of {len(listings)} total listings")
+        return matching_listings
+        
+    except Exception as e:
+        logging.error(f"Error in verify_listing_matches: {e}")
+        return []
+
+def filter_restricted_listings_without_valid_images(listings):
+    """
+    Filter listings that have no image URL or image URL doesn't start with 'https://scontent'.
+    Returns filtered list of listings.
+    """
+    try:
+        filtered_listings = []
+        for listing in listings:
+            image_url = listing.get('image_url')
+            
+            # Check if image_url is None or doesn't start with 'https://scontent'
+            if image_url is None or not str(image_url).startswith('https://scontent'):
+                filtered_listings.append(listing)
+                logging.info(f"Restricted listing {listing['title']} has no valid image URL")
+            else:
+                logging.info(f"Restricted listing {listing['title']} has valid image URL")
+        
+        logging.info(f"Found {len(filtered_listings)} restricted listings without valid images out of {len(listings)} total restricted listings")
+        return filtered_listings
+        
+    except Exception as e:
+        logging.error(f"Error in filter_listings_without_valid_images: {e}")
+        return filtered_listings
+
+def verify_image_upload_restricted_listings(page,listing_title,listing_price,listing_date):
+    """
+    Verify and process Facebook Marketplace listings with restricted image uploads.
+    This function:
+    1. Extracts listings with specific title
+    2. Verifies exact matches for title, price, and date
+    3. Checks for valid image uploads
+    4. Filters listings without valid images
+    5. Processes deletion for listings without valid images
+    """
+    try:                
+                # Navigate to Facebook Marketplace
+                logging.info("Navigating to Facebook Marketplace...")
+                page.goto(
+                    "https://www.facebook.com/marketplace/you/selling",
+                    wait_until='networkidle',
+                    timeout=30000
+                )
+                # Add initial delay after page load
+                random_sleep(2, 4)
+                # Extract listings with specific title
+                logging.info(f"Searching for restricted listings with title: {listing_title}")
+                listing_details = extract_restricted_listing_details(page, listing_title)
+                
+                if not listing_details:
+                    logging.warning("No restricted listings found with the specified title")
+                    return 0, "No restricted listings found with the specified title"
+                
+                logging.info(f"Found {len(listing_details)} initial restricted listings")
+                # Verify listings with exact matches
+                verified_listings = verify_restricted_listing_matches(
+                    listing_details,
+                    title=listing_title,
+                    price=listing_price,
+                    listing_date=listing_date
+                )
+                
+                if not verified_listings:
+                    logging.warning("No verified restricted listings found matching the criteria")
+                    return 0, "No verified restricted listings found matching the criteria"
+                
+                logging.info(f"Found {len(verified_listings)} verified restricted listings matching criteria")
+                
+                # Check for images in verified listings
+                logging.info("Checking for images in verified restricted listings...")
+                updated_listings = check_restricted_listing_images(page, verified_listings)
+                random_sleep(2, 4)
+                
+                logging.info(f"Found {len(updated_listings)} restricted listings with image information")
+                
+                # Filter listings without valid images
+                logging.info("Filtering restricted listings without valid images...")
+                listings_to_delete = filter_restricted_listings_without_valid_images(updated_listings)
+                
+                if not listings_to_delete:
+                    logging.info("No restricted listings found that need to be deleted")
+                    return 1, "No restricted listings found that need to be deleted"
+                
+                logging.info(f"Found {len(listings_to_delete)} restricted listings to delete")
+                
+                # Process deletion for the first listing
+                target_listing = listings_to_delete[0]
+                logging.info(f"Processing deletion for restricted listing: {target_listing['title']}")
+                random_sleep(2, 4)
+                
+                deletion_success, message = delete_restricted_listings_without_images(page, target_listing)
+                
+                if deletion_success:
+                    logging.info(f"Successfully deleted restricted listing: {target_listing['title']}")
+                    logging.info(f"Message: {message}")
+                    return 2, "Successfully deleted the restricted listing"
+                else:
+                    logging.warning(f"Failed to delete restricted listing: {target_listing['title']} but image is not uploaded and message: {message}")
+                    return 3, "Failed to delete the restricted listing"
+                
+    except Exception as e:
+        logging.error(f"Error in verify_image_upload_restricted_listings: {str(e)}")
+        return 0, "Error in verify_image_upload_restricted_listings"
+
+
+def handle_post_delete_flow(page, browser):
+        try:
+            not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
+            if not_answer_button and not_answer_button.is_visible():
+                not_answer_button.click()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+            else:
+                logging.warning("'I'd rather not answer' button not found.")
+                return 0, "'I'd rather not answer' button not found, but successfully deleted the product"
+
+            next_button = page.locator("//*[text()='Next']").first
+            if next_button and next_button.is_visible():
+                next_button.click()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                logging.info("Process completed successfully.")
+                return 0, "Successfully deleted the listing"
+            else:
+                logging.warning("'Next' button not found.")
+                return 0, "'Next' button not found, but successfully deleted the product"
+        except Exception as e:
+            logging.error(f"Error in handle_post_delete_flow: {e}")
+            return 0, "Error in handle_post_delete_flow"
+
+def image_upload_verification_with_search(page,browser,search_for, listing_price, listing_date):
+    """Perform search and delete listing if image is not uploaded with retry and timeout handling"""
+
+    try:
+        page.goto("https://www.facebook.com/marketplace/you/selling", timeout=30000)
+        logging.info("Navigated to Facebook Marketplace vehicle listing page.")
+        random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
+
+        input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
+        input_element = page.locator(input_locator).first
+
+        if not input_element.is_visible():
+            return 5, "Search input not found"
+
+        input_element.click()
+        input_element.fill(search_for)
+        page.wait_for_timeout(3000)
+
+        matches_found = get_count_of_elements_with_text(search_for, page)
+
+        if matches_found == 0:
+            if page.locator("text='We didn't find anything'").is_visible():
+                logging.info("Detected 'We didn't find anything'")
+                return 2, "didnt_find_anything_displayed"
+            else:
+                return 2, "No matching listing found"
+
+        logging.info(f"Found {matches_found} match(es) for '{search_for}'")
+        elements = get_elements_with_text(search_for, page)
+
+        for element in elements:
+            try:
+                title_match = element['title'] and element['title'].lower() == search_for.lower()
+                logging.info(f"both titles are {element['title']} and {search_for}")
+                listing_price=str(listing_price)
+                logging.info(f"{element["price"]} and {listing_price} and type of listing_price: {type(listing_price)} and type of element['price']: {type(element['price'])}")
+                price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
+
+                date_match = element['date'] == listing_date
+                logging.info(f"both dates are {element['date']} and  from database{listing_date}")
+                status = element.get('status', '').lower()
+                logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
+
+                if title_match and price_match and date_match:
+                    if status == "mark as sold":
+                        logging.info(f"Deleting listing: {element['title']} - {element['price']}")
+                        price_element = element.get('price_element')
+                        if price_element and price_element.is_visible():
+                            price_element.click()
+                            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                            if is_image_uploaded(page):
+                                logging.info("Image is uploaded and visible")
+                                return 1, "Image is uploaded and visible"
+                            else:
+                                logging.info("Image is not uploaded")
+
+                                success, message = find_and_click_delete_button(page)
+                                if not success:
+                                    return 4, message
+                                #first Attempt
+                                delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                                if delete_buttons:
+                                    logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                        
+                                    target_button = delete_buttons[2]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                        return handle_post_delete_flow(page, browser)
+
+                                #2nd Attempt
+                                delete_buttons = page.locator("span:text('Delete')").all()
+                                if delete_buttons:
+                                    logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                    target_button = delete_buttons[len(delete_buttons)-1]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                        return handle_post_delete_flow(page, browser)
+                                    
+                                logging.error("Delete button not found or not visible.")
+                                return 4, "Delete button not found"
+                        else:
+                            return 4, "Price element not found or not visible"
+
+                    elif status == "mark as available":
+                        logging.info("Listing is already marked as available.")
+                        return 3, "This listing is already marked as available"
+                    else:
+                        logging.info(f"Got unexpected listing status: {status}")
+                        return 4, "Got unexpected listing status"
+                else:
+                    logging.info(f"Listing does not match: {element['title']} - {element['price']} - {element['date']}")
+                    continue
+            except Exception as e:
+                logging.error(f"Error evaluating listing match: {e}")
+                continue
+        logging.info("No matching listing found")
+        return 2, "No matching listing found"
+
+    except Exception as e:
+        logging.error(f"Unhandled error in image_upload_verification_with_search: {e}")
+        return 0, "Unhandled error in image_upload_verification_with_search"
+
+
+def image_upload_verification(vehicle_listing):
+    """Verify image upload"""
+    if vehicle_listing.status == "completed":
+        logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is created successfully and Now verifying image upload")
+        search_title = f"{vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}"
+        search_price = str(vehicle_listing.price)
+        search_date = vehicle_listing.listed_on.strftime("%d/%m")
+        logging.info(f"search_title: {search_title} and search_price: {search_price} and search_date: {search_date}")
+        user = vehicle_listing.user
+        credentials = FacebookUserCredentials.objects.filter(user=user).first()
+        try:
+            with sync_playwright() as p:
+                # Initialize browser with proper configuration
+                logging.info("Initializing browser...")
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--start-maximized", "--disable-notifications"]
+                )
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    storage_state=credentials.session_cookie
+                )
+                page = context.new_page()
+                try:
+                    result=verify_image_upload_restricted_listings(page,search_title,search_price,search_date)
+                    if result[0] == 1:
+                        logging.info(f"Restricted listing {search_title} has image uploaded successfully")
+                        vehicle_listing.has_images = True
+                        vehicle_listing.save()
+                        browser.close()
+                        logging.info("Browser closed successfully")
+                        return "Successfully verified image upload"
+                    elif result[0] == 2:
+                        logging.info(f"Restricted listing {search_title} has no image uploaded and deleted successfully")
+                        vehicle_listing.status = "failed"
+                        vehicle_listing.save()
+                        browser.close()
+                        logging.info("Browser closed successfully")
+                        return "Restricted listing has no image uploaded and deleted successfully"
+                    elif result[0] == 3:
+                        logging.info(f"Restricted listing {search_title} has no image uploaded and failed to delete")
+                        logging.info(f"Error: {result[1]}")
+                        browser.close()
+                        logging.info("Browser closed successfully")
+                        return "Restricted listing has no image uploaded and failed to delete"
+                    else:
+                        logging.error(f"Error in image_upload_verification: {result[1]}")
+                        logging.info("Listing not found in restricted listings. Retrying with search...")
+                        page = context.new_page()
+                        result=image_upload_verification_with_search(page,browser,search_title, search_price, search_date)
+                        if result[0] == 0:
+                            logging.info(f"Approved listing {search_title} has no image uploaded and deleted successfully")
+                            vehicle_listing.status = "failed"
+                            vehicle_listing.save()
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "Approved listing has no image uploaded and deleted successfully"
+                        elif result[0] == 1:
+                            logging.info(f"Approved listing {search_title} has image uploaded successfully")
+                            vehicle_listing.has_images = True
+                            vehicle_listing.save()
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "Successfully verified image upload"
+                        elif result[0] == 2:
+                            logging.info(f"Approved listing {search_title} not found, Retrying daily one time")
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "Approved listing not found, Retrying daily one time"
+                        elif result[0] == 3:
+                            logging.info(f"Approved listing {search_title} has sold successfully")
+                            vehicle_listing.status = "sold"
+                            vehicle_listing.save()
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "Approved listing has sold successfully"
+                        elif result[0] == 4:
+                            logging.info(f"Approved listing {search_title} has no image uploaded and failed to delete.. Retry attempt daily one time")
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "Approved listing has no image uploaded and failed to delete"
+                        else:
+                            logging.info("failed to verify image upload")
+                            logging.info(f"Error: {result[1]}")
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            return "failed to verify image upload"
+                except Exception as e:
+                    logging.error(f"Error in image_upload_verification: {e}")
+                    browser.close()
+                    logging.info("Browser closed successfully")
+                    return False,"Error in image_upload_verification"
+
+        except Exception as e:
+            logging.error(f"Error in image_upload_verification: {e}")
+            return False
+    else:
+        logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is not completed")
+        return "Vehicle listing is not completed"
