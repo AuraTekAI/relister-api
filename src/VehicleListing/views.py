@@ -31,7 +31,7 @@ def worker(user_id):
             break
         create_facebook_listing(vehicle_listing)
         time.sleep(random.randint(20, 30))
-        image_upload_verification(vehicle_listing)
+        image_verification(vehicle_listing)
         user_queues[user_id].task_done()
 
 
@@ -807,3 +807,20 @@ def get_facebook_session_status(request):
         else:
             return JsonResponse({'facebook_session_status': False}, status=200)
     return JsonResponse({'error': 'Invalid request method'}, status=400)
+
+
+
+def image_verification(vehicle_listing):
+    """Verify image upload and update the status of the vehicle listing"""
+    response=image_upload_verification(vehicle_listing)
+    if response[0] == 1:
+        vehicle_listing.has_images=True
+        vehicle_listing.save()
+    elif response[0] == 0:
+        vehicle_listing.status="failed"
+        vehicle_listing.save()
+    elif response[0] == 3:
+        vehicle_listing.status="sold"
+        vehicle_listing.save()
+    else:
+        pass
