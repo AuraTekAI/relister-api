@@ -7,7 +7,7 @@ from .serializers import VehicleListingSerializer, ListingUrlSerializer, Faceboo
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting
 import json
-from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details
+from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -30,6 +30,8 @@ def worker(user_id):
         if vehicle_listing is None:
             break
         create_facebook_listing(vehicle_listing)
+        time.sleep(random.randint(20, 30))
+        image_upload_verification(vehicle_listing)
         user_queues[user_id].task_done()
 
 
@@ -80,7 +82,7 @@ def import_url_from_gumtree(request):
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
         if ListingUrl.objects.filter(url=url,user=user,listing_id=list_id).exists():
             return JsonResponse({'error': 'URL already exists'}, status=200)
-        if VehicleListing.objects.filter(user=user,list_id=list_id).exists():
+        if VehicleListing.objects.filter(user=user,list_id=list_id).exists():              
             return JsonResponse({'error': 'Listing already exists '}, status=200)
         if import_url.print_url_type() == "Facebook Profile" or import_url.print_url_type() == "Gumtree Profile":
             return  JsonResponse({'error': 'This is Facebook Profile Url, Now, Only Process the Gumtree and Facebook single Url'}, status=200)
