@@ -534,7 +534,7 @@ def check_images_upload_status(self):
                 logger.info(f"10-minute cooldown for user {item.user.email}")
                 combined_listings.append(item)  # Requeue to check later
                 continue
-            user = item.user if isinstance(item, VehicleListing) else item.user
+            user = item.user
             logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
             if not credentials or not credentials.session_cookie or not credentials.status or credentials.session_cookie == {}:
@@ -548,7 +548,17 @@ def check_images_upload_status(self):
             search_query = f"{item.year} {item.make} {item.model}" if isinstance(item, VehicleListing) else f"{item.listing.year} {item.listing.make} {item.listing.model}"
             logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            response = verify_facebook_listing_images_upload(search_query, item.price if isinstance(item, VehicleListing) else item.listing.price, item.listed_on if isinstance(item, VehicleListing) else item.relisting_date, credentials.session_cookie)
+            if isinstance(item, VehicleListing):
+                logger.info(f"item.price: {item.price}")
+                logger.info(f"item.listed_on: {item.listed_on}")
+                listing_date = item.listed_on
+                price = item.price
+            else:
+                logger.info(f"item.listing.price: {item.listing.price}")
+                logger.info(f"item.relisting_date: {item.relisting_date}")
+                listing_date = item.relisting_date
+                price = item.listing.price
+            response = verify_facebook_listing_images_upload(search_query, price, listing_date, credentials.session_cookie)
             user.last_images_check_status_time = timezone.now()
             user.save()
             if response[0] == 1:  #Image upload successful
@@ -562,7 +572,7 @@ def check_images_upload_status(self):
                 continue
             elif response[0] == 3: #Image upload successful
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
-                logger.info(f"Error: {response[1]}")
+                logger.info(f"info: {response[1]}")
                 item.status = "sold"
                 item.save()
                 continue
@@ -575,11 +585,15 @@ def check_images_upload_status(self):
                 logger.info(f"Error: {response[1]}")
                 handle_retry_or_disable_credentials(credentials, user)
                 continue
-            else: #Image upload failed
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
-                logger.info(f"Error: {response[1]}")
+            elif response[0] == 0: #No matching listing found
+                logger.info(f"listing found for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query} has no images uploaded, Successfully deleted and marked as failed")
+                logger.info(f"info: {response[1]}")
                 item.status = "failed"
                 item.save()
+                continue
+            else: #Image upload failed
+                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
+                logger.info(f"info: {response[1]}")
                 continue
     else:
         logger.info("No vehicle listings or relistings found for checking images upload status")
