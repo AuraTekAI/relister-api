@@ -1,6 +1,6 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing
+from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import datetime, timedelta
