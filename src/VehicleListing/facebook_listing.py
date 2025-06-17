@@ -648,7 +648,6 @@ def remove_prefix_case_insensitive(title: str, prefix: str) -> str:
     return title_stripped
 
 
-
 def extract_listings_with_status(text):
     """
     Extracts structured listings including title, price, date, and status.
@@ -1441,66 +1440,53 @@ def is_image_uploaded(page):
 
 
 
-def remove_prefix_case_insensitive(title: str, prefix: str) -> str:
-    """
-    Removes the given prefix from the start of the title, ignoring case.
-    Preserves the original casing of the remaining title.
-    """
-    title_stripped = title.lstrip()
-    prefix_len = len(prefix)
 
-    if title_stripped.lower().startswith(prefix.lower()):
-        return title_stripped[prefix_len:].lstrip()
+# def extract_listings_with_status(text):
+#     """
+#     Extracts structured listings including title, price, date, and status.
+#     Returns a list of dicts: title, price, listing_date (in DD/MM), status.
+#     """
+#     listings = []
 
-    return title_stripped
+#     # Define fallback regex patterns from most specific to most generic
+#     patterns = [
+#         # Pattern 1: AU$ version (fallback)
+#         (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
+#         # Pattern 2: With tip
+#         (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
+#         # Pattern 3: Without tip
+#         (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True)
+#     ]
 
+#     for pattern, convert_date in patterns:
+#         matches = re.findall(pattern, text, re.DOTALL)
+#         if matches:
+#             for match in matches:
+#                 # Old pattern where status needs to be inferred
+#                 title, price, date, tail = match
+#                 tail_clean = tail.lower().replace('\xa0', ' ')
+#                 if "mark as sold" in tail_clean:
+#                     status = "Mark as sold"
+#                 elif "mark as available" in tail_clean:
+#                     status = "Mark as available"
+#                 else:
+#                     status = None
+#                 # Format date to DD/MM if needed
+#                 if convert_date:
+#                     month, day = date.strip().split('/')
+#                     date = f"{day.zfill(2)}/{month.zfill(2)}"
+#                 title = title.strip().replace('\xa0', ' ')
+#                 clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
 
+#                 listings.append({
+#                     'title': clean_title,
+#                     'price': re.sub(r'[^\d]', '', price),
+#                     'date': date,
+#                     'status': status
+#                 })
+#             break  # Stop on first successful match
 
-def extract_listings_with_status(text):
-    """
-    Extracts structured listings including title, price, date, and status.
-    Returns a list of dicts: title, price, listing_date (in DD/MM), status.
-    """
-    listings = []
-
-    # Define fallback regex patterns from most specific to most generic
-    patterns = [
-        # Pattern 1: AU$ version (fallback)
-        (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
-        # Pattern 2: With tip
-        (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
-        # Pattern 3: Without tip
-        (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True)
-    ]
-
-    for pattern, convert_date in patterns:
-        matches = re.findall(pattern, text, re.DOTALL)
-        if matches:
-            for match in matches:
-                # Old pattern where status needs to be inferred
-                title, price, date, tail = match
-                tail_clean = tail.lower().replace('\xa0', ' ')
-                if "mark as sold" in tail_clean:
-                    status = "Mark as sold"
-                elif "mark as available" in tail_clean:
-                    status = "Mark as available"
-                else:
-                    status = None
-                # Format date to DD/MM if needed
-                if convert_date:
-                    month, day = date.strip().split('/')
-                    date = f"{day.zfill(2)}/{month.zfill(2)}"
-                title = title.strip().replace('\xa0', ' ')
-                clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
-                listings.append({
-                    'title': clean_title,
-                    'price': re.sub(r'[^\d]', '', price),
-                    'date': date,
-                    'status': status
-                })
-            break  # Stop on first successful match
-
-    return listings
+#     return listings
 
 def extract_restricted_listing_details(page, title):
     """
