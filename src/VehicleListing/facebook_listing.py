@@ -1260,7 +1260,7 @@ def extract_about_the_vehicle(page, listing):
 
 def verify_facebook_listing_images_upload(search_for, listing_price, listing_date, session_cookie):
     """Perform search and delete listing if image is not uploaded with retry and timeout handling"""
-
+    logging.info(f"Verifying images upload status for the listing: {search_for} and price: {listing_price} and date: {listing_date}")
     def handle_post_delete_flow(page, browser):
         try:
             not_answer_button = page.locator("//*[text()=\"I'd rather not answer\"]").first
