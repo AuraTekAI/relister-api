@@ -25,6 +25,7 @@ logger = logging.getLogger('facebook_listing_cronjob')
 
 # Get Australian Perth timezone
 perth_tz = pytz.timezone('Australia/Perth')
+last_day_time = timezone.now().astimezone(perth_tz) - timedelta(hours=24)
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def create_pending_facebook_marketplace_listing_task(self):
@@ -69,6 +70,12 @@ def create_pending_facebook_marketplace_listing_task(self):
                 pending_listings.append(listing)  # Re-queue for later
                 continue
 
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+                user.daily_listing_count = 0
+                user.save()
+            if user.daily_listing_count >= 15:
+                logger.info(f"Daily listing count limit reached for user {user.email}")
+                continue
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
             now = timezone.now().astimezone(perth_tz)
     
@@ -80,6 +87,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 listing.updated_at = now
                 listing.save()
                 user.last_facebook_listing_time = now
+                user.daily_listing_count += 1
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
@@ -159,11 +167,19 @@ def relist_facebook_marketplace_listing_task(self):
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+                user.daily_listing_count = 0
+                user.save()
+            if user.daily_listing_count >= 15:
+                logger.info(f"Daily listing count limit reached for user {user.email}")
+                continue
             listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
             if listing_created:
                 update_credentials_success(credentials)
                 logger.info(f"Relisting successful for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                user.daily_listing_count += 1
+                user.save()
                 create_or_update_relisting_entry(listing, user, relisting)
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 image_verification(listing)
@@ -221,6 +237,12 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 failed_listings.append(listing)  # Re-queue for later
                 continue
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+                user.daily_listing_count = 0
+                user.save()
+            if user.daily_listing_count >= 15:
+                logger.info(f"Daily listing count limit reached for user {user.email}")
+                continue
 
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
             now = timezone.now().astimezone(perth_tz)
@@ -233,6 +255,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 listing.updated_at = now
                 listing.save()
                 user.last_facebook_listing_time = now
+                user.daily_listing_count += 1
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))

@@ -13,6 +13,7 @@ class UserAdmin(UserAdmin):
         "is_superuser",
         "is_approved",
         "is_active",
+        "daily_listing_count",
         "last_facebook_listing_time",
         "last_images_check_status_time",
     )
