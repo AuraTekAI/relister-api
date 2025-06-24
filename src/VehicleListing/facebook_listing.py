@@ -8,7 +8,7 @@ from relister.settings import IMAGES_DIR
 import re
 from django.conf import settings
 from VehicleListing.models import FacebookUserCredentials
-
+from django.utils import timezone
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
@@ -1919,8 +1919,8 @@ def image_upload_verification(vehicle_listing):
         logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is created successfully and Now verifying image upload")
         search_title = f"{vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}"
         search_price = str(vehicle_listing.price)
-        logging.info(f"vehicle_listing.listed_on: {vehicle_listing.listed_on}")
-        search_date = vehicle_listing.listed_on.strftime("%d/%m")
+        logging.info(f"vehicle_listing.listed_on: {timezone.localtime(vehicle_listing.listed_on)}")
+        search_date = timezone.localtime(vehicle_listing.listed_on).strftime("%d/%m")
         logging.info(f"search_title: {search_title} and search_price: {search_price} and search_date: {search_date}")
         user = vehicle_listing.user
         credentials = FacebookUserCredentials.objects.filter(user=user).first()

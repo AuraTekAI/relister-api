@@ -11,7 +11,6 @@ from .tasks import create_marketplace_listing
 from relister.settings import MAX_RETRIES_ATTEMPTS
 from accounts.models import User
 from django.conf import settings
-import pytz
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -45,7 +44,7 @@ def send_status_reminder_email(facebook_user):
 
 
 def create_or_update_relisting_entry(listing, user, relisting=None):
-    now = timezone.now().astimezone(pytz.timezone('Australia/Perth'))
+    now = timezone.now()
     if not relisting:
         listing.has_images = False
         listing.is_relist = True
@@ -65,7 +64,7 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
     )
 
 def handle_failed_relisting(listing, user, relisting=None):
-    now = timezone.now().astimezone(pytz.timezone('Australia/Perth'))
+    now = timezone.now()
     if not relisting:
         listing.is_relist = True
         listing.save()
@@ -83,7 +82,7 @@ def handle_failed_relisting(listing, user, relisting=None):
         relisting.save()
 
 def mark_listing_sold(listing, relisting=None):
-    now = timezone.now().astimezone(pytz.timezone('Australia/Perth'))
+    now = timezone.now()
     listing.is_relist = True
     listing.status = "sold"
     listing.updated_at = now
@@ -128,7 +127,7 @@ def retry_failed_relistings(seven_days_ago):
             continue
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
-        now = timezone.now().astimezone(pytz.timezone('Australia/Perth'))
+        now = timezone.now()
         if listing_created:
             update_credentials_success(credentials)
             relisting.status = "completed"

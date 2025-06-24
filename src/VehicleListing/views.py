@@ -18,15 +18,12 @@ import random
 from datetime import datetime, timedelta
 from queue import Queue
 from django.conf import settings
-import pytz
 from django.utils import timezone
 
 # dictionary which hold queues for each user
 user_queues = {}
 gumtree_profile_user_queues = {}
 facebook_profile_user_queues = {}
-perth_tz = pytz.timezone('Australia/Perth')
-last_day_time = timezone.now().astimezone(perth_tz) - timedelta(hours=24)
 # worker function to process the vehicle listings
 def worker(user_id):
     while True:
@@ -239,13 +236,13 @@ class ListingUrlViewSet(ModelViewSet):
             else:
                 if credentials and credentials.session_cookie and credentials.status:
                     if vehicle_listing.listed_on and not vehicle_listing.is_relist:
-                        listed_on = vehicle_listing.listed_on
+                        listed_on = timezone.localtime(vehicle_listing.listed_on)
                     else:
                         relisting=RelistingFacebooklisting.objects.filter(listing=vehicle_listing,status="completed",last_relisting_status=False).first()
                         if relisting:
-                            listed_on = relisting.relisting_date
+                            listed_on = timezone.localtime(relisting.relisting_date)
                         else:
-                            listed_on = datetime.now().astimezone(perth_tz)
+                            listed_on = timezone.localtime(timezone.now())
                     response = perform_search_and_delete(search_query, vehicle_listing.price, listed_on, credentials.session_cookie)
                     if response[0] in [1, 2]:
                         credentials.status = True
@@ -304,13 +301,13 @@ class VehicleListingViewSet(ModelViewSet):
         else:
             if credentials and credentials.session_cookie != {} and credentials.status:
                 if vehicle_listing.listed_on and not vehicle_listing.is_relist:
-                    listed_on = vehicle_listing.listed_on
+                    listed_on = timezone.localtime(vehicle_listing.listed_on)
                 else:
                     relisting=RelistingFacebooklisting.objects.filter(listing=vehicle_listing,status="completed",last_relisting_status=False).first()
                     if relisting:
-                        listed_on = relisting.relisting_date
+                        listed_on = timezone.localtime(relisting.relisting_date)
                     else:
-                        listed_on = vehicle_listing.listed_on
+                        listed_on = timezone.localtime(vehicle_listing.listed_on)
                 response = perform_search_and_delete(search_query,vehicle_listing.price,listed_on,credentials.session_cookie)
                 if response[0] == 1:
                     credentials.status = True
@@ -411,10 +408,13 @@ def create_facebook_listing(vehicle_listing):
             already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing,).first()
             if not already_listed:
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+                last_day_time = timezone.now() - timedelta(hours=24)
+                if user.last_facebook_listing_time and user.last_facebook_listing_time > last_day_time:
                     user.daily_listing_count = 0
                     user.save()
                 if user.daily_listing_count >= 15:
+                    vehicle_listing.status="failed"
+                    vehicle_listing.save()
                     return False, "Daily listing count limit reached"
                 listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
                 if listing_created:
@@ -423,8 +423,8 @@ def create_facebook_listing(vehicle_listing):
                     credentials.retry_count = 0
                     credentials.save()
                     vehicle_listing.status="completed"
-                    vehicle_listing.listed_on=datetime.now().astimezone(perth_tz)
-                    vehicle_listing.updated_at=datetime.now().astimezone(perth_tz)
+                    vehicle_listing.listed_on=timezone.now()
+                    vehicle_listing.updated_at=timezone.now()
                     vehicle_listing.save()
                     return True, "Listing created successfully"
                 else:
@@ -648,13 +648,13 @@ class FacebookProfileListingViewSet(ModelViewSet):
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
                 if current_listing.listed_on and not current_listing.is_relist:
-                    listed_on = current_listing.listed_on
+                    listed_on = timezone.localtime(current_listing.listed_on)
                 else:
                     relisting=RelistingFacebooklisting.objects.filter(listing=current_listing,status="completed",last_relisting_status=False).first()
                     if relisting:
-                        listed_on = relisting.relisting_date
+                        listed_on = timezone.localtime(relisting.relisting_date)
                     else:
-                        listed_on = current_listing.listed_on
+                        listed_on = timezone.localtime(current_listing.listed_on)
                 temp_list.append(listed_on)
                 year_make_model_list.append(temp_list)
         facebook_profile_listing.delete()
@@ -708,13 +708,13 @@ class GumtreeProfileListingViewSet(ModelViewSet):
                 temp_list.append(current_listing.year + " " + current_listing.make + " " + current_listing.model)
                 temp_list.append(current_listing.price)
                 if current_listing.listed_on and not current_listing.is_relist:
-                    listed_on = current_listing.listed_on
+                    listed_on = timezone.localtime(current_listing.listed_on)
                 else:
                     relisting=RelistingFacebooklisting.objects.filter(listing=current_listing,status="completed",last_relisting_status=False).first()
                     if relisting:
-                        listed_on = relisting.relisting_date
+                        listed_on = timezone.localtime(relisting.relisting_date)
                     else:
-                        listed_on = current_listing.listed_on
+                        listed_on = timezone.localtime(current_listing.listed_on)
                 temp_list.append(listed_on)
                 year_make_model_list.append(temp_list)
         gumtree_profile_listing.delete()

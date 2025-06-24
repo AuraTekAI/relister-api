@@ -3,9 +3,8 @@ from celery import shared_task
 from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
-from datetime import datetime, timedelta
+from datetime import timedelta
 from django.utils import timezone
-import pytz
 from VehicleListing.facebook_listing import get_facebook_profile_listings, perform_search_and_delete
 from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_id
 from VehicleListing.views import facebook_profile_listings_thread,image_verification
@@ -22,10 +21,6 @@ import random
 import logging
 import threading
 logger = logging.getLogger('facebook_listing_cronjob')
-
-# Get Australian Perth timezone
-perth_tz = pytz.timezone('Australia/Perth')
-last_day_time = timezone.now().astimezone(perth_tz) - timedelta(hours=24)
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def create_pending_facebook_marketplace_listing_task(self):
@@ -58,7 +53,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 
             if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
                 listing.status = "completed"
-                listing.listed_on = timezone.now().astimezone(perth_tz)
+                listing.listed_on = timezone.now()
                 listing.save()
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
@@ -69,8 +64,9 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 pending_listings.append(listing)  # Re-queue for later
                 continue
-            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
-            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+            last_24_hours_time = timezone.now() - timedelta(hours=24)
+            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_24_hours_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
                 user.daily_listing_count = 0
                 user.save()
@@ -78,16 +74,15 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
-            now = timezone.now().astimezone(perth_tz)
     
             if created:
                 update_credentials_success(credentials)
                 FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
                 listing.status = "completed"
-                listing.listed_on = now
-                listing.updated_at = now
+                listing.listed_on = timezone.now()
+                listing.updated_at = timezone.now()
                 listing.save()
-                user.last_facebook_listing_time = now
+                user.last_facebook_listing_time = timezone.now()
                 user.daily_listing_count += 1
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
@@ -114,7 +109,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 def relist_facebook_marketplace_listing_task(self):
     """Relist 7-day-old Facebook Marketplace listings"""
     logger.info("Relisting 7 days old facebook marketplace listings")
-    current_date = timezone.now().astimezone(perth_tz).date()
+    current_date = timezone.now().date()
     seven_days_ago = current_date - timedelta(days=7)
 
     vehicle_listings = VehicleListing.objects.filter(
@@ -162,12 +157,13 @@ def relist_facebook_marketplace_listing_task(self):
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query}")
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        response = perform_search_and_delete(search_query,relisting_price, relisting_date,credentials.session_cookie)
+        response = perform_search_and_delete(search_query,relisting_price, timezone.localtime(relisting_date),credentials.session_cookie)
 
         if response[0] == 1:  # Deletion successful
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            last_day_time = timezone.now() - timedelta(hours=24)
             logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
             if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
@@ -175,6 +171,8 @@ def relist_facebook_marketplace_listing_task(self):
                 user.save()
             if user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
+                listing.status = "failed"
+                listing.save()
                 continue
             listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
@@ -229,8 +227,7 @@ def create_failed_facebook_marketplace_listing_task(self):
 
             if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
                 listing.status = "completed"
-                listing.listed_on = timezone.now().astimezone(perth_tz)
-                listing.save()
+                listing.listed_on = timezone.now()
                 logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
                 continue
 
@@ -240,8 +237,9 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 failed_listings.append(listing)  # Re-queue for later
                 continue
-            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
-            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+            last_24_hours_time = timezone.now() - timedelta(hours=24)
+            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_24_hours_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
                 user.daily_listing_count = 0
                 user.save()
@@ -250,16 +248,15 @@ def create_failed_facebook_marketplace_listing_task(self):
                 continue
 
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
-            now = timezone.now().astimezone(perth_tz)
 
             if created:
                 update_credentials_success(credentials)
                 FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
                 listing.status = "completed"
-                listing.listed_on = now
-                listing.updated_at = now
+                listing.listed_on = timezone.now()
+                listing.updated_at = timezone.now()
                 listing.save()
-                user.last_facebook_listing_time = now
+                user.last_facebook_listing_time = timezone.now()
                 user.daily_listing_count += 1
                 user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
@@ -411,8 +408,8 @@ def profile_listings_for_approved_users(self, user_id):
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 def generate_and_send_monthly_invoices(self):
     logger.info("Invoice generation task started.")
-    cutoff_date = timezone.now().astimezone(perth_tz).replace(day=1)
-    today_date = timezone.now().astimezone(perth_tz).strftime("%d/%m/%Y")
+    cutoff_date = timezone.now().replace(day=1)
+    today_date = timezone.now().strftime("%d/%m/%Y")
 
     approved_users = User.objects.filter(is_approved=True).all()
     logger.info(f"Found {approved_users.count()} approved users with subscription date <= {cutoff_date}.")
@@ -582,16 +579,16 @@ def check_images_upload_status(self):
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             if isinstance(item, VehicleListing):
                 logger.info(f"item.price: {item.price}")
-                logger.info(f"item.listed_on: {item.listed_on}")
-                listing_date = item.listed_on
+                logger.info(f"item.listed_on: {timezone.localtime(item.listed_on)}")
+                listing_date = timezone.localtime(item.listed_on)
                 price = item.price
             else:
                 logger.info(f"item.listing.price: {item.listing.price}")
-                logger.info(f"item.relisting_date: {item.relisting_date}")
-                listing_date = item.relisting_date
+                logger.info(f"item.relisting_date: {timezone.localtime(item.relisting_date)}")
+                listing_date = timezone.localtime(item.relisting_date)
                 price = item.listing.price
             response = verify_facebook_listing_images_upload(search_query, price, listing_date, credentials.session_cookie)
-            user.last_images_check_status_time = timezone.now().astimezone(perth_tz)
+            user.last_images_check_status_time = timezone.now()
             user.save()
             if response[0] == 1:  #Image upload successful
                 logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
