@@ -411,7 +411,7 @@ def create_facebook_listing(vehicle_listing):
             already_listed = FacebookListing.objects.filter(user=vehicle_listing.user, listing=vehicle_listing,).first()
             if not already_listed:
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                if user.last_facebook_listing_time and user.last_facebook_listing_time > last_day_time:
+                if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
                     user.daily_listing_count = 0
                     user.save()
                 if user.daily_listing_count >= 15:

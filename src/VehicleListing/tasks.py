@@ -69,8 +69,8 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 pending_listings.append(listing)  # Re-queue for later
                 continue
-
-            if user.last_facebook_listing_time and user.last_facebook_listing_time > last_day_time:
+            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
                 user.daily_listing_count = 0
                 user.save()
@@ -168,7 +168,8 @@ def relist_facebook_marketplace_listing_task(self):
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            if user.last_facebook_listing_time and user.last_facebook_listing_time > last_day_time:
+            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
                 user.daily_listing_count = 0
                 user.save()
@@ -239,7 +240,8 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 failed_listings.append(listing)  # Re-queue for later
                 continue
-            if user.last_facebook_listing_time and user.last_facebook_listing_time > last_day_time:
+            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
+            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
                 user.daily_listing_count = 0
                 user.save()
