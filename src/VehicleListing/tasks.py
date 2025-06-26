@@ -65,12 +65,13 @@ def create_pending_facebook_marketplace_listing_task(self):
                 pending_listings.append(listing)  # Re-queue for later
                 continue
             last_24_hours_time = timezone.now() - timedelta(hours=24)
-            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
-            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_24_hours_time:
+            current_user=User.objects.filter(id=user.id).first()
+            logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
+            if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_24_hours_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-                user.daily_listing_count = 0
-                user.save()
-            if user.daily_listing_count >= 15:
+                current_user.daily_listing_count = 0
+                current_user.save()
+            if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
@@ -82,9 +83,9 @@ def create_pending_facebook_marketplace_listing_task(self):
                 listing.listed_on = timezone.now()
                 listing.updated_at = timezone.now()
                 listing.save()
-                user.last_facebook_listing_time = timezone.now()
-                user.daily_listing_count += 1
-                user.save()
+                current_user.last_facebook_listing_time = timezone.now()
+                current_user.daily_listing_count += 1
+                current_user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 image_verification(listing)
@@ -164,12 +165,13 @@ def relist_facebook_marketplace_listing_task(self):
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             last_day_time = timezone.now() - timedelta(hours=24)
-            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_day_time}")
-            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_day_time:
+            current_user=User.objects.filter(id=user.id).first()
+            logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
+            if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_day_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-                user.daily_listing_count = 0
-                user.save()
-            if user.daily_listing_count >= 15:
+                current_user.daily_listing_count = 0
+                current_user.save()
+            if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 listing.status = "failed"
                 listing.save()
@@ -179,8 +181,8 @@ def relist_facebook_marketplace_listing_task(self):
             if listing_created:
                 update_credentials_success(credentials)
                 logger.info(f"Relisting successful for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-                user.daily_listing_count += 1
-                user.save()
+                current_user.daily_listing_count += 1
+                current_user.save()
                 create_or_update_relisting_entry(listing, user, relisting)
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 image_verification(listing)
@@ -238,12 +240,13 @@ def create_failed_facebook_marketplace_listing_task(self):
                 failed_listings.append(listing)  # Re-queue for later
                 continue
             last_24_hours_time = timezone.now() - timedelta(hours=24)
-            logger.info(f"Last facebook listing time: {user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
-            if user.last_facebook_listing_time and user.last_facebook_listing_time < last_24_hours_time:
+            current_user=User.objects.filter(id=user.id).first()
+            logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
+            if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_24_hours_time:
                 logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-                user.daily_listing_count = 0
-                user.save()
-            if user.daily_listing_count >= 15:
+                current_user.daily_listing_count = 0
+                current_user.save()
+            if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
 
@@ -256,9 +259,9 @@ def create_failed_facebook_marketplace_listing_task(self):
                 listing.listed_on = timezone.now()
                 listing.updated_at = timezone.now()
                 listing.save()
-                user.last_facebook_listing_time = timezone.now()
-                user.daily_listing_count += 1
-                user.save()
+                current_user.last_facebook_listing_time = timezone.now()
+                current_user.daily_listing_count += 1
+                current_user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 image_verification(listing)
