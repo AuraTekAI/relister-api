@@ -88,7 +88,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 current_user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_verification(listing)
+                image_verification(None,listing)
             else:
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
@@ -183,9 +183,10 @@ def relist_facebook_marketplace_listing_task(self):
                 logger.info(f"Relisting successful for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 current_user.daily_listing_count += 1
                 current_user.save()
-                create_or_update_relisting_entry(listing, user, relisting)
+                relisting=create_or_update_relisting_entry(listing, user, relisting)
+                logger.info(f"Relisting created for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_verification(listing)
+                image_verification(relisting,None)
             else:
                 logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 handle_failed_relisting(listing, user, relisting)
@@ -264,7 +265,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 current_user.save()
                 logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_verification(listing)
+                image_verification(None,listing)
             else:
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"

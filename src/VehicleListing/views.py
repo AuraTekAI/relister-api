@@ -32,7 +32,7 @@ def worker(user_id):
             break
         create_facebook_listing(vehicle_listing)
         time.sleep(random.randint(20, 30))
-        image_verification(vehicle_listing)
+        image_verification(None,vehicle_listing)
         user_queues[user_id].task_done()
 
 
@@ -824,17 +824,33 @@ def get_facebook_session_status(request):
 
 
 
-def image_verification(vehicle_listing):
+def image_verification(relisting,vehicle_listing):
     """Verify image upload and update the status of the vehicle listing"""
-    response=image_upload_verification(vehicle_listing)
-    if response[0] == 1:
-        vehicle_listing.has_images=True
-        vehicle_listing.save()
-    elif response[0] == 0:
-        vehicle_listing.status="failed"
-        vehicle_listing.save()
-    elif response[0] == 3:
-        vehicle_listing.status="sold"
-        vehicle_listing.save()
+    response=image_upload_verification(relisting,vehicle_listing)
+    if relisting:
+        if response[0] == 1:
+            relisting.listing.has_images=True
+            relisting.listing.save()
+        elif response[0] == 0:
+            relisting.status="failed"
+            relisting.save()
+        elif response[0] == 3:
+            relisting.listing.status="sold"
+            relisting.listing.save()
+            relisting.status="completed"
+            relisting.last_relisting_status=True
+            relisting.save()
+        else:
+            pass
     else:
-        pass
+        if response[0] == 1:
+            vehicle_listing.has_images=True
+            vehicle_listing.save()
+        elif response[0] == 0:
+            vehicle_listing.status="failed"
+            vehicle_listing.save()
+        elif response[0] == 3:
+            vehicle_listing.status="sold"
+            vehicle_listing.save()
+        else:
+            pass

@@ -55,13 +55,14 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
         relisting.updated_at = now
         relisting.last_relisting_status = True
         relisting.save()
-    RelistingFacebooklisting.objects.create(
+    relisting=RelistingFacebooklisting.objects.create(
         user=user,
         listing=listing,
         relisting_date=now,
         last_relisting_status=False,
         status="completed"
     )
+    return relisting
 
 def handle_failed_relisting(listing, user, relisting=None):
     now = timezone.now()

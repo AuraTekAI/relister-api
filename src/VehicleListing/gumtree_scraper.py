@@ -199,6 +199,7 @@ def get_gumtree_listing_details(listing_id):
             return None
 
         logging.info(f"Successfully fetched details for listing ID: {listing_id}")
+        logging.info(f"listing_details: {listing_details}")
         return listing_details
 
     except Exception as e:

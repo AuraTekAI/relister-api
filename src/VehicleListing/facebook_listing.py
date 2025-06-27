@@ -857,15 +857,12 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
 
                                 delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
                                 if delete_buttons:
-                                    target_button = delete_buttons[2]
+                                    target_button = delete_buttons[len(delete_buttons)-1]
                                     if target_button.is_visible():
                                         target_button.click()
                                         random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                                         return handle_post_delete_flow(page, browser)
-                                logging.error("Delete button not found or not visible.")
-                                browser.close()
-                                return 0, "Delete button not found"
-                                                                    #2nd Attempt
+                                #2nd Attempt
                                 delete_buttons = page.locator("span:text('Delete')").all()
                                 if delete_buttons:
                                     logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
@@ -1363,7 +1360,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                     if delete_buttons:
                                         logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
                                         
-                                        target_button = delete_buttons[2]
+                                        target_button = delete_buttons[len(delete_buttons)-1]
                                         if target_button.is_visible():
                                             target_button.click()
                                             random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
@@ -1606,7 +1603,7 @@ def delete_restricted_listings_without_images(page, listing):
             delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
             if delete_buttons:
                 logging.info(f"First attempt: Found {len(delete_buttons)} delete buttons")
-                target_button = delete_buttons[2]
+                target_button = delete_buttons[len(delete_buttons)-1]
                 if target_button.is_visible():
                     target_button.click()
                     logging.info(f"target_button: {target_button} is clicked successfully")
@@ -1872,7 +1869,7 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                                 if delete_buttons:
                                     logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
                                         
-                                    target_button = delete_buttons[2]
+                                    target_button = delete_buttons[len(delete_buttons)-1]
                                     if target_button.is_visible():
                                         target_button.click()
                                         random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
@@ -1913,16 +1910,25 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
         return 0, "Unhandled error in image_upload_verification_with_search"
 
 
-def image_upload_verification(vehicle_listing):
+def image_upload_verification(relisting,vehicle_listing):
     """Verify image upload"""
-    if vehicle_listing.status == "completed":
-        logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is created successfully and Now verifying image upload")
+    if relisting:
+        search_title = f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}"
+        search_price = str(relisting.listing.price)
+        search_date = timezone.localtime(relisting.relisting_date).strftime("%d/%m")
+        status=relisting.status
+    else:
         search_title = f"{vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}"
         search_price = str(vehicle_listing.price)
-        logging.info(f"vehicle_listing.listed_on: {timezone.localtime(vehicle_listing.listed_on)}")
         search_date = timezone.localtime(vehicle_listing.listed_on).strftime("%d/%m")
+        status=vehicle_listing.status
+    if status == "completed":
+        logging.info(f"Vehicle listing {search_title} is created successfully and Now verifying image upload")
+        # search_title = f"{vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}"
+        # search_price = str(vehicle_listing.price)
+        # search_date = timezone.localtime(vehicle_listing.listed_on).strftime("%d/%m")
         logging.info(f"search_title: {search_title} and search_price: {search_price} and search_date: {search_date}")
-        user = vehicle_listing.user
+        user = relisting.user if relisting else vehicle_listing.user
         credentials = FacebookUserCredentials.objects.filter(user=user).first()
         try:
             with sync_playwright() as p:
@@ -2001,5 +2007,5 @@ def image_upload_verification(vehicle_listing):
             logging.error(f"Error in image_upload_verification: {e}")
             return 5,"Error in image_upload_verification"
     else:
-        logging.info(f"Vehicle listing {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model} is not completed")
+        logging.info(f"Vehicle listing {search_title} is not completed")
         return 5, "Vehicle listing is not completed"
