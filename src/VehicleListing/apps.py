@@ -67,6 +67,12 @@ class VehiclelistingConfig(AppConfig):
                     "interval": interval_map["daily"],
                     "crontab": None,
                 },
+                {
+                    "name": "Reset_Listing_Count_for_Users",
+                    "task": "VehicleListing.tasks.reset_listing_count_for_users_task",
+                    "interval": interval_map["daily"],
+                    "crontab": None,
+                },
             ]
 
             # Create or update each task

@@ -20,19 +20,19 @@ class ListingUrlAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','has_images','listed_on', 'created_at', 'updated_at')
+    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','has_images','listed_on','retry_count', 'created_at', 'updated_at')
     search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
     list_filter = ('user','status')
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin): 
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
     search_fields = ('user__email', 'url')
-    list_filter = ('user',)
+    list_filter = ('user','status')
 
 class FacebookProfileListingAdmin(admin.ModelAdmin):        
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
     search_fields = ('user__email', 'url')
-    list_filter = ('user',)
+    list_filter = ('user','status')
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")

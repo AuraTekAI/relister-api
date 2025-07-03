@@ -21,6 +21,7 @@ from django.conf import settings
 from django.utils import timezone
 
 # dictionary which hold queues for each user
+vehicle_listing_user_queues = {}
 user_queues = {}
 gumtree_profile_user_queues = {}
 facebook_profile_user_queues = {}
@@ -34,6 +35,19 @@ def worker(user_id):
         time.sleep(random.randint(20, 30))
         image_verification(None,vehicle_listing)
         user_queues[user_id].task_done()
+
+def delete_vehicle_listing_worker(user_id):
+    while True:
+        search_query,price,listed_on,session_cookie = vehicle_listing_user_queues[user_id].get()
+        if search_query is None or price is None or listed_on is None or session_cookie is None:
+            break
+        for retry in range(3):
+            response = perform_search_and_delete(search_query,price,listed_on,session_cookie)
+            if response[0] == 1:
+                break
+            else:
+                time.sleep(300,360)
+        vehicle_listing_user_queues[user_id].task_done()
 
 
 def delete_facebook_profile_listing_worker(user_id):
@@ -243,19 +257,28 @@ class ListingUrlViewSet(ModelViewSet):
                             listed_on = timezone.localtime(relisting.relisting_date)
                         else:
                             listed_on = timezone.localtime(timezone.now())
-                    response = perform_search_and_delete(search_query, vehicle_listing.price, listed_on, credentials.session_cookie)
-                    if response[0] in [1, 2]:
-                        credentials.status = True
-                        credentials.retry_count = 0
-                        credentials.save()
-                        import_url.delete()
-                        vehicle_listing.delete()
-                        message = 'Listing deleted successfully' if response[0] == 1 else 'Listing already sold , Now deleted successfully'
-                        return JsonResponse({'message': message}, status=200)
-                    else:
-                        import_url.delete()
-                        vehicle_listing.delete()
-                        return JsonResponse({'error': 'Failed to find and delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
+                    price = vehicle_listing.price
+                    user_id = vehicle_listing.user.id
+                    if user_id not in vehicle_listing_user_queues:
+                        vehicle_listing_user_queues[user_id] = Queue()
+                        threading.Thread(target=delete_vehicle_listing_worker, args=(user_id,), daemon=True).start()
+                    vehicle_listing_user_queues[user_id].put((search_query, price, listed_on, credentials.session_cookie))
+                    import_url.delete()
+                    vehicle_listing.delete()
+                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+                    # response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
+                    # if response[0] in [1, 2]:
+                    #     credentials.status = True
+                    #     credentials.retry_count = 0
+                    #     credentials.save()
+                    #     import_url.delete()
+                    #     vehicle_listing.delete()
+                    #     message = 'Listing deleted successfully' if response[0] == 1 else 'Listing already sold , Now deleted successfully'
+                    #     return JsonResponse({'message': message}, status=200)
+                    # else:
+                    #     import_url.delete()
+                    #     vehicle_listing.delete()
+                    #     return JsonResponse({'error': 'Failed to find and delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
                 else:
                     if credentials:
                         credentials.status = False
@@ -308,22 +331,30 @@ class VehicleListingViewSet(ModelViewSet):
                         listed_on = timezone.localtime(relisting.relisting_date)
                     else:
                         listed_on = timezone.localtime(vehicle_listing.listed_on)
-                response = perform_search_and_delete(search_query,vehicle_listing.price,listed_on,credentials.session_cookie)
-                if response[0] == 1:
-                    credentials.status = True
-                    credentials.retry_count = 0
-                    credentials.save()
-                    vehicle_listing.delete()
-                    return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-                elif response[0] == 2:
-                    credentials.status = True
-                    credentials.retry_count = 0
-                    credentials.save()
-                    vehicle_listing.delete()
-                    return JsonResponse({'message': 'Listing already sold , Now deleted successfully'}, status=200)
-                else:
-                    vehicle_listing.delete()
-                    return JsonResponse({'error': 'Failed to delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
+                price = vehicle_listing.price
+                user_id = vehicle_listing.user.id
+                if user_id not in vehicle_listing_user_queues:
+                    vehicle_listing_user_queues[user_id] = Queue()
+                    threading.Thread(target=delete_vehicle_listing_worker, args=(user_id,), daemon=True).start()
+                vehicle_listing_user_queues[user_id].put((search_query,price,listed_on,credentials.session_cookie))
+                vehicle_listing.delete()
+                return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
+                # for retry in range(3):
+                #     response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
+                #     if response[0] == 1:
+                #         credentials.status = True
+                #         credentials.retry_count = 0
+                #         credentials.save()
+                #         break
+                # elif response[0] == 2:
+                #     credentials.status = True
+                #     credentials.retry_count = 0
+                #     credentials.save()
+                #     vehicle_listing.delete()
+                #     return JsonResponse({'message': 'Listing already sold , Now deleted successfully'}, status=200)
+                # else:
+                #     vehicle_listing.delete()
+                #     return JsonResponse({'error': 'Failed to delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
             else:
                 if credentials:
                     credentials.status = False
@@ -595,9 +626,6 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                 interior_colour=vehicleListing["interior_colour"],
                 seller_profile_id=seller_id
             )
-        
-    
-    #Mark already exist listing who are not present in profile listings as sold
     #Mark missing listings as SOLD
     existing_listings = VehicleListing.objects.filter(
         user=user, seller_profile_id=seller_id
@@ -740,12 +768,18 @@ def extract_seller_id(profile_url):
 def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
     """Delete multiple vehicle listings"""
     if session_cookie:
-        for current_listing in year_make_model_list:
+        while year_make_model_list:
+            current_listing=year_make_model_list.pop(0)
             search_query = current_listing[0]
             price=current_listing[1]
             listing_date=current_listing[2]
-            perform_search_and_delete(search_query,price,listing_date,session_cookie)
-            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            for i in range(3):
+                result=perform_search_and_delete(search_query,price,listing_date,session_cookie)
+                if result[0] == 1:
+                    time.sleep(random.uniform(300,360))
+                    break
+                else:
+                    time.sleep(random.uniform(300, 360))
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_montly_listings_report(request):
@@ -840,6 +874,16 @@ def image_verification(relisting,vehicle_listing):
             relisting.status="completed"
             relisting.last_relisting_status=True
             relisting.save()
+        elif response[0] == 7:
+            if relisting.listing.retry_count < 3:
+                relisting.listing.retry_count += 1
+                relisting.listing.save()
+            else:
+                relisting.listing.status = "sold" 
+                relisting.listing.save()
+                relisting.status="completed"
+                relisting.last_relisting_status=True
+                relisting.save()
         else:
             pass
     else:
@@ -852,5 +896,12 @@ def image_verification(relisting,vehicle_listing):
         elif response[0] == 3:
             vehicle_listing.status="sold"
             vehicle_listing.save()
+        elif response[0] == 7:
+            if vehicle_listing.retry_count < 3:
+                vehicle_listing.retry_count += 1
+                vehicle_listing.save()
+            else:
+                vehicle_listing.status = "sold"
+                vehicle_listing.save()
         else:
             pass

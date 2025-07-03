@@ -73,6 +73,7 @@ class VehicleListing(models.Model):
     status = models.CharField(max_length=255, null=True)
     is_relist = models.BooleanField(default=False)
     rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))
+    retry_count = models.IntegerField(default=0)
     listed_on = models.DateTimeField(null=True,blank=True)
     has_images=models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

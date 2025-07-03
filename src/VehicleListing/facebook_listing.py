@@ -9,6 +9,8 @@ import re
 from django.conf import settings
 from VehicleListing.models import FacebookUserCredentials
 from django.utils import timezone
+from .utils import handle_retry_or_disable_credentials
+
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
     """Simulate human-like typing with random delays."""
@@ -578,61 +580,6 @@ def handle_cookie_consent(page):
         logging.warning(f"No cookie banner found or already accepted: {e}")
 
 
-# def extract_listings_with_status(text):
-#     """
-#     Extracts structured listings including title, price, date, and status.
-#     Returns a list of dicts: title, price, listing_date, status.
-#     """
-#     listing_pattern = r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))'
-#     matches = re.findall(listing_pattern, text, re.DOTALL)
-
-#     listings = []
-#     if not matches:  # If no matches found, try a new pattern
-#         # Pattern to match title, price, listing date, and trailing status content
-#         pattern = r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)'
-#         matches = re.findall(pattern, text, re.DOTALL)
-#         if not matches:
-#             pattern = r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)'
-#             matches = re.findall(pattern, text, re.DOTALL)
-
-#             listings = []
-#             for title, price, date, status in matches:
-#                 listings.append({
-#                     'title': title.strip(),
-#                     'price': price.replace(',', ''),
-#                     'date': date,
-#                     'status': status
-#                 })
-#         else:
-#             listings = []
-#             for title, price, date, status in matches:
-#                 listings.append({
-#                     'title': title.strip(),
-#                     'price': price.replace(',', ''),
-#                     'date': date,
-#                     'status': status
-#                 })
-        
-#     else:
-#         for title, price, listing_date, tail in matches:
-#             title_clean = title.strip().replace('\xa0', ' ')
-#             tail_clean = tail.lower().replace('\xa0', ' ')
-
-#             if "mark as sold" in tail_clean:
-#                 status = "Mark as sold"
-#             elif "mark as available" in tail_clean:
-#                 status = "Mark as available"
-#             else:
-#                 status = None
-
-#             listings.append({
-#                 'title': title_clean,
-#                 'price': "".join(filter(str.isdigit, price)),
-#                 'date': listing_date,
-#                 'status': status
-#             })
-
-#     return listings
 
 def remove_prefix_case_insensitive(title: str, prefix: str) -> str:
     """
@@ -806,14 +753,16 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
 
             if not search_for.strip():
                 browser.close()
-                return 0, "Search value is required"
+                logging.info(f"Search value is required for {search_for}")
+                return 4, "Search value is required"
 
             input_locator = "input[type='text'][placeholder='Search your listings'], input[type='text'][aria-label='Search your listings']"
             input_element = page.locator(input_locator).first
 
             if not input_element.is_visible():
                 browser.close()
-                return 0, "Search input not found"
+                logging.info(f"Search input not found for {search_for}")
+                return 4, "Search input not found"
 
             input_element.click()
             input_element.fill(search_for)
@@ -826,10 +775,11 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                 if page.locator("text='We didn't find anything'").is_visible():
                     logging.info("Detected 'We didn't find anything'")
                     browser.close()
-                    return 2, "didnt_find_anything_displayed"
+                    return 6, "didnt_find_anything_displayed"
                 else:
                     browser.close()
-                    return 2, "No matching listing found"
+                    logging.info(f"No matching listing found for {search_for}")
+                    return 6, "No matching listing found"
 
             logging.info(f"Found {matches_found} match(es) for '{search_for}'")
             elements = get_elements_with_text(search_for, page)
@@ -853,7 +803,8 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                 success, message = find_and_click_delete_button(page)
                                 if not success:
                                     browser.close()
-                                    return 0, message
+                                    logging.info(f"Delete button not found for {search_for} and the message is {message}")
+                                    return 3, message
 
                                 delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
                                 if delete_buttons:
@@ -874,10 +825,11 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                     
                                 logging.error("Delete button not found or not visible.")
                                 browser.close()
-                                return 0, "Delete button not found"
+                                return 3, "Delete button not found"
                             else:
                                 browser.close()
-                                return 0, "Price element not found or not visible"
+                                logging.info(f"Price element not found or not visible for {search_for}")
+                                return 3, "Price element not found or not visible"
 
                         elif status == "mark as available":
                             logging.info("Listing is already marked as available.")
@@ -888,13 +840,14 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     continue
 
             browser.close()
-            return 2, "No matching listing found"
+            logging.info(f"No matching listing found for {search_for}")
+            return 4, "No matching listing found"
 
     except Exception as e:
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")
         if 'browser' in locals():
             browser.close()
-        return 0, str(e)
+        return 5, str(e)
 
 
 
@@ -1304,7 +1257,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
 
             if not input_element.is_visible():
                 browser.close()
-                return 5, "Search input not found"
+                return 4, "Search input not found"
 
             input_element.click()
             input_element.fill(search_for)
@@ -1317,10 +1270,10 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                 if page.locator("text='We didn't find anything'").is_visible():
                     logging.info("Detected 'We didn't find anything'")
                     browser.close()
-                    return 2, "didnt_find_anything_displayed"
+                    return 6, "didnt_find_anything_displayed"
                 else:
                     browser.close()
-                    return 2, "No matching listing found"
+                    return 6, "No matching listing found"
 
             logging.info(f"Found {matches_found} match(es) for '{search_for}'")
             elements = get_elements_with_text(search_for, page)
@@ -1436,54 +1389,6 @@ def is_image_uploaded(page):
         return False
 
 
-
-
-# def extract_listings_with_status(text):
-#     """
-#     Extracts structured listings including title, price, date, and status.
-#     Returns a list of dicts: title, price, listing_date (in DD/MM), status.
-#     """
-#     listings = []
-
-#     # Define fallback regex patterns from most specific to most generic
-#     patterns = [
-#         # Pattern 1: AU$ version (fallback)
-#         (r'(.*?)(AU\$\d{1,3}(?:,\d{3})*).*?Listed on (\d{2}/\d{2})(.*?)(?=(?:\d{4}|\Z))', False),
-#         # Pattern 2: With tip
-#         (r'(?:Tip:.*?\?)?\s*(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True),
-#         # Pattern 3: Without tip
-#         (r'(.*?)A\$([\d,]+).*?Listed on (\d{1,2}/\d{1,2}).*?(Mark as sold|Mark as available)', True)
-#     ]
-
-#     for pattern, convert_date in patterns:
-#         matches = re.findall(pattern, text, re.DOTALL)
-#         if matches:
-#             for match in matches:
-#                 # Old pattern where status needs to be inferred
-#                 title, price, date, tail = match
-#                 tail_clean = tail.lower().replace('\xa0', ' ')
-#                 if "mark as sold" in tail_clean:
-#                     status = "Mark as sold"
-#                 elif "mark as available" in tail_clean:
-#                     status = "Mark as available"
-#                 else:
-#                     status = None
-#                 # Format date to DD/MM if needed
-#                 if convert_date:
-#                     month, day = date.strip().split('/')
-#                     date = f"{day.zfill(2)}/{month.zfill(2)}"
-#                 title = title.strip().replace('\xa0', ' ')
-#                 clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
-
-#                 listings.append({
-#                     'title': clean_title,
-#                     'price': re.sub(r'[^\d]', '', price),
-#                     'date': date,
-#                     'status': status
-#                 })
-#             break  # Stop on first successful match
-
-#     return listings
 
 def extract_restricted_listing_details(page, title):
     """
@@ -1715,13 +1620,14 @@ def verify_image_upload_restricted_listings(page,listing_title,listing_price,lis
     try:                
                 # Navigate to Facebook Marketplace
                 logging.info("Navigating to Facebook Marketplace...")
-                page.goto(
-                    "https://www.facebook.com/marketplace/you/selling",
-                    wait_until='networkidle',
-                    timeout=30000
-                )
+                try:
+                    page.goto("https://www.facebook.com/marketplace/you/selling",wait_until="networkidle",timeout=30000)
+                except Exception as e:
+                    logging.error(f"Timeout error navigating to Facebook Marketplace: {e}")
+                    return 6, "Timeout error navigating to Facebook Marketplace"
                 # Add initial delay after page load
                 random_sleep(2, 4)
+
                 # Extract listings with specific title
                 logging.info(f"Searching for restricted listings with title: {listing_title}")
                 listing_details = extract_restricted_listing_details(page, listing_title)
@@ -1809,7 +1715,11 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
     """Perform search and delete listing if image is not uploaded with retry and timeout handling"""
 
     try:
-        page.goto("https://www.facebook.com/marketplace/you/selling", timeout=30000)
+        try:
+            page.goto("https://www.facebook.com/marketplace/you/selling", timeout=30000)
+        except Exception as e:
+            logging.error(f"Timeout error navigating to Facebook Marketplace: {e}")
+            return 6, "Timeout error navigating to Facebook Marketplace"
         logging.info("Navigated to Facebook Marketplace vehicle listing page.")
         random_sleep(settings.DELAY_START_TIME_FOR_LOADING_PAGE, settings.DELAY_END_TIME_FOR_LOADING_PAGE)
 
@@ -1828,9 +1738,10 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
         if matches_found == 0:
             if page.locator("text='We didn't find anything'").is_visible():
                 logging.info("Detected 'We didn't find anything'")
-                return 2, "didnt_find_anything_displayed"
+                return 7, "didnt_find_anything_displayed"
             else:
-                return 2, "No matching listing found"
+                logging.info(f"No matching listing found for {search_for} ")
+                return 7, "No matching listing found"
 
         logging.info(f"Found {matches_found} match(es) for '{search_for}'")
         elements = get_elements_with_text(search_for, page)
@@ -1924,9 +1835,6 @@ def image_upload_verification(relisting,vehicle_listing):
         status=vehicle_listing.status
     if status == "completed":
         logging.info(f"Vehicle listing {search_title} is created successfully and Now verifying image upload")
-        # search_title = f"{vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}"
-        # search_price = str(vehicle_listing.price)
-        # search_date = timezone.localtime(vehicle_listing.listed_on).strftime("%d/%m")
         logging.info(f"search_title: {search_title} and search_price: {search_price} and search_date: {search_date}")
         user = relisting.user if relisting else vehicle_listing.user
         credentials = FacebookUserCredentials.objects.filter(user=user).first()
@@ -1955,6 +1863,12 @@ def image_upload_verification(relisting,vehicle_listing):
                         browser.close()
                         logging.info("Browser closed successfully")
                         return 0, "Restricted listing has no image uploaded and deleted successfully"
+                    elif result[0] == 6:
+                        logging.info(f"Failed to load the page")
+                        browser.close()
+                        logging.info("Browser closed successfully")
+                        handle_retry_or_disable_credentials(credentials, user)
+                        return 6, "Failed to load the page"
                     elif result[0] == 4:
                         logging.info(f"Restricted listing {search_title} has no image uploaded and failed to delete")
                         logging.info(f"Error: {result[1]}")
@@ -1991,6 +1905,16 @@ def image_upload_verification(relisting,vehicle_listing):
                             browser.close()
                             logging.info("Browser closed successfully")
                             return 4, "Approved listing has no image uploaded and failed to delete"
+                        elif result[0] == 6:
+                            logging.info(f"Failed to load the page")
+                            browser.close()
+                            logging.info("Browser closed successfully")
+                            handle_retry_or_disable_credentials(credentials, user)
+                            return 6, "Failed to load the page"
+                        elif result[0] == 7:
+                            logging.info(f"No matching listing found for the user {user.email} and listing title {search_title}")
+                            logging.info(f"response[1]: {result[1]}")
+                            return 7, "No matching listing found for the user {user.email} and listing title {search_title}"
                         else:
                             logging.info("failed to verify image upload")
                             logging.info(f"Error: {result[1]}")

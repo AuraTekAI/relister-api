@@ -11,7 +11,7 @@ from VehicleListing.views import facebook_profile_listings_thread,image_verifica
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import send_status_reminder_email,mark_listing_sold,retry_failed_relistings,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time
+from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS
 from openpyxl import Workbook
 from django.conf import settings
@@ -106,6 +106,47 @@ def create_pending_facebook_marketplace_listing_task(self):
     logger.info("Completed all pending Facebook listings.")
 
 
+def retry_failed_relistings(seven_days_ago):
+    failed_relistings = RelistingFacebooklisting.objects.filter(
+        relisting_date__date__lte=seven_days_ago,
+        listing__status="completed",
+        last_relisting_status=False,
+        status="failed"
+    )
+    if not failed_relistings:
+        logger.info("No failed relistings found for the user {user.email}")
+        return
+
+    for relisting in failed_relistings:
+        logger.info(f"Relisting failed for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+        credentials = FacebookUserCredentials.objects.filter(user=relisting.user).first()
+        if not credentials or credentials.session_cookie == {} or not credentials.status:
+            if credentials:
+                credentials.status = False
+                credentials.save()
+                send_status_reminder_email(credentials)
+            logger.warning(f"No valid credentials for user {relisting.user.email}")
+            continue
+        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
+        now = timezone.now()
+        if listing_created:
+            update_credentials_success(credentials)
+            relisting.status = "completed"
+            relisting.listing.has_images = False
+            relisting.listing.save()
+            logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+            image_verification(relisting,None)
+        else:
+            relisting.status = "failed"
+            logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+        relisting.updated_at = now
+        relisting.relisting_date = now
+        relisting.save()
+
+
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def relist_facebook_marketplace_listing_task(self):
     """Relist 7-day-old Facebook Marketplace listings"""
@@ -193,8 +234,23 @@ def relist_facebook_marketplace_listing_task(self):
         elif response[0] == 2:  # Listing sold
             logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             mark_listing_sold(listing, relisting)
-        else:
+        elif response[0] == 6:
+            logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            logger.info(f"response[1]: {response[1]}")
+            logger.info(f"number of retries: {listing.retry_count}")
+            if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                listing.retry_count += 1
+                listing.save()
+                logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
+            else:
+                listing.status = "sold"
+                listing.save()
+                logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
+        elif response[0] == 0:
             handle_retry_or_disable_credentials(credentials, user)
+        else:
+            logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            logger.info(f"response[1]: {response[1]}")
     logger.info(f"Now, Relisting failed listing")
     retry_failed_relistings(seven_days_ago)
 
@@ -618,6 +674,18 @@ def check_images_upload_status(self):
                 logger.info(f"Error: {response[1]}")
                 handle_retry_or_disable_credentials(credentials, user)
                 continue
+            elif response[0] == 6:
+                logger.info(f"No matching listing found for the user {user.email} and listing title {search_query}")
+                logger.info(f"response[1]: {response[1]}")
+                logger.info(f"number of retries: {item.retry_count}")
+                if item.retry_count < MAX_RETRIES_ATTEMPTS:
+                    item.retry_count += 1
+                    item.save()
+                    logger.info(f"No matching listing found for the user {user.email} and listing title {search_query} and number of retries: {item.retry_count}")
+                else:
+                    item.status = "sold"
+                    item.save()
+                    logger.info(f"Listing sold for the user {user.email} and listing title {search_query} and number of retries: {item.retry_count}")
             elif response[0] == 0: #No matching listing found
                 logger.info(f"listing found for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query} has no images uploaded, Successfully deleted and marked as failed")
                 logger.info(f"info: {response[1]}")
@@ -630,3 +698,22 @@ def check_images_upload_status(self):
                 continue
     else:
         logger.info("No vehicle listings or relistings found for checking images upload status")
+
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def reset_listing_count_for_users_task(self):
+    """Reset listing count for users - Optimized version"""
+    logger.info("Resetting listing count for users")
+    
+    # Get all approved users and reset their daily_listing_count in bulk
+    users = User.objects.filter(is_approved=True).all()
+    user_count = users.count()
+    
+    if user_count == 0:
+        logger.info("No approved users found to reset listing count")
+        return
+    # Update all users in a single database query
+    updated_count = users.update(daily_listing_count=0)
+    
+    logger.info(f"Listing count reset for {updated_count} approved users")
+    logger.info("Listing count reset task completed")

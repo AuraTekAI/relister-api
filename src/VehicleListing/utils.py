@@ -6,8 +6,7 @@ import time
 import random
 from django.utils import timezone
 from datetime import timedelta
-from .models import FacebookUserCredentials, RelistingFacebooklisting
-from .tasks import create_marketplace_listing
+from .models import  RelistingFacebooklisting
 from relister.settings import MAX_RETRIES_ATTEMPTS
 from accounts.models import User
 from django.conf import settings
@@ -104,44 +103,6 @@ def handle_retry_or_disable_credentials(credentials, user):
         credentials.status = False
         credentials.save()
         logger.warning(f"Max retry attempts reached. Credentials disabled for user {user.email}")
-
-def retry_failed_relistings(seven_days_ago):
-    failed_relistings = RelistingFacebooklisting.objects.filter(
-        relisting_date__date__lte=seven_days_ago,
-        listing__status="completed",
-        last_relisting_status=False,
-        status="failed"
-    )
-    if not failed_relistings:
-        logger.info("No failed relistings found for the user {user.email}")
-        return
-
-    for relisting in failed_relistings:
-        logger.info(f"Relisting failed for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        credentials = FacebookUserCredentials.objects.filter(user=relisting.user).first()
-        if not credentials or credentials.session_cookie == {} or not credentials.status:
-            if credentials:
-                credentials.status = False
-                credentials.save()
-                send_status_reminder_email(credentials)
-            logger.warning(f"No valid credentials for user {relisting.user.email}")
-            continue
-        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
-        now = timezone.now()
-        if listing_created:
-            update_credentials_success(credentials)
-            relisting.status = "completed"
-            relisting.listing.has_images = False
-            relisting.listing.save()
-            logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        else:
-            relisting.status = "failed"
-            logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        relisting.updated_at = now
-        relisting.relisting_date = now
-        relisting.save()
-
 
 #Helping function to update the credentials status to true and retry count to 0
 def update_credentials_success(credentials):

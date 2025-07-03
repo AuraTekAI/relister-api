@@ -9,6 +9,11 @@ from django.conf import settings
 from bs4 import BeautifulSoup
 import re
 from .utils import get_full_state_name
+from .models import RelistingFacebooklisting
+from django.utils import timezone
+from datetime import timedelta
+from .facebook_listing import perform_search_and_delete
+from .models import FacebookUserCredentials
 
 logging = logging.getLogger('gumtree')
 def extract_seller_id(profile_url):
@@ -267,6 +272,94 @@ def get_gumtree_listings(profile_url,user):
         logging.error(f"Error fetching listings for seller ID {seller_id}: {e}")
         return False,"Error fetching listings for seller ID"
 
+def update_facebook_listing(already_exists_listing,Updating_listing_data):
+    """Update the Facebook listing"""
+    if already_exists_listing.is_relist:
+        relisting=RelistingFacebooklisting.objects.filter(listing= already_exists_listing,user=already_exists_listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
+        if relisting and relisting.status == "failed":
+            already_exists_listing.year=Updating_listing_data.get("year")
+            already_exists_listing.make=Updating_listing_data.get("make")
+            already_exists_listing.model=Updating_listing_data.get("model")
+            already_exists_listing.body_type=Updating_listing_data.get("body_type")
+            already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+            already_exists_listing.color=Updating_listing_data.get("color")
+            already_exists_listing.variant=Updating_listing_data.get("variant")
+            already_exists_listing.price=str(Updating_listing_data.get("price"))
+            already_exists_listing.mileage=Updating_listing_data.get("mileage")
+            already_exists_listing.transmission=Updating_listing_data.get("transmission")
+            already_exists_listing.description=Updating_listing_data.get("description")
+            already_exists_listing.images=Updating_listing_data.get("image")
+            already_exists_listing.location=Updating_listing_data.get("location")
+            already_exists_listing.status="completed"
+            already_exists_listing.save()
+            logging.info(f"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details")
+            return True,"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details"
+        elif relisting and relisting.status == "completed":
+            search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
+            credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
+            if credentials:
+                response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(already_exists_listing.listed_on),credentials.session_cookie)
+                if response[0] == 1:
+                    already_exists_listing.year=Updating_listing_data.get("year")
+                    already_exists_listing.make=Updating_listing_data.get("make")
+                    already_exists_listing.model=Updating_listing_data.get("model")
+                    already_exists_listing.body_type=Updating_listing_data.get("body_type")
+                    already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+                    already_exists_listing.color=Updating_listing_data.get("color")
+                    already_exists_listing.variant=Updating_listing_data.get("variant")
+                    already_exists_listing.price=str(Updating_listing_data.get("price"))
+                    already_exists_listing.mileage=Updating_listing_data.get("mileage")
+                    already_exists_listing.transmission=Updating_listing_data.get("transmission")
+                    already_exists_listing.description=Updating_listing_data.get("description")
+                    already_exists_listing.images=Updating_listing_data.get("image")
+                    already_exists_listing.location=Updating_listing_data.get("location")
+                    already_exists_listing.status="completed"
+                    already_exists_listing.save()
+                    relisting.status="failed"
+                    relisting.save()
+                    logging.info(f"Relisting {search_query}  who have old listing details deleted successfully")
+                    return True,"Relisting {search_query}  who have old listing details deleted successfully"
+                else:
+                    logging.info(f"Trying to delete the old relisting and relist again using updated details")
+                    logging.info(f"Failed to delete the relisting {search_query} and the response is {response[1]}")
+                    return False,"Failed to delete the relisting and relist again using updated details"
+            else:
+                logging.error(f"No credentials found for user {already_exists_listing.user.email}")
+                return False,"No credentials found for user"
+
+        else:
+            logging.info(f"unknown relsting status {relisting.status} for user {already_exists_listing.user.email} and listing {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}")
+            return False,"unknown relsting status"
+    else:
+        search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
+        credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
+        if credentials:
+            response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(already_exists_listing.listed_on),credentials.session_cookie)
+            if response[0] == 1:
+                already_exists_listing.year=Updating_listing_data.get("year")
+                already_exists_listing.make=Updating_listing_data.get("make")
+                already_exists_listing.model=Updating_listing_data.get("model")
+                already_exists_listing.body_type=Updating_listing_data.get("body_type")
+                already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+                already_exists_listing.color=Updating_listing_data.get("color")
+                already_exists_listing.variant=Updating_listing_data.get("variant")
+                already_exists_listing.price=str(Updating_listing_data.get("price"))
+                already_exists_listing.mileage=Updating_listing_data.get("mileage")
+                already_exists_listing.transmission=Updating_listing_data.get("transmission")
+                already_exists_listing.description=Updating_listing_data.get("description")
+                already_exists_listing.images=Updating_listing_data.get("image")
+                already_exists_listing.location=Updating_listing_data.get("location")
+                already_exists_listing.status="pending"
+                already_exists_listing.save()
+                logging.info(f"Listing {search_query}  who have old listing details deleted successfully")
+                return True,"Listing {search_query}  who have old listing details deleted successfully"
+            else:
+                logging.info(f"Failed to delete the listing {search_query} and the response is {response[1]}")
+                return False,"Failed to delete the listing and relist again using updated details"
+        else:
+            logging.error(f"No credentials found for user {already_exists_listing.user.email}")
+            return False,"No credentials found for user"
+        
 
 def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,user,seller_id):
     # Collect details for each listing
@@ -282,6 +375,37 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
         already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user,seller_profile_id=seller_id).first()
         if already_exists:
             logging.info(f"Listing already exists: {already_exists}")
+            if (already_exists.status == "pending" or already_exists.status == "failed" or already_exists.status == "sold") and already_exists.created_at > timezone.now() - timedelta(days=3):
+                logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
+                result = get_gumtree_listing_details(listing_id)
+                logging.info(f"update the listing{already_exists.list_id} details")
+                if result:
+                    already_exists.year=result.get("year")
+                    already_exists.make=result.get("make")
+                    already_exists.model=result.get("model")
+                    already_exists.body_type=result.get("body_type")
+                    already_exists.fuel_type=result.get("fuel_type")
+                    already_exists.color=result.get("color")
+                    already_exists.variant=result.get("variant")
+                    already_exists.price=str(result.get("price"))
+                    already_exists.mileage=result.get("mileage")
+                    already_exists.transmission=result.get("transmission")
+                    already_exists.description=result.get("description")
+                    already_exists.images=result.get("image")
+                    already_exists.location=result.get("location")
+                    already_exists.status="pending"
+                    already_exists.save()
+            elif already_exists.status == "completed" and already_exists.created_at > timezone.now() - timedelta(days=3):
+                logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
+                result = get_gumtree_listing_details(listing_id)
+                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and already_exists.mileage == result.get("mileage") and already_exists.location == result.get("location") and already_exists.description == result.get("description") and already_exists.images == result.get("image"):
+                    logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
+                    logging.info(f"No need to update the listing {already_exists.list_id} details")
+                    continue
+                else:
+                    logging.info(f"Listing ID {already_exists.list_id} is already exit but the details are not matching")
+                    update_facebook_listing(already_exists,result)
+
             count+=1
             continue
         time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME,settings.SIMPLE_DELAY_END_TIME))
