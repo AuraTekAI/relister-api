@@ -19,6 +19,9 @@ from datetime import datetime, timedelta
 from queue import Queue
 from django.conf import settings
 from django.utils import timezone
+import logging
+
+logger = logging.getLogger('relister_views')
 
 # dictionary which hold queues for each user
 vehicle_listing_user_queues = {}
@@ -448,6 +451,7 @@ def create_facebook_listing(vehicle_listing):
                     vehicle_listing.status="failed"
                     vehicle_listing.save()
                     return False, "Daily listing count limit reached"
+                logger.info(f"Creating listing for the user {user.email} and listing title: {vehicle_listing.year} {vehicle_listing.make} {vehicle_listing.model}")
                 listing_created, message = create_marketplace_listing(vehicle_listing, credentials.session_cookie)
                 if listing_created:
                     FacebookListing.objects.create(user=vehicle_listing.user, listing=vehicle_listing, status="success")
@@ -560,12 +564,15 @@ def facebook_profile_listings(request):
                 credentials.save()
                 send_status_reminder_email(credentials)
             return JsonResponse({'error': 'Facebook credentials not found'}, status=404)
+        logger.info(f"start getting listings for the user {user.email} and profile id: {seller_id}")
         success, listings = get_facebook_profile_listings(profile_url, credentials.session_cookie)
 
         if success:
             credentials.status = True
             credentials.retry_count=0
             credentials.save()
+            logger.info(f"Creating facebook profile listing for the user {user.email} and profile id: {seller_id}")
+            logger.info(f"Total listings: {len(listings)}")
             facebook_profile_listing_instance = FacebookProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=len(listings))
             # Create a new thread to process the listings
             thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,user,seller_id,facebook_profile_listing_instance))
@@ -585,9 +592,11 @@ def facebook_profile_listings(request):
         return JsonResponse({'error': 'Invalid JSON data'}, status=400)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+    
 
 def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebook_profile_listing_instance):
     """Get listings using the function"""
+    logger.info(f"Getting listings for the user {user.email} and profile id: {seller_id}")
     count=0
     incoming_list_ids = set()
     for current_listing_key in listings:
@@ -595,11 +604,13 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
         incoming_list_ids.add(str(current_listing["id"]))
         if already_listed:
+            logger.info(f"Vehicle listing already exists for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
             continue
         time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         # Get listings using the function
         vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
         if vehicleListing:
+            logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
             count+=1
             enhanced_description=format_car_description(vehicleListing.get("description"))
             VehicleListing.objects.create(
@@ -635,6 +646,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
             if listing.status != "sold":
                 listing.status = "sold"
                 listing.save()
+    logger.info(f"Completed getting listings for the user {user.email} and profile id: {seller_id}")
     facebook_profile_listing_instance.status="completed"
     facebook_profile_listing_instance.processed_listings=count
     facebook_profile_listing_instance.save()
@@ -664,6 +676,7 @@ class FacebookProfileListingViewSet(ModelViewSet):
         session_cookie=None
         # Proceed with deletion
         facebook_profile_listing=FacebookProfileListing.objects.filter(id=instance.id).first()
+        logger.info(f"Deleting Facebook profile listing for the user {facebook_profile_listing.user.email} and profile id: {facebook_profile_listing.profile_id}")
         facebook_profile_vehicle_listings=VehicleListing.objects.filter(facebook_profile=facebook_profile_listing,status="completed").all()
         if facebook_profile_vehicle_listings:
             user = facebook_profile_listing.user
@@ -688,6 +701,7 @@ class FacebookProfileListingViewSet(ModelViewSet):
                     else:
                         listed_on = timezone.localtime(current_listing.listed_on)
                 temp_list.append(listed_on)
+                logger.info(f"Adding to year make model temporary list for the user {user.email} and listing title: {current_listing.year} {current_listing.make} {current_listing.model} and price: {current_listing.price} and listed on: {listed_on} which is used to delete the listings")
                 year_make_model_list.append(temp_list)
         facebook_profile_listing.delete()
         if year_make_model_list:
@@ -724,6 +738,7 @@ class GumtreeProfileListingViewSet(ModelViewSet):
         session_cookie=None
         # Proceed with deletion
         gumtree_profile_listing=GumtreeProfileListing.objects.filter(id=instance.id).first()
+        logger.info(f"Deleting Gumtree profile listing for the user {gumtree_profile_listing.user.email} and profile id: {gumtree_profile_listing.profile_id}")
         gumtree_profile_vehicle_listings=VehicleListing.objects.filter(gumtree_profile=gumtree_profile_listing,status="completed").all()
         if gumtree_profile_vehicle_listings:
             user = gumtree_profile_listing.user
@@ -748,6 +763,7 @@ class GumtreeProfileListingViewSet(ModelViewSet):
                     else:
                         listed_on = timezone.localtime(current_listing.listed_on)
                 temp_list.append(listed_on)
+                logger.info(f"Adding to year make model temporary list for the user {user.email} and listing title: {current_listing.year} {current_listing.make} {current_listing.model} and price: {current_listing.price} and listed on: {listed_on} which is used to delete the listings")
                 year_make_model_list.append(temp_list)
         gumtree_profile_listing.delete()
         if year_make_model_list:
