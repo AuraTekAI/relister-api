@@ -356,6 +356,7 @@ def check_gumtree_profile_relisting_task(self):
 @shared_task(bind=True, base=CustomExceptionHandler,queue='relister_queue')
 def check_facebook_profile_relisting_task(self):
     """Check facebook profile relisting"""
+    logger.info("Checking facebook profile relisting")
     facebook_profile_listings = FacebookProfileListing.objects.all()
     if facebook_profile_listings:
         for facebook_profile_listing_instance in facebook_profile_listings:
@@ -363,6 +364,7 @@ def check_facebook_profile_relisting_task(self):
             credentials = FacebookUserCredentials.objects.filter(user=facebook_profile_listing_instance.user).first()
             if credentials and credentials.session_cookie != {} and credentials.status:
                 success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url,credentials.session_cookie)
+                logger.info(f"Success: {success} and listings count: {len(listings)} for the user {facebook_profile_listing_instance.user.email} and profile id: {facebook_profile_listing_instance.profile_id}")
                 if success:
                     update_credentials_success(credentials)
                     thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,facebook_profile_listing_instance.user,facebook_profile_listing_instance.profile_id,facebook_profile_listing_instance))

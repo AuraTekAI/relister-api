@@ -1404,7 +1404,8 @@ def extract_restricted_listing_details(page, title):
         for listing_el in listing_elements:
             # Check if this listing requires action
             action_text = listing_el.query_selector('div.x1f6kntn.x117nqv4.xcly8g5')
-            if action_text and "Please take action on this listing" in action_text.text_content():
+            if action_text and ("Please take action on this listing" in action_text.text_content() or "It looks like you've created a duplicate listing." in action_text.text_content()):
+                logging.info(f"action_text: {action_text.text_content()}")
                 # Extract price
                 price_el = listing_el.query_selector('span[dir="auto"]:has-text("AU$")')
                 price = price_el.text_content().replace('AU$', '').strip() if price_el else None
@@ -1431,6 +1432,37 @@ def extract_restricted_listing_details(page, title):
                     'requires_action': True,
                     'element': listing_el  # Return the element for further use if needed
                 })
+            else:
+                action_text = listing_el.query_selector('div.x1f6kntn.x117nqv4.x1a1m0xk')
+                if action_text and ("Please take action on this listing" in action_text.text_content() or "It looks like you've created a duplicate listing." in action_text.text_content()):
+                    logging.info(f"action_text: {action_text.text_content()}")
+                    # Extract price
+                    price_el = listing_el.query_selector('span[dir="auto"]:has-text("AU$")')
+                    price = price_el.text_content().replace('AU$', '').strip() if price_el else None
+                    if not price_el:
+                        price_el = listing_el.query_selector('span[dir="auto"]:has-text("A$")')
+                        price = price_el.text_content().replace('A$', '').strip() if price_el else None
+                    if not price_el:
+                        price_el = listing_el.query_selector('span[dir="auto"]:has-text("PKR")')
+                        price = price_el.text_content().replace('PKR', '').strip() if price_el else None
+                    
+                    # Extract listed date
+                    date_el = listing_el.query_selector('span:has-text("Listed on")')
+                    listed_date = None
+                    if date_el:
+                        date_text = date_el.text_content()
+                        date_match = re.search(r'Listed on (\d{1,2}/\d{1,2})', date_text)
+                        if date_match:
+                            listed_date = date_match.group(1)
+                    
+                    listings.append({
+                        'title': title,
+                        'price': price,
+                        'listed_date': listed_date,
+                        'requires_action': True,
+                        'element': listing_el  # Return the element for further use if needed
+                    })
+
         return listings
         
     except Exception as e:
