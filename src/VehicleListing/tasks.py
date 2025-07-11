@@ -51,12 +51,12 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"Invalid credentials for {user.email}")
                 continue
 
-            if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-                listing.status = "completed"
-                listing.listed_on = timezone.now()
-                listing.save()
-                logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                continue
+            # if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
+            #     listing.status = "completed"
+            #     listing.listed_on = timezone.now()
+            #     listing.save()
+            #     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
+            #     continue
 
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
 
@@ -284,11 +284,11 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"Invalid credentials for {user.email}")
                 continue
 
-            if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-                listing.status = "completed"
-                listing.listed_on = timezone.now()
-                logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-                continue
+            # if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
+            #     listing.status = "completed"
+            #     listing.listed_on = timezone.now()
+            #     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
+            #     continue
 
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
 

@@ -375,7 +375,7 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
         already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user,seller_profile_id=seller_id).first()
         if already_exists:
             logging.info(f"Listing already exists: {already_exists}")
-            if (already_exists.status == "pending" or already_exists.status == "failed" or already_exists.status == "sold") and already_exists.created_at > timezone.now() - timedelta(days=3):
+            if (already_exists.status == "pending" or already_exists.status == "failed" or already_exists.status == "sold") and already_exists.created_at < timezone.now() - timedelta(days=3):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"update the listing{already_exists.list_id} details")
@@ -395,7 +395,7 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
                     already_exists.location=result.get("location")
                     already_exists.status="pending"
                     already_exists.save()
-            elif already_exists.status == "completed" and already_exists.created_at > timezone.now() - timedelta(days=3):
+            elif already_exists.status == "completed" and already_exists.created_at < timezone.now() - timedelta(days=3):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and already_exists.mileage == result.get("mileage") and already_exists.location == result.get("location") and already_exists.description == result.get("description") and already_exists.images == result.get("image"):

@@ -96,6 +96,7 @@ def import_url_from_gumtree(request):
         if not is_valid:
             return JsonResponse({'error': error_message}, status=200)
         list_id = extract_seller_id(url)
+        vehicle_listing = VehicleListing.objects.filter(list_id=488).first()
         if not list_id or not list_id.isdigit():
             return JsonResponse({'error': 'Invalid seller ID'}, status=200)
         if ListingUrl.objects.filter(url=url,user=user,listing_id=list_id).exists():
@@ -111,6 +112,7 @@ def import_url_from_gumtree(request):
                 credentials.save()
                 send_status_reminder_email(credentials)
             return JsonResponse({'error': 'No facebook credentials found for the user , Please provide the facebook credentials'}, status=200)
+        create_marketplace_listing(vehicle_listing,credentials.session_cookie)
         if import_url.print_url_type() == "Facebook":
             # Extract facebook listing data from URL
             current_listing = {}
