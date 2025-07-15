@@ -441,10 +441,67 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
     ).exclude(list_id__in=incoming_list_ids)
     if existing_listings:
         for listing in existing_listings:
-            if listing.status != "sold":
+            if listing.status != "sold" and listing.status != "completed":
                 logging.info(f"Marking listing ID {listing.list_id} as sold")
                 listing.status = "sold"
                 listing.save()
+            elif listing.status == "completed":
+                search_query=f"{listing.year} {listing.make} {listing.model}"
+                price=listing.price
+                listed_on=timezone.localtime(listing.listed_on)
+                credentials=FacebookUserCredentials.objects.filter(user=listing.user).first()
+                if credentials and listing.is_relist:
+                    relisting=RelistingFacebooklisting.objects.filter(listing=listing,user=listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
+                    if relisting and relisting.status == "failed":
+                        relisting.status="completed"
+                        relisting.last_relisting_status=True
+                        relisting.save()
+                        listing.status="sold"
+                        listing.save()
+                        continue
+                    elif relisting and relisting.status == "completed":
+                        listed_on=timezone.localtime(relisting.relisting_date)
+                        if relisting.listing.retry_count < 3:
+                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
+                            if response[0] == 1:
+                                relisting.status="completed"
+                                relisting.last_relisting_status=True
+                                relisting.save()
+                                listing.status="sold"
+                                listing.save()
+                            else:
+                                relisting.listing.retry_count+=1
+                                relisting.listing.save()
+                        else:
+                            relisting.status="completed"
+                            relisting.last_relisting_status=True
+                            relisting.save()
+                            listing.status="sold"
+                            listing.save()
+                    else:
+                        logging.info(f"unknown relisting status {relisting.status} for user {listing.user.email} and listing {listing.year} {listing.make} {listing.model} and last relisting status {relisting.last_relisting_status}")
+                        listing.status="sold"
+                        listing.save()
+                        relisting.last_relisting_status=True
+                        relisting.save()
+                        continue
+                elif credentials and not listing.is_relist:
+                    if listing.retry_count < 3:
+                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
+                            if response[0] == 1:
+                                listing.status="sold"
+                                listing.save()
+                            else:
+                                listing.retry_count+=1
+                                listing.save()
+                    else:
+                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. system marked as sold")
+                        listing.status="sold"
+                        listing.save()
+
+                else:
+                    logging.info(f"No credentials found for user {listing.user.email}")
+                    continue
     gumtree_profile_listing_instance.processed_listings=count
     gumtree_profile_listing_instance.status="completed"
     gumtree_profile_listing_instance.save()
