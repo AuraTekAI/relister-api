@@ -37,7 +37,7 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
     search_fields = ('user__email',)
-    list_filter = ('user',)
+    list_filter = ('user',"listing__year","listing__make","listing__model","listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = ("invoice_id", "user", "total_amount", "created_at", "updated_at")
