@@ -361,9 +361,9 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
             return False,"No credentials found for user"
         
 
-def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,user,seller_id):
-    # Collect details for each listing
-    count=0
+def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, user, seller_id):
+    logging.info("Starting gumtree_profile_listings_thread execution")
+    count = 0
     incoming_list_ids = set()
     for current_list in listings:
         listing_id = current_list.get("id")
@@ -372,29 +372,33 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
             continue
         incoming_list_ids.add(str(listing_id))
         logging.info(f"Fetching details for listing ID: {listing_id}")
-        already_exists=VehicleListing.objects.filter(list_id=listing_id,user=user,seller_profile_id=seller_id).first()
+        already_exists = VehicleListing.objects.filter(list_id=listing_id, user=user, seller_profile_id=seller_id).first()
         if already_exists:
             logging.info(f"Listing already exists: {already_exists}")
-            if (already_exists.status == "pending" or already_exists.status == "failed" or already_exists.status == "sold") and already_exists.created_at < timezone.now() - timedelta(days=3):
+            if (already_exists.status == "pending" or already_exists.status == "failed" or already_exists.status == "sold") and already_exists.created_at < timezone.now() - timedelta(days=7):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
-                logging.info(f"update the listing{already_exists.list_id} details")
+                logging.info(f"update the listing {already_exists.list_id} details")
                 if result:
-                    already_exists.year=result.get("year")
-                    already_exists.make=result.get("make")
-                    already_exists.model=result.get("model")
-                    already_exists.body_type=result.get("body_type")
-                    already_exists.fuel_type=result.get("fuel_type")
-                    already_exists.color=result.get("color")
-                    already_exists.variant=result.get("variant")
-                    already_exists.price=str(result.get("price"))
-                    already_exists.mileage=result.get("mileage")
-                    already_exists.transmission=result.get("transmission")
-                    already_exists.description=result.get("description")
-                    already_exists.images=result.get("image")
-                    already_exists.location=result.get("location")
-                    already_exists.status="pending"
+                    already_exists.year = result.get("year")
+                    already_exists.make = result.get("make")
+                    already_exists.model = result.get("model")
+                    already_exists.body_type = result.get("body_type")
+                    already_exists.fuel_type = result.get("fuel_type")
+                    already_exists.color = result.get("color")
+                    already_exists.variant = result.get("variant")
+                    already_exists.price = str(result.get("price"))
+                    already_exists.mileage = result.get("mileage")
+                    already_exists.transmission = result.get("transmission")
+                    already_exists.description = result.get("description")
+                    already_exists.images = result.get("image")
+                    already_exists.location = result.get("location")
+                    already_exists.status = "pending"
                     already_exists.save()
+                    logging.info(f"Updated listing {already_exists.list_id} with new details")
+                else:
+                    logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping update")
+                    continue
             elif already_exists.status == "completed" and already_exists.created_at < timezone.now() - timedelta(days=3):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
@@ -404,15 +408,17 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
                     continue
                 else:
                     logging.info(f"Listing ID {already_exists.list_id} is already exit but the details are not matching")
-                    update_facebook_listing(already_exists,result)
+                    update_facebook_listing(already_exists, result)
+                    logging.info(f"Called update_facebook_listing for listing {already_exists.list_id}")
 
-            count+=1
+            count += 1
             continue
-        time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME,settings.SIMPLE_DELAY_END_TIME))
+        logging.info(f"Listing ID {listing_id} does not exist, fetching details")
+        time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
         result = get_gumtree_listing_details(listing_id)
         if result and not already_exists:
-            count+=1
-            vehicle_listing=VehicleListing.objects.create(
+            count += 1
+            vehicle_listing = VehicleListing.objects.create(
                 user=user,
                 gumtree_profile=gumtree_profile_listing_instance,
                 list_id=listing_id,
@@ -433,75 +439,79 @@ def gumtree_profile_listings_thread(listings,gumtree_profile_listing_instance,us
                 status="pending",
                 seller_profile_id=seller_id
             )
-            logging.info(f"vehicle_listing: {vehicle_listing}")
-    #Mark already exist listing who are not present in profile listings as sold
-    #Mark missing listings as SOLD
+            logging.info(f"Created new vehicle_listing: {vehicle_listing}")
+    # Mark already exist listing who are not present in profile listings as sold
+    logging.info("Checking for existing listings not present in incoming listings to mark as sold")
     existing_listings = VehicleListing.objects.filter(
         user=user, seller_profile_id=seller_id
     ).exclude(list_id__in=incoming_list_ids)
     if existing_listings:
         for listing in existing_listings:
-            if listing.status != "sold" and listing.status != "completed":
-                logging.info(f"Marking listing ID {listing.list_id} as sold")
-                listing.status = "sold"
-                listing.save()
+            if listing.status != "completed":
+                logging.info(f"Marking listing ID {listing.list_id} as sold (deleting)")
+                listing.delete()
+                continue
             elif listing.status == "completed":
-                search_query=f"{listing.year} {listing.make} {listing.model}"
-                price=listing.price
-                listed_on=timezone.localtime(listing.listed_on)
-                credentials=FacebookUserCredentials.objects.filter(user=listing.user).first()
+                search_query = f"{listing.year} {listing.make} {listing.model}"
+                price = listing.price
+                listed_on = timezone.localtime(listing.listed_on)
+                credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
                 if credentials and listing.is_relist:
-                    relisting=RelistingFacebooklisting.objects.filter(listing=listing,user=listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
+                    relisting = RelistingFacebooklisting.objects.filter(listing=listing, user=listing.user, status__in=["completed", "failed"], last_relisting_status=False).first()
                     if relisting and relisting.status == "failed":
-                        relisting.status="completed"
-                        relisting.last_relisting_status=True
-                        relisting.save()
-                        listing.status="sold"
-                        listing.save()
+                        logging.info(f"Relisting status is failed for {search_query}, deleting listing")
+                        listing.delete()
                         continue
                     elif relisting and relisting.status == "completed":
-                        listed_on=timezone.localtime(relisting.relisting_date)
+                        listed_on = timezone.localtime(relisting.relisting_date)
                         if relisting.listing.retry_count < 3:
-                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
+                            response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                             if response[0] == 1:
-                                relisting.status="completed"
-                                relisting.last_relisting_status=True
-                                relisting.save()
-                                listing.status="sold"
+                                logging.info(f"Deleted relisted Facebook listing for {search_query}")
+                                listing.delete()
+                            elif response[0] == 2:
+                                listing.status = "sold"
                                 listing.save()
+                                relisting.status = "completed"
+                                relisting.last_relisting_status = True
+                                relisting.save()
+                                logging.info(f"Relisting {search_query} marked as sold and on Facebook, status updated to sold")
                             else:
-                                relisting.listing.retry_count+=1
+                                relisting.listing.retry_count += 1
                                 relisting.listing.save()
+                                logging.info(f"Failed to delete relisting for {search_query} from facebook marketplace, retry count increased")
                         else:
-                            relisting.status="completed"
-                            relisting.last_relisting_status=True
-                            relisting.save()
-                            listing.status="sold"
-                            listing.save()
+                            listing.delete()
+                            logging.info(f"Failed to delete the relisting {search_query} and completed the retry attempt. System deleted the listing")
                     else:
-                        logging.info(f"unknown relisting status {relisting.status} for user {listing.user.email} and listing {listing.year} {listing.make} {listing.model} and last relisting status {relisting.last_relisting_status}")
-                        listing.status="sold"
-                        listing.save()
-                        relisting.last_relisting_status=True
-                        relisting.save()
+                        logging.info(f"Unknown relisting status {getattr(relisting, 'status', None)} for user {listing.user.email} and listing {search_query} and last relisting status {getattr(relisting, 'last_relisting_status', None)}")
+                        logging.info(f"Deleting the listing ID {listing.list_id}")
+                        listing.delete()
                         continue
                 elif credentials and not listing.is_relist:
                     if listing.retry_count < 3:
-                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
-                            if response[0] == 1:
-                                listing.status="sold"
+                        response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
+                        if response[0] == 1:
+                            logging.info(f"Deleted Facebook listing for {search_query}")
+                            listing.delete()
+                        elif response[0] == 2:
+                                listing.status = "sold"
                                 listing.save()
-                            else:
-                                listing.retry_count+=1
-                                listing.save()
+                                logging.info(f"listing {search_query} marked as sold and on facebook, status updated to sold")
+                        else:
+                            listing.retry_count += 1
+                            listing.save()
+                            logging.info(f"Failed to delete listing for {search_query} from facebook marketplace, retry count increased")
                     else:
-                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. system marked as sold")
-                        listing.status="sold"
-                        listing.save()
-
+                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. System marked as sold and deleted")
+                        listing.delete()
                 else:
                     logging.info(f"No credentials found for user {listing.user.email}")
                     continue
-    gumtree_profile_listing_instance.processed_listings=count
-    gumtree_profile_listing_instance.status="completed"
+            else:
+                logging.info(f"Listing ID {listing.list_id} is already exit and marked as {listing.status}")
+                continue
+    gumtree_profile_listing_instance.processed_listings = count
+    gumtree_profile_listing_instance.status = "completed"
     gumtree_profile_listing_instance.save()
+    logging.info("Completed gumtree_profile_listings_thread execution")
