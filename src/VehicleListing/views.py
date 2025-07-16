@@ -605,6 +605,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
         incoming_list_ids.add(str(current_listing["id"]))
         if already_listed:
+            count+=1
             logger.info(f"Vehicle listing already exists for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
             continue
         time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
@@ -644,71 +645,74 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
     ).exclude(list_id__in=incoming_list_ids)
     if existing_listings:
         for listing in existing_listings:
-            if listing.status != "sold" and listing.status != "completed":
-                logging.info(f"Marking listing ID {listing.list_id} as sold")
-                listing.status = "sold"
-                listing.save()
+            if listing.status != "completed":
+                logging.info(f"Marking listing ID {listing.list_id} as sold (deleting)")
+                listing.delete()
+                continue
             elif listing.status == "completed":
-                search_query=f"{listing.year} {listing.make} {listing.model}"
-                price=listing.price
-                listed_on=timezone.localtime(listing.listed_on)
-                credentials=FacebookUserCredentials.objects.filter(user=listing.user).first()
+                search_query = f"{listing.year} {listing.make} {listing.model}"
+                price = listing.price
+                listed_on = timezone.localtime(listing.listed_on)
+                credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
                 if credentials and listing.is_relist:
-                    relisting=RelistingFacebooklisting.objects.filter(listing=listing,user=listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
+                    relisting = RelistingFacebooklisting.objects.filter(listing=listing, user=listing.user, status__in=["completed", "failed"], last_relisting_status=False).first()
                     if relisting and relisting.status == "failed":
-                        relisting.status="completed"
-                        relisting.last_relisting_status=True
-                        relisting.save()
-                        listing.status="sold"
-                        listing.save()
+                        logging.info(f"Relisting status is failed for {search_query}, deleting listing")
+                        listing.delete()
                         continue
                     elif relisting and relisting.status == "completed":
-                        listed_on=timezone.localtime(relisting.relisting_date)
+                        listed_on = timezone.localtime(relisting.relisting_date)
                         if relisting.listing.retry_count < 3:
-                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
+                            response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                             if response[0] == 1:
-                                relisting.status="completed"
-                                relisting.last_relisting_status=True
-                                relisting.save()
-                                listing.status="sold"
+                                logging.info(f"Deleted relisted Facebook listing for {search_query}")
+                                listing.delete()
+                            elif response[0] == 2:
+                                listing.status = "sold"
                                 listing.save()
+                                relisting.status = "completed"
+                                relisting.last_relisting_status = True
+                                relisting.save()
+                                logging.info(f"Relisting {search_query} marked as sold and on Facebook, status updated to sold")
                             else:
-                                relisting.listing.retry_count+=1
+                                relisting.listing.retry_count += 1
                                 relisting.listing.save()
+                                logging.info(f"Failed to delete relisting for {search_query} from facebook marketplace, retry count increased")
                         else:
-                            relisting.status="completed"
-                            relisting.last_relisting_status=True
-                            relisting.save()
-                            listing.status="sold"
-                            listing.save()
+                            listing.delete()
+                            logging.info(f"Failed to delete the relisting {search_query} and completed the retry attempt. System deleted the listing")
                     else:
-                        logging.info(f"unknown relisting status {relisting.status} for user {listing.user.email} and listing {listing.year} {listing.make} {listing.model} and last relisting status {relisting.last_relisting_status}")
-                        listing.status="sold"
-                        listing.save()
-                        relisting.last_relisting_status=True
-                        relisting.save()
+                        logging.info(f"Unknown relisting status {getattr(relisting, 'status', None)} for user {listing.user.email} and listing {search_query} and last relisting status {getattr(relisting, 'last_relisting_status', None)}")
+                        logging.info(f"Deleting the listing ID {listing.list_id}")
+                        listing.delete()
                         continue
                 elif credentials and not listing.is_relist:
                     if listing.retry_count < 3:
-                            response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
-                            if response[0] == 1:
-                                listing.status="sold"
-                                listing.save()
-                            else:
-                                listing.retry_count+=1
-                                listing.save()
+                        response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
+                        if response[0] == 1:
+                            logging.info(f"Deleted Facebook listing for {search_query}")
+                            listing.delete()
+                        elif response[0] == 2:
+                            listing.status = "sold"
+                            listing.save()
+                            logging.info(f"Listing {search_query} marked as sold and on Facebook, status updated to sold")
+                        else:
+                            listing.retry_count += 1
+                            listing.save()
+                            logging.info(f"Failed to delete listing for {search_query} from facebook marketplace, retry count increased")
                     else:
-                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. system marked as sold")
-                        listing.status="sold"
-                        listing.save()
-
+                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. System marked as sold and deleted")
+                        listing.delete()
                 else:
                     logging.info(f"No credentials found for user {listing.user.email}")
                     continue
-    logger.info(f"Completed getting listings for the user {user.email} and profile id: {seller_id}")
-    facebook_profile_listing_instance.status="completed"
-    facebook_profile_listing_instance.processed_listings=count
+            else:
+                logging.info(f"Listing ID {listing.list_id} is already exit and marked as {listing.status}")
+                continue
+    facebook_profile_listing_instance.processed_listings = count
+    facebook_profile_listing_instance= "completed"
     facebook_profile_listing_instance.save()
+    logging.info("Completed gumtree_profile_listings_thread execution")
 
 class FacebookProfileListingViewSet(ModelViewSet):
     """Get all Facebook profile listings"""

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background-color: #f4f4f4; padding: 15px; border-radius: 5px; }
+        .section { margin: 20px 0; }
+        .metric { background-color: #e8f4fd; padding: 10px; margin: 5px 0; border-radius: 3px; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .warning { color: #ff6b35; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>Daily Listing Activity Report</h2>
+        <p><strong>Date:</strong> {{ report_date }}</p>
+        <p><strong>Generated:</strong> {{ generated_at }}</p>
+    </div>
+
+    <div class="section">
+        <h3>📊 Summary Metrics</h3>
+        <div class="metric">Total Relisted Items: <strong>{{ relisted_count }}</strong></div>
+        <div class="metric">Active Listings: <strong>{{ active_count }}</strong></div>
+        <div class="metric">Items Deleted: <strong>{{ deleted_count }}</strong></div>
+        <div class="metric">Items Eligible for Relisting: <strong>{{ eligible_count }}</strong></div>
+    </div>
+
+    {% if relisted_items %}
+    <div class="section">
+        <h3>🔄 Relisted Items</h3>
+        <table>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Timestamp</th></tr>
+            {% for item in relisted_items %}
+            <tr>
+                <td>{{ item.list_id }}</td>
+                <td>{{ item.title }}</td>
+                <td>{{ item.user }}</td>
+                <td>{{ item.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
+    {% if eligible_items %}
+    <div class="section">
+        <h3>⏰ Eligible for Relisting</h3>
+        <table>
+            <tr><th>ID</th><th>Title</th><th>Last Listed</th><th>Next Eligible</th></tr>
+            {% for item in eligible_items %}
+            <tr>
+                <td>{{ item.list_id }}</td>
+                <td>{{ item.title }}</td>
+                <td>{{ item.last_listed }}</td>
+                <td class="warning">{{ item.next_eligible }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
+    {% if deleted_items %}
+    <div class="section">
+        <h3>🗑️ Deleted Items</h3>
+        <table>
+            <tr><th>ID</th><th>Title</th><th>Status</th><th>Deleted At</th></tr>
+            {% for item in deleted_items %}
+            <tr>
+                <td>{{ item.list_id }}</td>
+                <td>{{ item.title }}</td>
+                <td>{{ item.status }}</td>
+                <td>{{ item.deleted_at }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+</body>
+</html>

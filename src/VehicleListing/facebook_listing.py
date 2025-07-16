@@ -779,7 +779,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                 else:
                     browser.close()
                     logging.info(f"No matching listing found for {search_for}")
-                    return 6, "No matching listing found"
+                    return 4, "No matching listing found"
 
             logging.info(f"Found {matches_found} match(es) for '{search_for}'")
             elements = get_elements_with_text(search_for, page)
@@ -1273,7 +1273,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                     return 6, "didnt_find_anything_displayed"
                 else:
                     browser.close()
-                    return 6, "No matching listing found"
+                    return 4, "No matching listing found"
 
             logging.info(f"Found {matches_found} match(es) for '{search_for}'")
             elements = get_elements_with_text(search_for, page)
@@ -1773,7 +1773,7 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                 return 7, "didnt_find_anything_displayed"
             else:
                 logging.info(f"No matching listing found for {search_for} ")
-                return 7, "No matching listing found"
+                return 2, "No matching listing found"
 
         logging.info(f"Found {matches_found} match(es) for '{search_for}'")
         elements = get_elements_with_text(search_for, page)

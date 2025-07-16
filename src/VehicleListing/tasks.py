@@ -12,7 +12,7 @@ from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time
-from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS
+from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL
 from openpyxl import Workbook
 from django.conf import settings
 import uuid
@@ -20,6 +20,9 @@ import time
 import random
 import logging
 import threading
+import csv
+from io import StringIO, BytesIO
+from datetime import date
 logger = logging.getLogger('facebook_listing_cronjob')
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
@@ -719,3 +722,147 @@ def reset_listing_count_for_users_task(self):
     
     logger.info(f"Listing count reset for {updated_count} approved users")
     logger.info("Listing count reset task completed")
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def send_daily_activity_report(self):
+    """Send daily listing activity report to all approved users"""
+    logger.info("Generating daily activity report")
+    
+    today = timezone.now().date()
+    yesterday = today - timedelta(days=1)
+    seven_days_ago = today - timedelta(days=7)
+    
+    approved_users = User.objects.filter(is_approved=True)
+    
+    for user in approved_users:
+        try:
+            # Get relisted items for the day
+            relisted_items = RelistingFacebooklisting.objects.filter(
+                user=user,
+                relisting_date=yesterday,
+                status='completed'
+            ).select_related('listing')
+            
+            # Get active listings
+            active_listings = VehicleListing.objects.filter(
+                user=user,
+                status='completed',
+                listed_on=yesterday,
+            )
+            
+            # Get items eligible for relisting (6 days old)
+            eligible_items = VehicleListing.objects.filter(
+                user=user,
+                status='completed',
+                listed_on__date=seven_days_ago - timedelta(days=1),
+                is_relist=False
+            )
+            
+            # Add relisted items that are eligible again
+            eligible_relistings = RelistingFacebooklisting.objects.filter(
+                user=user,
+                listing__status='completed',
+                relisting_date__date=seven_days_ago - timedelta(days=1),
+                last_relisting_status=False
+            ).select_related('listing')
+            
+            eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
+            
+            # Get deleted items
+            deleted_items = VehicleListing.objects.filter(
+                user=user,
+                status='sold',
+                updated_at__date=yesterday
+            )
+            
+            # Prepare report data
+            report_data = {
+                'user': user,
+                'report_date': yesterday.strftime('%Y-%m-%d'),
+                'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'relisted_count': relisted_items.count(),
+                'active_count': active_listings.count(),
+                'eligible_count': len(eligible_items_list),
+                'deleted_count': deleted_items.count(),
+                'relisted_items': [{
+                    'list_id': r.listing.list_id,
+                    'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
+                    'user': r.user.email,
+                    'timestamp': r.relisting_date.strftime('%H:%M:%S')
+                } for r in relisted_items],
+                'eligible_items': [{
+                    'list_id': item.list_id,
+                    'title': f"{item.year} {item.make} {item.model}",
+                    'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
+                    'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
+                } for item in eligible_items_list],
+                'deleted_items': [{
+                    'list_id': item.list_id,
+                    'title': f"{item.year} {item.make} {item.model}",
+                    'status': item.status,
+                    'deleted_at': item.updated_at.strftime('%H:%M:%S')
+                } for item in deleted_items]
+            }
+            
+            # Generate CSV attachment
+            csv_content = _generate_csv_report(report_data)
+            
+            # Render HTML email
+            html_content = render_to_string('listings/daily_report_template.html', report_data)
+            
+            # Send email
+            email = EmailMessage(
+                subject=f"Daily Activity Report - {yesterday.strftime('%Y-%m-%d')}",
+                body=html_content,
+                from_email=EMAIL_HOST_USER,
+                to=[ADMIN_EMAIL]
+            )
+            email.content_subtype = 'html'
+            email.attach(f'daily_report_{yesterday.strftime("%Y%m%d")}.csv', csv_content, 'text/csv')
+            email.send()
+            
+            logger.info(f"Daily report sent to {ADMIN_EMAIL}")
+            
+        except Exception as e:
+            logger.error(f"Error sending daily report to {ADMIN_EMAIL}: {e}")
+    
+    logger.info("Daily activity report task completed")
+
+def _generate_csv_report(data):
+    """Generate CSV content for the report"""
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Summary
+    writer.writerow(['DAILY ACTIVITY SUMMARY'])
+    writer.writerow(['Date', data['report_date']])
+    writer.writerow(['Relisted Items', data['relisted_count']])
+    writer.writerow(['Active Listings', data['active_count']])
+    writer.writerow(['Eligible for Relisting', data['eligible_count']])
+    writer.writerow(['Deleted Items', data['deleted_count']])
+    writer.writerow([])
+    
+    # Relisted items
+    if data['relisted_items']:
+        writer.writerow(['RELISTED ITEMS'])
+        writer.writerow(['ID', 'Title', 'User', 'Timestamp'])
+        for item in data['relisted_items']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['timestamp']])
+        writer.writerow([])
+    
+    # Eligible items
+    if data['eligible_items']:
+        writer.writerow(['ELIGIBLE FOR RELISTING'])
+        writer.writerow(['ID', 'Title', 'Last Listed', 'Next Eligible'])
+        for item in data['eligible_items']:
+            writer.writerow([item['list_id'], item['title'], item['last_listed'], item['next_eligible']])
+        writer.writerow([])
+    
+    # Deleted items
+    if data['deleted_items']:
+        writer.writerow(['DELETED ITEMS'])
+        writer.writerow(['ID', 'Title', 'Status', 'Deleted At'])
+        for item in data['deleted_items']:
+            writer.writerow([item['list_id'], item['title'], item['status'], item['deleted_at']])
+    
+    return output.getvalue()
