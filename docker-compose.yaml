@@ -24,7 +24,7 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
-    command: redis-server --databases 2
+    command: redis-server --databases 2 --replica-read-only no
     healthcheck:
       test:
         - CMD
