@@ -739,7 +739,7 @@ def send_daily_activity_report(self):
             # Get relisted items for the day
             relisted_items = RelistingFacebooklisting.objects.filter(
                 user=user,
-                relisting_date__gte=yesterday,
+                relisting_date=yesterday,
                 status='completed'
             ).select_related('listing')
             
@@ -747,7 +747,7 @@ def send_daily_activity_report(self):
             active_listings = VehicleListing.objects.filter(
                 user=user,
                 status='completed',
-                listed_on__gte=yesterday,
+                listed_on__date=yesterday,
             )
             
             # Get items eligible for relisting (6 days old)
