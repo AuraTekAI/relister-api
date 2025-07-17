@@ -111,7 +111,6 @@ def import_url_from_gumtree(request):
                 credentials.save()
                 send_status_reminder_email(credentials)
             return JsonResponse({'error': 'No facebook credentials found for the user , Please provide the facebook credentials'}, status=200)
-        create_marketplace_listing(vehicle_listing,credentials.session_cookie)
         if import_url.print_url_type() == "Facebook":
             # Extract facebook listing data from URL
             current_listing = {}

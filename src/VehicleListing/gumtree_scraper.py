@@ -399,7 +399,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 else:
                     logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping update")
                     continue
-            elif already_exists.status == "completed" and already_exists.created_at < timezone.now() - timedelta(days=3):
+            elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=7):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and already_exists.mileage == result.get("mileage") and already_exists.location == result.get("location") and already_exists.description == result.get("description") and already_exists.images == result.get("image"):
