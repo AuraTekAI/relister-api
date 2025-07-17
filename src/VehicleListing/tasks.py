@@ -747,7 +747,7 @@ def send_daily_activity_report(self):
             active_listings = VehicleListing.objects.filter(
                 user=user,
                 status='completed',
-                listed_on=yesterday,
+                listed_on__date=yesterday,
             )
             
             # Get items eligible for relisting (6 days old)
