@@ -733,17 +733,43 @@ def send_daily_activity_report(self):
     seven_days_ago = today - timedelta(days=7)
     
     try:
-        # Get all relisted items for the day (approved users only)
+        # Get successful relisted items for the day
         relisted_items = RelistingFacebooklisting.objects.filter(
             relisting_date=yesterday,
             status='completed',
             user__is_approved=True
         ).select_related('listing', 'user')
         
-        # Get active listings
+        # Get failed relistings
+        failed_relistings = RelistingFacebooklisting.objects.filter(
+            relisting_date=yesterday,
+            status='failed',
+            user__is_approved=True
+        ).select_related('listing', 'user')
+        
+        # Get active listings (completed yesterday)
         active_listings = VehicleListing.objects.filter(
             status='completed',
             listed_on__date=yesterday,
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Get pending listings
+        pending_listings = VehicleListing.objects.filter(
+            status='pending',
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Get failed listings
+        failed_listings = VehicleListing.objects.filter(
+            status='failed',
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Get sold listings (updated yesterday)
+        sold_listings = VehicleListing.objects.filter(
+            status='sold',
+            updated_at__date=yesterday,
             user__is_approved=True
         ).select_related('user')
         
@@ -765,41 +791,86 @@ def send_daily_activity_report(self):
         
         eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
         
-        # Get deleted items
-        deleted_items = VehicleListing.objects.filter(
-            status='sold',
-            updated_at__date=yesterday,
-            user__is_approved=True
-        ).select_related('user')
+        # Get approved users
+        approved_users = User.objects.filter(is_approved=True)
         
         # Prepare report data
         report_data = {
             'report_date': yesterday.strftime('%Y-%m-%d'),
             'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
             'relisted_count': relisted_items.count(),
+            'failed_relistings_count': failed_relistings.count(),
             'active_count': active_listings.count(),
+            'pending_count': pending_listings.count(),
+            'failed_count': failed_listings.count(),
+            'sold_count': sold_listings.count(),
             'eligible_count': len(eligible_items_list),
-            'deleted_count': deleted_items.count(),
+            'approved_users_count': approved_users.count(),
             'relisted_items': [{
                 'list_id': r.listing.list_id,
                 'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
                 'user': r.user.email,
+                'price': r.listing.price,
+                'location': r.listing.location,
                 'timestamp': r.relisting_date.strftime('%H:%M:%S')
             } for r in relisted_items],
+            'failed_relistings': [{
+                'list_id': r.listing.list_id,
+                'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
+                'user': r.user.email,
+                'price': r.listing.price,
+                'location': r.listing.location,
+                'error_reason': getattr(r, 'error_message', 'N/A'),
+                'timestamp': r.relisting_date.strftime('%H:%M:%S')
+            } for r in failed_relistings],
+            'active_listings': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email,
+                'price': item.price,
+                'location': item.location,
+                'listed_at': item.listed_on.strftime('%H:%M:%S') if item.listed_on else 'N/A'
+            } for item in active_listings],
+            'pending_listings': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email,
+                'price': item.price,
+                'location': item.location,
+                'created_at': item.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            } for item in pending_listings],
+            'failed_listings': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email,
+                'price': item.price,
+                'location': item.location,
+                'failed_at': item.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+            } for item in failed_listings],
+            'sold_listings': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email,
+                'price': item.price,
+                'location': item.location,
+                'sold_at': item.updated_at.strftime('%H:%M:%S')
+            } for item in sold_listings],
             'eligible_items': [{
                 'list_id': item.list_id,
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email if hasattr(item, 'user') else 'N/A',
+                'price': item.price,
+                'location': item.location,
                 'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
                 'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
             } for item in eligible_items_list],
-            'deleted_items': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email,
-                'status': item.status,
-                'deleted_at': item.updated_at.strftime('%H:%M:%S')
-            } for item in deleted_items]
+            'approved_users': [{
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'daily_listing_count': user.daily_listing_count,
+                'date_joined': user.date_joined.strftime('%Y-%m-%d')
+            } for user in approved_users]
         }
         
         # Generate CSV attachment
@@ -834,33 +905,77 @@ def _generate_csv_report(data):
     # Summary
     writer.writerow(['DAILY ACTIVITY SUMMARY'])
     writer.writerow(['Date', data['report_date']])
-    writer.writerow(['Relisted Items', data['relisted_count']])
+    writer.writerow(['Successful Relistings', data['relisted_count']])
+    writer.writerow(['Failed Relistings', data['failed_relistings_count']])
     writer.writerow(['Active Listings', data['active_count']])
+    writer.writerow(['Pending Listings', data['pending_count']])
+    writer.writerow(['Failed Listings', data['failed_count']])
+    writer.writerow(['Sold Listings', data['sold_count']])
     writer.writerow(['Eligible for Relisting', data['eligible_count']])
-    writer.writerow(['Deleted Items', data['deleted_count']])
+    writer.writerow(['Approved Users', data['approved_users_count']])
     writer.writerow([])
     
-    # Relisted items
+    # Successful relistings
     if data['relisted_items']:
-        writer.writerow(['RELISTED ITEMS'])
-        writer.writerow(['ID', 'Title', 'User', 'Timestamp'])
+        writer.writerow(['SUCCESSFUL RELISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Timestamp'])
         for item in data['relisted_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['timestamp']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['timestamp']])
+        writer.writerow([])
+    
+    # Failed relistings
+    if data['failed_relistings']:
+        writer.writerow(['FAILED RELISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Error', 'Timestamp'])
+        for item in data['failed_relistings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['error_reason'], item['timestamp']])
+        writer.writerow([])
+    
+    # Active listings
+    if data['active_listings']:
+        writer.writerow(['ACTIVE LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Listed At'])
+        for item in data['active_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['listed_at']])
+        writer.writerow([])
+    
+    # Pending listings
+    if data['pending_listings']:
+        writer.writerow(['PENDING LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Created At'])
+        for item in data['pending_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['created_at']])
+        writer.writerow([])
+    
+    # Failed listings
+    if data['failed_listings']:
+        writer.writerow(['FAILED LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Failed At'])
+        for item in data['failed_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['failed_at']])
+        writer.writerow([])
+    
+    # Sold listings
+    if data['sold_listings']:
+        writer.writerow(['SOLD LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Sold At'])
+        for item in data['sold_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['sold_at']])
         writer.writerow([])
     
     # Eligible items
     if data['eligible_items']:
         writer.writerow(['ELIGIBLE FOR RELISTING'])
-        writer.writerow(['ID', 'Title', 'User', 'Last Listed', 'Next Eligible'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Last Listed', 'Next Eligible'])
         for item in data['eligible_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['last_listed'], item['next_eligible']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['last_listed'], item['next_eligible']])
         writer.writerow([])
     
-    # Deleted items
-    if data['deleted_items']:
-        writer.writerow(['DELETED ITEMS'])
-        writer.writerow(['ID', 'Title', 'User', 'Status', 'Deleted At'])
-        for item in data['deleted_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['status'], item['deleted_at']])
+    # Approved users
+    if data['approved_users']:
+        writer.writerow(['APPROVED USERS'])
+        writer.writerow(['Email', 'First Name', 'Last Name', 'Daily Count', 'Date Joined'])
+        for user in data['approved_users']:
+            writer.writerow([user['email'], user['first_name'], user['last_name'], user['daily_listing_count'], user['date_joined']])
     
     return output.getvalue()
