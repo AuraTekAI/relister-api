@@ -96,10 +96,13 @@ def create_pending_facebook_marketplace_listing_task(self):
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
                 listing.save()
-                credentials.retry_count += 1
-                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                    credentials.retry_count += 1
+                    credentials.save()
+                else:
                     credentials.status = False
-                credentials.save()
+                    credentials.save()
+                
                 logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
@@ -110,16 +113,17 @@ def create_pending_facebook_marketplace_listing_task(self):
 
 
 def retry_failed_relistings():
-    failed_relistings = RelistingFacebooklisting.objects.filter(
+    failed_relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed",
         last_relisting_status=False,
         status="failed"
-    )
+    ))
     if not failed_relistings:
         logger.info("No failed relistings found for the user {user.email}")
         return
 
-    for relisting in failed_relistings:
+    while failed_relistings:
+        relisting = failed_relistings.pop(0)
         logger.info(f"Relisting failed for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
         credentials = FacebookUserCredentials.objects.filter(user=relisting.user).first()
         if not credentials or credentials.session_cookie == {} or not credentials.status:
@@ -129,6 +133,14 @@ def retry_failed_relistings():
                 send_status_reminder_email(credentials)
             logger.warning(f"No valid credentials for user {relisting.user.email}")
             continue
+        if relisting.user.daily_listing_count >= 15:
+            logger.info(f"Daily listing count limit reached for user {relisting.user.email}")
+            continue
+        if not should_create_listing(relisting.user):
+            logger.info(f"10-minute cooldown for user {relisting.user.email}")
+            failed_relistings.append(relisting)  # Re-queue for later
+            continue
+
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
         now = timezone.now()
@@ -137,16 +149,23 @@ def retry_failed_relistings():
             relisting.status = "completed"
             relisting.listing.has_images = False
             relisting.listing.save()
+            relisting.relisting_date = now
+            relisting.save()
+            relisting.user.daily_listing_count += 1 
+            relisting.user.last_facebook_listing_time = now
+            relisting.user.save()
             logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
             image_verification(relisting,None)
         else:
             relisting.status = "failed"
+            relisting.save()
             logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        relisting.updated_at = now
-        relisting.relisting_date = now
-        relisting.save()
+    logging.info("Completed retrying failed relistings process.")
+        
+        
+        
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
@@ -233,14 +252,14 @@ def relist_facebook_marketplace_listing_task(self):
             else:
                 logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 handle_failed_relisting(listing, user, relisting)
-        elif response[0] == 2:  # Listing sold
-            logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            mark_listing_sold(listing, relisting)
+        # elif response[0] == 2:  # Listing sold
+        #     logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        #     mark_listing_sold(listing, relisting)
         elif response[0] == 6:
             logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"response[1]: {response[1]}")
             logger.info(f"number of retries: {listing.retry_count}")
-            if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+            if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                 listing.retry_count += 1
                 listing.save()
                 logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
@@ -328,10 +347,12 @@ def create_failed_facebook_marketplace_listing_task(self):
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
                 listing.save()
-                credentials.retry_count += 1
-                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                    credentials.retry_count += 1
+                    credentials.save()
+                else:
                     credentials.status = False
-                credentials.save()
+                    credentials.save()
                 logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
@@ -663,12 +684,12 @@ def check_images_upload_status(self):
                 logger.info(f"Error: {response[1]}")
                 logger.info("retring attempt to check images upload status")
                 continue
-            elif response[0] == 3: #Image upload successful
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
-                logger.info(f"info: {response[1]}")
-                item.status = "sold"
-                item.save()
-                continue
+            # elif response[0] == 3: #Image upload successful
+            #     logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
+            #     logger.info(f"info: {response[1]}")
+            #     item.status = "sold"
+            #     item.save()
+            #     continue
             elif response[0] == 4: #Failed to check images upload status    
                 logger.info("failed to check images upload status. need to retry...")
                 logger.info(f"Error: {response[1]}")
@@ -739,12 +760,24 @@ def send_daily_activity_report(self):
             user__is_approved=True
         ).select_related('listing', 'user')
         
-        # Get failed relistings
+        # Get failed relistings (yesterday)
         failed_relistings = RelistingFacebooklisting.objects.filter(
             relisting_date=yesterday,
             status='failed',
             user__is_approved=True
         ).select_related('listing', 'user')
+        
+        # Get total successful relistings (all time)
+        total_successful_relistings = RelistingFacebooklisting.objects.filter(
+            status='completed',
+            user__is_approved=True
+        ).count()
+        
+        # Get total failed relistings (all time)
+        total_failed_relistings = RelistingFacebooklisting.objects.filter(
+            status='failed',
+            user__is_approved=True
+        ).count()
         
         # Get active listings (completed yesterday)
         active_listings = VehicleListing.objects.filter(
@@ -799,6 +832,8 @@ def send_daily_activity_report(self):
             'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
             'relisted_count': relisted_items.count(),
             'failed_relistings_count': failed_relistings.count(),
+            'total_successful_relistings': total_successful_relistings,
+            'total_failed_relistings': total_failed_relistings,
             'active_count': active_listings.count(),
             'pending_count': pending_listings.count(),
             'failed_count': failed_listings.count(),
@@ -810,7 +845,6 @@ def send_daily_activity_report(self):
                 'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
                 'user': r.user.email,
                 'price': r.listing.price,
-                'location': r.listing.location,
                 'timestamp': r.relisting_date.strftime('%H:%M:%S')
             } for r in relisted_items],
             'failed_relistings': [{
@@ -818,7 +852,6 @@ def send_daily_activity_report(self):
                 'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
                 'user': r.user.email,
                 'price': r.listing.price,
-                'location': r.listing.location,
                 'error_reason': getattr(r, 'error_message', 'N/A'),
                 'timestamp': r.relisting_date.strftime('%H:%M:%S')
             } for r in failed_relistings],
@@ -827,7 +860,6 @@ def send_daily_activity_report(self):
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email,
                 'price': item.price,
-                'location': item.location,
                 'listed_at': item.listed_on.strftime('%H:%M:%S') if item.listed_on else 'N/A'
             } for item in active_listings],
             'pending_listings': [{
@@ -835,7 +867,6 @@ def send_daily_activity_report(self):
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email,
                 'price': item.price,
-                'location': item.location,
                 'created_at': item.created_at.strftime('%Y-%m-%d %H:%M:%S')
             } for item in pending_listings],
             'failed_listings': [{
@@ -843,7 +874,6 @@ def send_daily_activity_report(self):
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email,
                 'price': item.price,
-                'location': item.location,
                 'failed_at': item.updated_at.strftime('%Y-%m-%d %H:%M:%S')
             } for item in failed_listings],
             'sold_listings': [{
@@ -851,7 +881,6 @@ def send_daily_activity_report(self):
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email,
                 'price': item.price,
-                'location': item.location,
                 'sold_at': item.updated_at.strftime('%H:%M:%S')
             } for item in sold_listings],
             'eligible_items': [{
@@ -859,7 +888,6 @@ def send_daily_activity_report(self):
                 'title': f"{item.year} {item.make} {item.model}",
                 'user': item.user.email if hasattr(item, 'user') else 'N/A',
                 'price': item.price,
-                'location': item.location,
                 'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
                 'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
             } for item in eligible_items_list],
@@ -903,8 +931,10 @@ def _generate_csv_report(data):
     # Summary
     writer.writerow(['DAILY ACTIVITY SUMMARY'])
     writer.writerow(['Date', data['report_date']])
-    writer.writerow(['Successful Relistings', data['relisted_count']])
-    writer.writerow(['Failed Relistings', data['failed_relistings_count']])
+    writer.writerow(['Yesterday Successful Relistings', data['relisted_count']])
+    writer.writerow(['Yesterday Failed Relistings', data['failed_relistings_count']])
+    writer.writerow(['Total Successful Relistings', data['total_successful_relistings']])
+    writer.writerow(['Total Failed Relistings', data['total_failed_relistings']])
     writer.writerow(['Active Listings', data['active_count']])
     writer.writerow(['Pending Listings', data['pending_count']])
     writer.writerow(['Failed Listings', data['failed_count']])
@@ -916,57 +946,57 @@ def _generate_csv_report(data):
     # Successful relistings
     if data['relisted_items']:
         writer.writerow(['SUCCESSFUL RELISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Timestamp'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Timestamp'])
         for item in data['relisted_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['timestamp']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['timestamp']])
         writer.writerow([])
     
     # Failed relistings
     if data['failed_relistings']:
         writer.writerow(['FAILED RELISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Error', 'Timestamp'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Error', 'Timestamp'])
         for item in data['failed_relistings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['error_reason'], item['timestamp']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['error_reason'], item['timestamp']])
         writer.writerow([])
     
     # Active listings
     if data['active_listings']:
         writer.writerow(['ACTIVE LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Listed At'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Listed At'])
         for item in data['active_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['listed_at']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['listed_at']])
         writer.writerow([])
     
     # Pending listings
     if data['pending_listings']:
         writer.writerow(['PENDING LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Created At'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Created At'])
         for item in data['pending_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['created_at']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['created_at']])
         writer.writerow([])
     
     # Failed listings
     if data['failed_listings']:
         writer.writerow(['FAILED LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Failed At'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Failed At'])
         for item in data['failed_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['failed_at']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['failed_at']])
         writer.writerow([])
     
     # Sold listings
     if data['sold_listings']:
         writer.writerow(['SOLD LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Sold At'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Sold At'])
         for item in data['sold_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['sold_at']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['sold_at']])
         writer.writerow([])
     
     # Eligible items
     if data['eligible_items']:
         writer.writerow(['ELIGIBLE FOR RELISTING'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Location', 'Last Listed', 'Next Eligible'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Last Listed', 'Next Eligible'])
         for item in data['eligible_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['location'], item['last_listed'], item['next_eligible']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['last_listed'], item['next_eligible']])
         writer.writerow([])
     
     # Approved users
