@@ -865,10 +865,9 @@ def send_daily_activity_report(self):
             } for item in eligible_items_list],
             'approved_users': [{
                 'email': user.email,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'daily_listing_count': user.daily_listing_count,
-                'date_joined': user.date_joined.strftime('%Y-%m-%d')
+                'dealership_name': user.dealership_name or 'N/A',
+                'contact_person_name': user.contact_person_name or 'N/A',
+                'daily_listing_count': user.daily_listing_count
             } for user in approved_users]
         }
         
@@ -973,8 +972,8 @@ def _generate_csv_report(data):
     # Approved users
     if data['approved_users']:
         writer.writerow(['APPROVED USERS'])
-        writer.writerow(['Email', 'First Name', 'Last Name', 'Daily Count', 'Date Joined'])
+        writer.writerow(['Email', 'Dealership Name', 'Contact Person', 'Daily Count'])
         for user in data['approved_users']:
-            writer.writerow([user['email'], user['first_name'], user['last_name'], user['daily_listing_count'], user['date_joined']])
+            writer.writerow([user['email'], user['dealership_name'], user['contact_person_name'], user['daily_listing_count']])
     
     return output.getvalue()

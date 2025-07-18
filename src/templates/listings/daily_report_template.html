@@ -170,13 +170,13 @@
     <div class="section">
         <h3>👥 Approved Users</h3>
         <table>
-            <tr><th>Email</th><th>Name</th><th>Daily Count</th><th>Date Joined</th></tr>
+            <tr><th>Email</th><th>Dealership Name</th><th>Contact Person</th><th>Daily Count</th></tr>
             {% for user in approved_users %}
             <tr>
                 <td>{{ user.email }}</td>
-                <td>{{ user.first_name }} {{ user.last_name }}</td>
+                <td>{{ user.dealership_name }}</td>
+                <td>{{ user.contact_person_name }}</td>
                 <td>{{ user.daily_listing_count }}</td>
-                <td>{{ user.date_joined }}</td>
             </tr>
             {% endfor %}
         </table>
