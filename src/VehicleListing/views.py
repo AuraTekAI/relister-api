@@ -20,6 +20,7 @@ from queue import Queue
 from django.conf import settings
 from django.utils import timezone
 import logging
+from relister.settings import MAX_RETRIES_ATTEMPTS
 
 logger = logging.getLogger('relister_views')
 
@@ -607,37 +608,58 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
             count+=1
             logger.info(f"Vehicle listing already exists for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
             continue
-        time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        # Get listings using the function
-        vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
-        if vehicleListing:
-            logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
+        elif already_listed and already_listed.status == "sold":
             count+=1
-            enhanced_description=format_car_description(vehicleListing.get("description"))
-            VehicleListing.objects.create(
-                user=user,
-                facebook_profile=facebook_profile_listing_instance,
-                list_id=current_listing["id"],
-                year=vehicleListing["year"],
-                body_type="Other",
-                fuel_type=vehicleListing["fuel_type"],
-                color=None,
-                variant="Other",
-                make=vehicleListing["make"],
-                mileage=vehicleListing["driven"] if vehicleListing["driven"] else current_listing["mileage"],
-                model=vehicleListing["model"],
-                price=vehicleListing.get("price"),
-                transmission=vehicleListing["transmission"],
-                condition=vehicleListing["condition"],
-                description=enhanced_description,
-                images=vehicleListing["images"],
-                url=current_listing["url"],
-                location=vehicleListing.get("location"),
-                status="pending",
-                exterior_colour=vehicleListing["exterior_colour"],
-                interior_colour=vehicleListing["interior_colour"],
-                seller_profile_id=seller_id
-            )
+            logger.info(f"Vehicle listing already exists and marked as sold for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
+            # If the listing is already listed, delete it from the FacebookProfileListing
+            already_listed.delete()
+            continue
+        else:
+            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            # Get listings using the function
+            vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
+            if vehicleListing:
+                logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
+                count+=1
+                enhanced_description=format_car_description(vehicleListing.get("description"))
+                VehicleListing.objects.create(
+                    user=user,
+                    facebook_profile=facebook_profile_listing_instance,
+                    list_id=current_listing["id"],
+                    year=vehicleListing["year"],
+                    body_type="Other",
+                    fuel_type=vehicleListing["fuel_type"],
+                    color=None,
+                    variant="Other",
+                    make=vehicleListing["make"],
+                    mileage=vehicleListing["driven"] if vehicleListing["driven"] else current_listing["mileage"],
+                    model=vehicleListing["model"],
+                    price=vehicleListing.get("price"),
+                    transmission=vehicleListing["transmission"],
+                    condition=vehicleListing["condition"],
+                    description=enhanced_description,
+                    images=vehicleListing["images"],
+                    url=current_listing["url"],
+                    location=vehicleListing.get("location"),
+                    status="pending",
+                    exterior_colour=vehicleListing["exterior_colour"],
+                    interior_colour=vehicleListing["interior_colour"],
+                    seller_profile_id=seller_id
+                )
+            else:
+                logger.error(f"Failed to extract Facebook listing details for the user {user.email} and profile id: {seller_id}")
+                if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
+                    credentials.retry_count += 1
+                    credentials.save()
+                    continue
+                else:
+                    credentials.status = False
+                    credentials.save()
+                    logger.error(f"Failed to extract Facebook listing details for the user {user.email} and profile id: {seller_id}, Max retries reached")
+                    break
+    facebook_profile_listing_instance.processed_listings = count
+    facebook_profile_listing_instance= "completed"
+    facebook_profile_listing_instance.save()
     #Mark missing listings as SOLD
     existing_listings = VehicleListing.objects.filter(
         user=user, seller_profile_id=seller_id
@@ -661,18 +683,18 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                         continue
                     elif relisting and relisting.status == "completed":
                         listed_on = timezone.localtime(relisting.relisting_date)
-                        if relisting.listing.retry_count < 3:
+                        if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                             response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                             if response[0] == 1:
                                 logging.info(f"Deleted relisted Facebook listing for {search_query}")
                                 listing.delete()
-                            elif response[0] == 2:
-                                listing.status = "sold"
-                                listing.save()
-                                relisting.status = "completed"
-                                relisting.last_relisting_status = True
-                                relisting.save()
-                                logging.info(f"Relisting {search_query} marked as sold and on Facebook, status updated to sold")
+                            # elif response[0] == 2:
+                            #     listing.status = "sold"
+                            #     listing.save()
+                            #     relisting.status = "completed"
+                            #     relisting.last_relisting_status = True
+                            #     relisting.save()
+                            #     logging.info(f"Relisting {search_query} marked as sold and on Facebook, status updated to sold")
                             else:
                                 relisting.listing.retry_count += 1
                                 relisting.listing.save()
@@ -686,15 +708,15 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                         listing.delete()
                         continue
                 elif credentials and not listing.is_relist:
-                    if listing.retry_count < 3:
+                    if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                         if response[0] == 1:
                             logging.info(f"Deleted Facebook listing for {search_query}")
                             listing.delete()
-                        elif response[0] == 2:
-                            listing.status = "sold"
-                            listing.save()
-                            logging.info(f"Listing {search_query} marked as sold and on Facebook, status updated to sold")
+                        # elif response[0] == 2:
+                        #     listing.status = "sold"
+                        #     listing.save()
+                        #     logging.info(f"Listing {search_query} marked as sold and on Facebook, status updated to sold")
                         else:
                             listing.retry_count += 1
                             listing.save()
@@ -706,12 +728,11 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                     logging.info(f"No credentials found for user {listing.user.email}")
                     continue
             else:
-                logging.info(f"Listing ID {listing.list_id} is already exit and marked as {listing.status}")
+                logging.info(f"Listing ID {listing.list_id} is already exit and marked as {listing.status} and not deleting and status of listing is unknown")
                 continue
-    facebook_profile_listing_instance.processed_listings = count
-    facebook_profile_listing_instance= "completed"
-    facebook_profile_listing_instance.save()
-    logging.info("Completed gumtree_profile_listings_thread execution")
+    else:
+        logging.info("No existing listings found that no exist in the incoming list IDs")
+    logging.info("Completed facebook_profile_listings_thread execution")
 
 class FacebookProfileListingViewSet(ModelViewSet):
     """Get all Facebook profile listings"""
@@ -856,6 +877,12 @@ def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
                 if result[0] == 1:
                     time.sleep(random.uniform(300,360))
                     break
+                # elif result[0] == 2:
+                #     time.sleep(random.uniform(300,360))
+                #     break
+                elif result[0] == 6:
+                    time.sleep(random.uniform(300, 360))
+                    break
                 else:
                     time.sleep(random.uniform(300, 360))
 @api_view(['GET'])
@@ -946,12 +973,12 @@ def image_verification(relisting,vehicle_listing):
         elif response[0] == 0:
             relisting.status="failed"
             relisting.save()
-        elif response[0] == 3:
-            relisting.listing.status="sold"
-            relisting.listing.save()
-            relisting.status="completed"
-            relisting.last_relisting_status=True
-            relisting.save()
+        # elif response[0] == 3:
+        #     relisting.listing.status="sold"
+        #     relisting.listing.save()
+        #     relisting.status="completed"
+        #     relisting.last_relisting_status=True
+        #     relisting.save()
         elif response[0] == 7:
             if relisting.listing.retry_count < 3:
                 relisting.listing.retry_count += 1
@@ -971,9 +998,9 @@ def image_verification(relisting,vehicle_listing):
         elif response[0] == 0:
             vehicle_listing.status="failed"
             vehicle_listing.save()
-        elif response[0] == 3:
-            vehicle_listing.status="sold"
-            vehicle_listing.save()
+        # elif response[0] == 3:
+        #     vehicle_listing.status="sold"
+        #     vehicle_listing.save()
         elif response[0] == 7:
             if vehicle_listing.retry_count < 3:
                 vehicle_listing.retry_count += 1

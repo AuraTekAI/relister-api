@@ -96,10 +96,13 @@ def create_pending_facebook_marketplace_listing_task(self):
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
                 listing.save()
-                credentials.retry_count += 1
-                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                    credentials.retry_count += 1
+                    credentials.save()
+                else:
                     credentials.status = False
-                credentials.save()
+                    credentials.save()
+                
                 logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
@@ -110,16 +113,17 @@ def create_pending_facebook_marketplace_listing_task(self):
 
 
 def retry_failed_relistings():
-    failed_relistings = RelistingFacebooklisting.objects.filter(
+    failed_relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed",
         last_relisting_status=False,
         status="failed"
-    )
+    ))
     if not failed_relistings:
         logger.info("No failed relistings found for the user {user.email}")
         return
 
-    for relisting in failed_relistings:
+    while failed_relistings:
+        relisting = failed_relistings.pop(0)
         logger.info(f"Relisting failed for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
         credentials = FacebookUserCredentials.objects.filter(user=relisting.user).first()
         if not credentials or credentials.session_cookie == {} or not credentials.status:
@@ -129,6 +133,14 @@ def retry_failed_relistings():
                 send_status_reminder_email(credentials)
             logger.warning(f"No valid credentials for user {relisting.user.email}")
             continue
+        if relisting.user.daily_listing_count >= 15:
+            logger.info(f"Daily listing count limit reached for user {relisting.user.email}")
+            continue
+        if not should_create_listing(relisting.user):
+            logger.info(f"10-minute cooldown for user {relisting.user.email}")
+            failed_relistings.append(relisting)  # Re-queue for later
+            continue
+
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
         now = timezone.now()
@@ -137,16 +149,23 @@ def retry_failed_relistings():
             relisting.status = "completed"
             relisting.listing.has_images = False
             relisting.listing.save()
+            relisting.relisting_date = now
+            relisting.save()
+            relisting.user.daily_listing_count += 1 
+            relisting.user.last_facebook_listing_time = now
+            relisting.user.save()
             logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
             logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
             image_verification(relisting,None)
         else:
             relisting.status = "failed"
+            relisting.save()
             logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        relisting.updated_at = now
-        relisting.relisting_date = now
-        relisting.save()
+    logging.info("Completed retrying failed relistings process.")
+        
+        
+        
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
@@ -233,14 +252,14 @@ def relist_facebook_marketplace_listing_task(self):
             else:
                 logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 handle_failed_relisting(listing, user, relisting)
-        elif response[0] == 2:  # Listing sold
-            logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            mark_listing_sold(listing, relisting)
+        # elif response[0] == 2:  # Listing sold
+        #     logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        #     mark_listing_sold(listing, relisting)
         elif response[0] == 6:
             logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"response[1]: {response[1]}")
             logger.info(f"number of retries: {listing.retry_count}")
-            if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+            if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                 listing.retry_count += 1
                 listing.save()
                 logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
@@ -328,10 +347,12 @@ def create_failed_facebook_marketplace_listing_task(self):
                 FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
                 listing.status = "failed"
                 listing.save()
-                credentials.retry_count += 1
-                if credentials.retry_count >= MAX_RETRIES_ATTEMPTS:
+                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                    credentials.retry_count += 1
+                    credentials.save()
+                else:
                     credentials.status = False
-                credentials.save()
+                    credentials.save()
                 logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
@@ -663,12 +684,12 @@ def check_images_upload_status(self):
                 logger.info(f"Error: {response[1]}")
                 logger.info("retring attempt to check images upload status")
                 continue
-            elif response[0] == 3: #Image upload successful
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
-                logger.info(f"info: {response[1]}")
-                item.status = "sold"
-                item.save()
-                continue
+            # elif response[0] == 3: #Image upload successful
+            #     logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
+            #     logger.info(f"info: {response[1]}")
+            #     item.status = "sold"
+            #     item.save()
+            #     continue
             elif response[0] == 4: #Failed to check images upload status    
                 logger.info("failed to check images upload status. need to retry...")
                 logger.info(f"Error: {response[1]}")

@@ -792,7 +792,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     status = element.get('status', '').lower()
 
                     if title_match and price_match and date_match:
-                        if status == "mark as sold":
+                        if status == "mark as sold" and status == "mark as available":
                             logging.info(f"Deleting listing: {element['title']} - {element['price']}")
 
                             price_element = element.get('price_element')
@@ -830,11 +830,6 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                 browser.close()
                                 logging.info(f"Price element not found or not visible for {search_for}")
                                 return 3, "Price element not found or not visible"
-
-                        elif status == "mark as available":
-                            logging.info("Listing is already marked as available.")
-                            browser.close()
-                            return 2, "This listing is already sold"
                 except Exception as e:
                     logging.error(f"Error evaluating listing match: {e}")
                     continue
@@ -1292,7 +1287,7 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                     logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
 
                     if title_match and price_match and date_match:
-                        if status == "mark as sold":
+                        if status == "mark as sold" or status == "mark as available":
                             logging.info(f"Deleting listing: {element['title']} - {element['price']}")
                             price_element = element.get('price_element')
                             if price_element and price_element.is_visible():
@@ -1336,10 +1331,10 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                 browser.close()
                                 return 4, "Price element not found or not visible"
 
-                        elif status == "mark as available":
-                            logging.info("Listing is already marked as available.")
-                            browser.close()
-                            return 3, "This listing is already marked as available"
+                        # elif status == "mark as available":
+                        #     logging.info("Listing is already marked as available.")
+                        #     browser.close()
+                        #     return 3, "This listing is already marked as available"
                         else:
                             logging.info(f"Got unexpected listing status: {status}")
                             browser.close()
@@ -1792,7 +1787,7 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                 logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
 
                 if title_match and price_match and date_match:
-                    if status == "mark as sold":
+                    if status == "mark as sold" or status == "mark as available":
                         logging.info(f"Deleting listing: {element['title']} - {element['price']}")
                         price_element = element.get('price_element')
                         if price_element and price_element.is_visible():
@@ -1833,9 +1828,9 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                         else:
                             return 4, "Price element not found or not visible"
 
-                    elif status == "mark as available":
-                        logging.info("Listing is already marked as available.")
-                        return 3, "This listing is already marked as available"
+                    # elif status == "mark as available":
+                    #     logging.info("Listing is already marked as available.")
+                    #     return 3, "This listing is already marked as available"
                     else:
                         logging.info(f"Got unexpected listing status: {status}")
                         return 4, "Got unexpected listing status"
@@ -1895,12 +1890,12 @@ def image_upload_verification(relisting,vehicle_listing):
                         browser.close()
                         logging.info("Browser closed successfully")
                         return 0, "Restricted listing has no image uploaded and deleted successfully"
-                    elif result[0] == 6:
-                        logging.info(f"Failed to load the page")
-                        browser.close()
-                        logging.info("Browser closed successfully")
-                        handle_retry_or_disable_credentials(credentials, user)
-                        return 6, "Failed to load the page"
+                    # elif result[0] == 6:
+                    #     logging.info(f"Failed to load the page")
+                    #     browser.close()
+                    #     logging.info("Browser closed successfully")
+                    #     handle_retry_or_disable_credentials(credentials, user)
+                    #     return 6, "Failed to load the page"
                     elif result[0] == 4:
                         logging.info(f"Restricted listing {search_title} has no image uploaded and failed to delete")
                         logging.info(f"Error: {result[1]}")
@@ -1927,11 +1922,11 @@ def image_upload_verification(relisting,vehicle_listing):
                             browser.close()
                             logging.info("Browser closed successfully")
                             return 2, "Approved listing not found, Retrying daily one time"
-                        elif result[0] == 3:
-                            logging.info(f"Approved listing {search_title} has sold successfully")
-                            browser.close()
-                            logging.info("Browser closed successfully")
-                            return 3, "Approved listing has sold successfully"
+                        # elif result[0] == 3:
+                        #     logging.info(f"Approved listing {search_title} has sold successfully")
+                        #     browser.close()
+                        #     logging.info("Browser closed successfully")
+                        #     return 3, "Approved listing has sold successfully"
                         elif result[0] == 4:
                             logging.info(f"Approved listing {search_title} has no image uploaded and failed to delete.. Retry attempt daily one time")
                             browser.close()
