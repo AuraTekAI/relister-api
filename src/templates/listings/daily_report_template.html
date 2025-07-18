@@ -48,11 +48,12 @@
     <div class="section">
         <h3>⏰ Eligible for Relisting</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>Last Listed</th><th>Next Eligible</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Last Listed</th><th>Next Eligible</th></tr>
             {% for item in eligible_items %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
+                <td>{{ item.user }}</td>
                 <td>{{ item.last_listed }}</td>
                 <td class="warning">{{ item.next_eligible }}</td>
             </tr>
@@ -65,11 +66,12 @@
     <div class="section">
         <h3>🗑️ Deleted Items</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>Status</th><th>Deleted At</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Status</th><th>Deleted At</th></tr>
             {% for item in deleted_items %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
+                <td>{{ item.user }}</td>
                 <td>{{ item.status }}</td>
                 <td>{{ item.deleted_at }}</td>
             </tr>

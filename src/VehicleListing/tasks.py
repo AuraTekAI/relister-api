@@ -725,106 +725,104 @@ def reset_listing_count_for_users_task(self):
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 def send_daily_activity_report(self):
-    """Send daily listing activity report to all approved users"""
+    """Send daily listing activity report to admin email"""
     logger.info("Generating daily activity report")
     
     today = timezone.now().date()
     yesterday = today - timedelta(days=1)
     seven_days_ago = today - timedelta(days=7)
     
-    approved_users = User.objects.filter(is_approved=True)
-    
-    for user in approved_users:
-        try:
-            # Get relisted items for the day
-            relisted_items = RelistingFacebooklisting.objects.filter(
-                user=user,
-                relisting_date=yesterday,
-                status='completed'
-            ).select_related('listing')
-            
-            # Get active listings
-            active_listings = VehicleListing.objects.filter(
-                user=user,
-                status='completed',
-                listed_on__date=yesterday,
-            )
-            
-            # Get items eligible for relisting (6 days old)
-            eligible_items = VehicleListing.objects.filter(
-                user=user,
-                status='completed',
-                listed_on__date=seven_days_ago - timedelta(days=1),
-                is_relist=False
-            )
-            
-            # Add relisted items that are eligible again
-            eligible_relistings = RelistingFacebooklisting.objects.filter(
-                user=user,
-                listing__status='completed',
-                relisting_date__date=seven_days_ago - timedelta(days=1),
-                last_relisting_status=False
-            ).select_related('listing')
-            
-            eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
-            
-            # Get deleted items
-            deleted_items = VehicleListing.objects.filter(
-                user=user,
-                status='sold',
-                updated_at__date=yesterday
-            )
-            
-            # Prepare report data
-            report_data = {
-                'user': user,
-                'report_date': yesterday.strftime('%Y-%m-%d'),
-                'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'relisted_count': relisted_items.count(),
-                'active_count': active_listings.count(),
-                'eligible_count': len(eligible_items_list),
-                'deleted_count': deleted_items.count(),
-                'relisted_items': [{
-                    'list_id': r.listing.list_id,
-                    'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
-                    'user': r.user.email,
-                    'timestamp': r.relisting_date.strftime('%H:%M:%S')
-                } for r in relisted_items],
-                'eligible_items': [{
-                    'list_id': item.list_id,
-                    'title': f"{item.year} {item.make} {item.model}",
-                    'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
-                    'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
-                } for item in eligible_items_list],
-                'deleted_items': [{
-                    'list_id': item.list_id,
-                    'title': f"{item.year} {item.make} {item.model}",
-                    'status': item.status,
-                    'deleted_at': item.updated_at.strftime('%H:%M:%S')
-                } for item in deleted_items]
-            }
-            
-            # Generate CSV attachment
-            csv_content = _generate_csv_report(report_data)
-            
-            # Render HTML email
-            html_content = render_to_string('listings/daily_report_template.html', report_data)
-            
-            # Send email
-            email = EmailMessage(
-                subject=f"Daily Activity Report - {yesterday.strftime('%Y-%m-%d')}",
-                body=html_content,
-                from_email=EMAIL_HOST_USER,
-                to=[ADMIN_EMAIL]
-            )
-            email.content_subtype = 'html'
-            email.attach(f'daily_report_{yesterday.strftime("%Y%m%d")}.csv', csv_content, 'text/csv')
-            email.send()
-            
-            logger.info(f"Daily report sent to {ADMIN_EMAIL}")
-            
-        except Exception as e:
-            logger.error(f"Error sending daily report to {ADMIN_EMAIL}: {e}")
+    try:
+        # Get all relisted items for the day (approved users only)
+        relisted_items = RelistingFacebooklisting.objects.filter(
+            relisting_date=yesterday,
+            status='completed',
+            user__is_approved=True
+        ).select_related('listing', 'user')
+        
+        # Get active listings
+        active_listings = VehicleListing.objects.filter(
+            status='completed',
+            listed_on__date=yesterday,
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Get items eligible for relisting (6 days old)
+        eligible_items = VehicleListing.objects.filter(
+            status='completed',
+            listed_on__date=seven_days_ago - timedelta(days=1),
+            is_relist=False,
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Add relisted items that are eligible again
+        eligible_relistings = RelistingFacebooklisting.objects.filter(
+            listing__status='completed',
+            relisting_date__date=seven_days_ago - timedelta(days=1),
+            last_relisting_status=False,
+            user__is_approved=True
+        ).select_related('listing', 'user')
+        
+        eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
+        
+        # Get deleted items
+        deleted_items = VehicleListing.objects.filter(
+            status='sold',
+            updated_at__date=yesterday,
+            user__is_approved=True
+        ).select_related('user')
+        
+        # Prepare report data
+        report_data = {
+            'report_date': yesterday.strftime('%Y-%m-%d'),
+            'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'relisted_count': relisted_items.count(),
+            'active_count': active_listings.count(),
+            'eligible_count': len(eligible_items_list),
+            'deleted_count': deleted_items.count(),
+            'relisted_items': [{
+                'list_id': r.listing.list_id,
+                'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
+                'user': r.user.email,
+                'timestamp': r.relisting_date.strftime('%H:%M:%S')
+            } for r in relisted_items],
+            'eligible_items': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email if hasattr(item, 'user') else 'N/A',
+                'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
+                'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
+            } for item in eligible_items_list],
+            'deleted_items': [{
+                'list_id': item.list_id,
+                'title': f"{item.year} {item.make} {item.model}",
+                'user': item.user.email,
+                'status': item.status,
+                'deleted_at': item.updated_at.strftime('%H:%M:%S')
+            } for item in deleted_items]
+        }
+        
+        # Generate CSV attachment
+        csv_content = _generate_csv_report(report_data)
+        
+        # Render HTML email
+        html_content = render_to_string('listings/daily_report_template.html', report_data)
+        
+        # Send email to admin
+        email = EmailMessage(
+            subject=f"Daily Activity Report - {yesterday.strftime('%Y-%m-%d')}",
+            body=html_content,
+            from_email=EMAIL_HOST_USER,
+            to=[ADMIN_EMAIL]
+        )
+        email.content_subtype = 'html'
+        email.attach(f'daily_report_{yesterday.strftime("%Y%m%d")}.csv', csv_content, 'text/csv')
+        email.send()
+        
+        logger.info(f"Daily report sent to {ADMIN_EMAIL}")
+        
+    except Exception as e:
+        logger.error(f"Error sending daily report to {ADMIN_EMAIL}: {e}")
     
     logger.info("Daily activity report task completed")
 
@@ -853,16 +851,16 @@ def _generate_csv_report(data):
     # Eligible items
     if data['eligible_items']:
         writer.writerow(['ELIGIBLE FOR RELISTING'])
-        writer.writerow(['ID', 'Title', 'Last Listed', 'Next Eligible'])
+        writer.writerow(['ID', 'Title', 'User', 'Last Listed', 'Next Eligible'])
         for item in data['eligible_items']:
-            writer.writerow([item['list_id'], item['title'], item['last_listed'], item['next_eligible']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['last_listed'], item['next_eligible']])
         writer.writerow([])
     
     # Deleted items
     if data['deleted_items']:
         writer.writerow(['DELETED ITEMS'])
-        writer.writerow(['ID', 'Title', 'Status', 'Deleted At'])
+        writer.writerow(['ID', 'Title', 'User', 'Status', 'Deleted At'])
         for item in data['deleted_items']:
-            writer.writerow([item['list_id'], item['title'], item['status'], item['deleted_at']])
+            writer.writerow([item['list_id'], item['title'], item['user'], item['status'], item['deleted_at']])
     
     return output.getvalue()
