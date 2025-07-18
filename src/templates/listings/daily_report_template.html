@@ -21,8 +21,10 @@
 
     <div class="section">
         <h3>📊 Summary Metrics</h3>
-        <div class="metric">✅ Successful Relistings: <strong>{{ relisted_count }}</strong></div>
-        <div class="metric">❌ Failed Relistings: <strong>{{ failed_relistings_count }}</strong></div>
+        <div class="metric">✅ Yesterday Successful Relistings: <strong>{{ relisted_count }}</strong></div>
+        <div class="metric">❌ Yesterday Failed Relistings: <strong>{{ failed_relistings_count }}</strong></div>
+        <div class="metric">📈 Total Successful Relistings: <strong>{{ total_successful_relistings }}</strong></div>
+        <div class="metric">📉 Total Failed Relistings: <strong>{{ total_failed_relistings }}</strong></div>
         <div class="metric">🟢 Active Listings: <strong>{{ active_count }}</strong></div>
         <div class="metric">🟡 Pending Listings: <strong>{{ pending_count }}</strong></div>
         <div class="metric">🔴 Failed Listings: <strong>{{ failed_count }}</strong></div>
@@ -35,14 +37,13 @@
     <div class="section">
         <h3>✅ Successful Relistings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Time</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Time</th></tr>
             {% for item in relisted_items %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td>{{ item.timestamp }}</td>
             </tr>
             {% endfor %}
@@ -54,14 +55,13 @@
     <div class="section">
         <h3>❌ Failed Relistings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Error</th><th>Time</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Error</th><th>Time</th></tr>
             {% for item in failed_relistings %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td class="warning">{{ item.error_reason }}</td>
                 <td>{{ item.timestamp }}</td>
             </tr>
@@ -74,14 +74,13 @@
     <div class="section">
         <h3>🟢 Active Listings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Listed At</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Listed At</th></tr>
             {% for item in active_listings %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td>{{ item.listed_at }}</td>
             </tr>
             {% endfor %}
@@ -93,14 +92,13 @@
     <div class="section">
         <h3>🟡 Pending Listings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Created At</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Created At</th></tr>
             {% for item in pending_listings %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td>{{ item.created_at }}</td>
             </tr>
             {% endfor %}
@@ -112,14 +110,13 @@
     <div class="section">
         <h3>🔴 Failed Listings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Failed At</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Failed At</th></tr>
             {% for item in failed_listings %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td class="warning">{{ item.failed_at }}</td>
             </tr>
             {% endfor %}
@@ -131,14 +128,13 @@
     <div class="section">
         <h3>💰 Sold Listings</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Sold At</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Sold At</th></tr>
             {% for item in sold_listings %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td>{{ item.sold_at }}</td>
             </tr>
             {% endfor %}
@@ -150,14 +146,13 @@
     <div class="section">
         <h3>⏰ Eligible for Relisting</h3>
         <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Location</th><th>Last Listed</th><th>Next Eligible</th></tr>
+            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Last Listed</th><th>Next Eligible</th></tr>
             {% for item in eligible_items %}
             <tr>
                 <td>{{ item.list_id }}</td>
                 <td>{{ item.title }}</td>
                 <td>{{ item.user }}</td>
                 <td>${{ item.price }}</td>
-                <td>{{ item.location }}</td>
                 <td>{{ item.last_listed }}</td>
                 <td class="warning">{{ item.next_eligible }}</td>
             </tr>
