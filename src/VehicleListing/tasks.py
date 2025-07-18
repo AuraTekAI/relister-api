@@ -109,9 +109,8 @@ def create_pending_facebook_marketplace_listing_task(self):
     logger.info("Completed all pending Facebook listings.")
 
 
-def retry_failed_relistings(seven_days_ago):
+def retry_failed_relistings():
     failed_relistings = RelistingFacebooklisting.objects.filter(
-        relisting_date__date__lte=seven_days_ago,
         listing__status="completed",
         last_relisting_status=False,
         status="failed"
@@ -172,7 +171,7 @@ def relist_facebook_marketplace_listing_task(self):
     if not listings_to_process:
         logger.info("No 7 days old listings(completed) found for Facebook Marketplace.")
         logger.info(f"Now, Relisting failed re_listings")
-        retry_failed_relistings(seven_days_ago)
+        retry_failed_relistings()
         return
 
     for item in listings_to_process:
@@ -255,7 +254,7 @@ def relist_facebook_marketplace_listing_task(self):
             logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"response[1]: {response[1]}")
     logger.info(f"Now, Relisting failed listing")
-    retry_failed_relistings(seven_days_ago)
+    retry_failed_relistings()
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
