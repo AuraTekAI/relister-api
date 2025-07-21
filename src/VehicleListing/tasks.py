@@ -149,16 +149,9 @@ def retry_failed_relistings():
             relisting.listing.has_images = False
             relisting.listing.save()
             relisting.updated_at = now
-            relisting.last_relisting_status = True
+            relisting.last_relisting_status = False
+            relisting.relisting_date = now
             relisting.save()
-            #create new relisting entry
-            RelistingFacebooklisting.objects.create(
-                user=relisting.user,
-                listing=relisting.listing,
-                relisting_date=now,
-                last_relisting_status=False,
-                status="completed"
-            )
             relisting.user.daily_listing_count += 1 
             relisting.user.last_facebook_listing_time = now
             relisting.user.save()
@@ -226,6 +219,18 @@ def relist_facebook_marketplace_listing_task(self):
             logger.warning(f"No valid Facebook credentials for user {user.email}")
             continue
         logger.info(f"Credentials found for user {user.email}")
+        last_day_time = timezone.now() - timedelta(hours=24)
+        current_user=User.objects.filter(id=user.id).first()
+        logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
+        if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_day_time:
+            logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
+            current_user.daily_listing_count = 0
+            current_user.save()
+        if current_user.daily_listing_count >= 15:
+            logger.info(f"Daily listing count limit reached for user {user.email}")
+            listing.status = "failed"
+            listing.save()
+            continue
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query}")
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
@@ -235,18 +240,6 @@ def relist_facebook_marketplace_listing_task(self):
             logger.info(f"Old listing deleted for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             logger.info(f"Relist the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            last_day_time = timezone.now() - timedelta(hours=24)
-            current_user=User.objects.filter(id=user.id).first()
-            logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
-            if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_day_time:
-                logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-                current_user.daily_listing_count = 0
-                current_user.save()
-            if current_user.daily_listing_count >= 15:
-                logger.info(f"Daily listing count limit reached for user {user.email}")
-                listing.status = "failed"
-                listing.save()
-                continue
             listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
             if listing_created:
@@ -769,13 +762,14 @@ def send_daily_activity_report(self):
             status='completed',
             user__is_approved=True
         ).select_related('listing', 'user')
-        
+        logger.info(f"Found {len(relisted_items)} relisted items for yesterday.")
         # Get failed relistings (yesterday)
         failed_relistings = RelistingFacebooklisting.objects.filter(
             relisting_date=yesterday,
             status='failed',
             user__is_approved=True
         ).select_related('listing', 'user')
+        logger.info(f"Found {len(relisted_items)} relisted items and {len(failed_relistings)} failed relistings for yesterday.")
         
         # Get total successful relistings (all time)
         total_successful_relistings = RelistingFacebooklisting.objects.filter(
@@ -788,6 +782,7 @@ def send_daily_activity_report(self):
             status='failed',
             user__is_approved=True
         ).count()
+        logger.info(f"Total successful relistings: {total_successful_relistings}, Total failed relistings: {total_failed_relistings}")
         
         # Get active listings (completed yesterday)
         active_listings = VehicleListing.objects.filter(
@@ -795,18 +790,21 @@ def send_daily_activity_report(self):
             listed_on__date=yesterday,
             user__is_approved=True
         ).select_related('user')
+        logger.info(f"Found {len(active_listings)} active listings for yesterday.")
         
         # Get pending listings
         pending_listings = VehicleListing.objects.filter(
             status='pending',
             user__is_approved=True
         ).select_related('user')
+        logger.info(f"Found {len(pending_listings)} pending listings.")
         
         # Get failed listings
         failed_listings = VehicleListing.objects.filter(
             status='failed',
             user__is_approved=True
         ).select_related('user')
+        logger.info(f"Found {len(failed_listings)} failed listings.")
         
         # Get sold listings (updated yesterday)
         sold_listings = VehicleListing.objects.filter(
@@ -814,6 +812,7 @@ def send_daily_activity_report(self):
             updated_at__date=yesterday,
             user__is_approved=True
         ).select_related('user')
+        logger.info(f"Found {len(sold_listings)} sold listings for yesterday.")
         
         # Get items eligible for relisting (6 days old)
         eligible_items = VehicleListing.objects.filter(
@@ -822,6 +821,7 @@ def send_daily_activity_report(self):
             is_relist=False,
             user__is_approved=True
         ).select_related('user')
+        logger.info(f"Found {len(eligible_items)} eligible items for relisting.")
         
         # Add relisted items that are eligible again
         eligible_relistings = RelistingFacebooklisting.objects.filter(
@@ -830,6 +830,7 @@ def send_daily_activity_report(self):
             last_relisting_status=False,
             user__is_approved=True
         ).select_related('listing', 'user')
+        logger.info(f"Found {len(eligible_relistings)} eligible relistings.")
         
         eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
         
