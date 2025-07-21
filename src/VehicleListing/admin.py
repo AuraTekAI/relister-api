@@ -22,7 +22,7 @@ class ListingUrlAdmin(admin.ModelAdmin):
 class VehicleListingAdmin(admin.ModelAdmin):
     list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','has_images','listed_on','retry_count', 'created_at', 'updated_at')
     search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
-    list_filter = ('user','status')
+    list_filter = ('user','status', 'is_relist', 'has_images',)
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin): 
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
@@ -36,8 +36,8 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
-    search_fields = ('user__email',)
-    list_filter = ('user',"listing__year","listing__make","listing__model","listing__status",)
+    search_fields = ('user__email',"listing__year","listing__make","listing__model",)
+    list_filter = ('user',"listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = ("invoice_id", "user", "total_amount", "created_at", "updated_at")

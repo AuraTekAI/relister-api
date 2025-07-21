@@ -21,8 +21,7 @@ import random
 import logging
 import threading
 import csv
-from io import StringIO, BytesIO
-from datetime import date
+from io import StringIO
 logger = logging.getLogger('facebook_listing_cronjob')
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
@@ -149,8 +148,17 @@ def retry_failed_relistings():
             relisting.status = "completed"
             relisting.listing.has_images = False
             relisting.listing.save()
-            relisting.relisting_date = now
+            relisting.updated_at = now
+            relisting.last_relisting_status = True
             relisting.save()
+            #create new relisting entry
+            RelistingFacebooklisting.objects.create(
+                user=relisting.user,
+                listing=relisting.listing,
+                relisting_date=now,
+                last_relisting_status=False,
+                status="completed"
+            )
             relisting.user.daily_listing_count += 1 
             relisting.user.last_facebook_listing_time = now
             relisting.user.save()
@@ -160,6 +168,7 @@ def retry_failed_relistings():
             image_verification(relisting,None)
         else:
             relisting.status = "failed"
+            relisting.updated_at = now
             relisting.save()
             logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
     logging.info("Completed retrying failed relistings process.")
@@ -246,6 +255,7 @@ def relist_facebook_marketplace_listing_task(self):
                 current_user.daily_listing_count += 1
                 current_user.save()
                 relisting=create_or_update_relisting_entry(listing, user, relisting)
+                logger.info(f"Relisting created for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and relisting date {relisting.relisting_date}")
                 logger.info(f"Relisting created for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                 image_verification(relisting,None)

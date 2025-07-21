@@ -632,6 +632,7 @@ def extract_listings_with_status(text):
                 title = title.strip().replace('\xa0', ' ')
                 clean_title = remove_prefix_case_insensitive(title, "Boost listingShare")
                 cleaned_text = clean_title.replace("This listing is being reviewed.", "")
+                cleaned_text = cleaned_text.replace("Tip: Renew your listing?", "")
                 listings.append({
                     'title': cleaned_text,
                     'price': re.sub(r'[^\d]', '', price),
