@@ -48,19 +48,31 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
         listing.has_images = False
         listing.is_relist = True
         listing.save()
-    else:
-        relisting.listing.has_images = False
-        relisting.listing.save()
-        relisting.updated_at = now
-        relisting.last_relisting_status = True
-        relisting.save()
-    relisting=RelistingFacebooklisting.objects.create(
+        relisting=RelistingFacebooklisting.objects.create(
         user=user,
         listing=listing,
         relisting_date=now,
         last_relisting_status=False,
         status="completed"
     )
+        relisting.save()
+        logger.info(f"Relisting created for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+    else:
+        relisting.listing.has_images = False
+        relisting.listing.save()
+        relisting.updated_at = now
+        relisting.last_relisting_status = True
+        relisting.save()
+        relisting=RelistingFacebooklisting.objects.create(
+        user=user,
+        listing=relisting.listing,
+        relisting_date=now,
+        last_relisting_status=False,
+        status="completed"
+    )
+        relisting.save()
+        logger.info(f"Relisting updated for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+    
     return relisting
 
 def handle_failed_relisting(listing, user, relisting=None):
@@ -77,9 +89,19 @@ def handle_failed_relisting(listing, user, relisting=None):
             status="failed"
         )
     else:
-        relisting.status = "failed"
+        relisting.status = "completed"
+        relisting.last_relisting_status = True
         relisting.updated_at = now
         relisting.save()
+        #create new relisting entry
+        logger.info(f"Relisting failed for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        RelistingFacebooklisting.objects.create(
+            user=user,
+            listing=relisting.listing,
+            relisting_date=now,
+            last_relisting_status=False,
+            status="failed"
+        )
 
 def mark_listing_sold(listing, relisting=None):
     now = timezone.now()
