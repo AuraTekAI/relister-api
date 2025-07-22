@@ -232,7 +232,7 @@ def relist_facebook_marketplace_listing_task(self):
             listing.save()
             continue
         search_query = f"{listing.year} {listing.make} {listing.model}"
-        logger.info(f"Searching and deleting the listing {search_query}")
+        logger.info(f"Searching and deleting the listing {search_query} and listing price {relisting_price} and relisting date {relisting_date} for the user {user.email}")
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
         response = perform_search_and_delete(search_query,relisting_price, timezone.localtime(relisting_date),credentials.session_cookie)
 
