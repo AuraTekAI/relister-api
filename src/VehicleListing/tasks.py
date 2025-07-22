@@ -758,14 +758,14 @@ def send_daily_activity_report(self):
     try:
         # Get successful relisted items for the day
         relisted_items = RelistingFacebooklisting.objects.filter(
-            relisting_date=yesterday,
+            relisting_date__date=yesterday,
             status='completed',
             user__is_approved=True
         ).select_related('listing', 'user')
         logger.info(f"Found {len(relisted_items)} relisted items for yesterday.")
         # Get failed relistings (yesterday)
         failed_relistings = RelistingFacebooklisting.objects.filter(
-            relisting_date=yesterday,
+            relisting_date__date=yesterday,
             status='failed',
             user__is_approved=True
         ).select_related('listing', 'user')
@@ -813,27 +813,21 @@ def send_daily_activity_report(self):
             user__is_approved=True
         ).select_related('user')
         logger.info(f"Found {len(sold_listings)} sold listings for yesterday.")
-        
+
         # Get items eligible for relisting (6 days old)
-        eligible_items = VehicleListing.objects.filter(
-            status='completed',
-            listed_on__date=seven_days_ago - timedelta(days=1),
-            is_relist=False,
-            user__is_approved=True
+        vehicle_listings = VehicleListing.objects.filter(
+        status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
         ).select_related('user')
-        logger.info(f"Found {len(eligible_items)} eligible items for relisting.")
-        
-        # Add relisted items that are eligible again
-        eligible_relistings = RelistingFacebooklisting.objects.filter(
-            listing__status='completed',
-            relisting_date__date=seven_days_ago - timedelta(days=1),
-            last_relisting_status=False,
-            user__is_approved=True
-        ).select_related('listing', 'user')
-        logger.info(f"Found {len(eligible_relistings)} eligible relistings.")
-        
-        eligible_items_list = list(eligible_items) + [r.listing for r in eligible_relistings]
-        
+        logger.info(f"Found {len(vehicle_listings)} eligible items for relisting.")
+
+        relistings = RelistingFacebooklisting.objects.filter(
+        relisting_date__date__lte=seven_days_ago,
+        listing__status="completed",listing__is_relist=True,
+        last_relisting_status=False,
+        status="completed"
+        )
+        logger.info(f"Found {len(relistings)} relistings eligible for relisting.")
+        eligible_items_list = list(vehicle_listings) + [r.listing for r in relistings]
         # Get approved users
         approved_users = User.objects.filter(is_approved=True)
         
