@@ -784,6 +784,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
 
             logging.info(f"Found {matches_found} match(es) for '{search_for}'")
             elements = get_elements_with_text(search_for, page)
+            logging.info(f"Dleting listings for {search_for} with price {listing_price} and date {listing_date} and formatted date {formatted_date}")
 
             for element in elements:
                 try:
@@ -795,7 +796,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     logging.info(f"Title match: {title_match}, Price match: {price_match}, Date match: {date_match}, Status: {status}")
 
                     if title_match and price_match and date_match:
-                        if status == "mark as sold" and status == "mark as available":
+                        if status == "mark as sold" or status == "mark as available":
                             logging.info(f"Deleting listing: {element['title']} - {element['price']}")
 
                             price_element = element.get('price_element')
