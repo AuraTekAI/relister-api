@@ -114,6 +114,7 @@ def create_pending_facebook_marketplace_listing_task(self):
 def retry_failed_relistings():
     failed_relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed",
+        listing__is_relist=True,
         last_relisting_status=False,
         status="failed"
     ))
@@ -195,7 +196,8 @@ def relist_facebook_marketplace_listing_task(self):
         retry_failed_relistings()
         return
 
-    for item in listings_to_process:
+    while listings_to_process:
+        item = listings_to_process.pop(0)
         if hasattr(item, 'listing'):  # RelistingFacebooklisting
             relisting, listing = item, item.listing
             user = relisting.user
@@ -207,6 +209,11 @@ def relist_facebook_marketplace_listing_task(self):
             user = listing.user
             relisting_price = listing.price
             relisting_date=listing.listed_on
+            
+        if not should_create_listing(user):
+            logger.info(f"10-minute cooldown for user {relisting.user.email}")
+            listings_to_process.append(relisting)  # Re-queue for later
+            continue
 
         logger.info(f"Processing relisting for user {user.email}")
         time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
@@ -222,10 +229,7 @@ def relist_facebook_marketplace_listing_task(self):
         last_day_time = timezone.now() - timedelta(hours=24)
         current_user=User.objects.filter(id=user.id).first()
         logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
-        if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_day_time:
-            logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-            current_user.daily_listing_count = 0
-            current_user.save()
+
         if current_user.daily_listing_count >= 15:
             logger.info(f"Daily listing count limit reached for user {user.email}")
             listing.status = "failed"

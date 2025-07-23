@@ -278,6 +278,7 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
     if already_exists_listing.is_relist:
         relisting=RelistingFacebooklisting.objects.filter(listing= already_exists_listing,user=already_exists_listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
         if relisting and relisting.status == "failed":
+            logging.info(f"Updating the failed Relisting  {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model},  and updating the new relisting details")
             already_exists_listing.year=Updating_listing_data.get("year")
             already_exists_listing.make=Updating_listing_data.get("make")
             already_exists_listing.model=Updating_listing_data.get("model")
@@ -292,6 +293,7 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
             already_exists_listing.images=Updating_listing_data.get("image")
             already_exists_listing.location=Updating_listing_data.get("location")
             already_exists_listing.status="completed"
+            already_exists_listing.is_relist=True
             already_exists_listing.save()
             logging.info(f"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details")
             return True,"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details"
@@ -299,7 +301,7 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
             search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
             credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
             if credentials:
-                response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(already_exists_listing.listed_on),credentials.session_cookie)
+                response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(relisting.relisting_date),credentials.session_cookie)
                 if response[0] == 1:
                     already_exists_listing.year=Updating_listing_data.get("year")
                     already_exists_listing.make=Updating_listing_data.get("make")
@@ -315,8 +317,10 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
                     already_exists_listing.images=Updating_listing_data.get("image")
                     already_exists_listing.location=Updating_listing_data.get("location")
                     already_exists_listing.status="completed"
+                    already_exists_listing.is_relist=True
                     already_exists_listing.save()
                     relisting.status="failed"
+                    relisting.last_relisting_status=False
                     relisting.save()
                     logging.info(f"Relisting {search_query}  who have old listing details deleted successfully")
                     return True,"Relisting {search_query}  who have old listing details deleted successfully"
@@ -359,6 +363,7 @@ def update_facebook_listing(already_exists_listing,Updating_listing_data):
                 already_exists_listing.images=Updating_listing_data.get("image")
                 already_exists_listing.location=Updating_listing_data.get("location")
                 already_exists_listing.status="pending"
+                already_exists_listing.is_relist=False
                 already_exists_listing.save()
                 logging.info(f"Listing {search_query}  who have old listing details deleted successfully")
                 return True,"Listing {search_query}  who have old listing details deleted successfully"
@@ -390,7 +395,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists}")
-            if (already_exists.status == "pending" or already_exists.status == "failed") and already_exists.created_at < timezone.now() - timedelta(days=7):
+            if (already_exists.status == "pending" or already_exists.status == "failed") and already_exists.created_at < timezone.now() - timedelta(days=5) and not already_exists.is_relist:
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"update the listing {already_exists.list_id} details")
@@ -409,6 +414,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     already_exists.images = result.get("image")
                     already_exists.location = result.get("location")
                     already_exists.status = "pending"
+                    already_exists.is_relist = False
                     already_exists.save()
                     logging.info(f"Updated listing {already_exists.list_id} with new details")
                 else:
@@ -453,6 +459,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     url=result.get("url"),
                     location=result.get("location"),
                     status="pending",
+                    is_relist=False,
                     seller_profile_id=seller_id
                 )
                 logging.info(f"Created new vehicle_listing: {vehicle_listing}")
