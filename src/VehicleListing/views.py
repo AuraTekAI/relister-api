@@ -604,15 +604,15 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
         current_listing=listings[current_listing_key]
         already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
         incoming_list_ids.add(str(current_listing["id"]))
-        if already_listed:
+        if already_listed and already_listed.status == "sold":
             count+=1
-            logger.info(f"Vehicle listing already exists for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
-            continue
-        elif already_listed and already_listed.status == "sold":
-            count+=1
-            logger.info(f"Vehicle listing already exists and marked as sold for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
+            logger.info(f"Vehicle listing already exists and marked as sold for the user {user.email} and listing title: {already_listed.get('title')} and profile id: {seller_id}")
             # If the listing is already listed, delete it from the FacebookProfileListing
             already_listed.delete()
+            continue
+        elif already_listed:
+            count+=1
+            logger.info(f"Vehicle listing already exists for the user {user.email} and listing title: {already_listed.get('title')} and profile id: {seller_id}")
             continue
         else:
             time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
