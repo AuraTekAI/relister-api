@@ -600,8 +600,10 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
     logger.info(f"Getting listings for the user {user.email} and profile id: {seller_id}")
     count=0
     incoming_list_ids = set()
+    logger.info(f"Total listings to process: {len(listings)}")
     for current_listing_key in listings:
         current_listing=listings[current_listing_key]
+        logger.info(f"Processing listing: {current_listing}")
         already_listed = VehicleListing.objects.filter(user=user, list_id=current_listing["id"]).first()
         incoming_list_ids.add(str(current_listing["id"]))
         if already_listed and already_listed.status == "sold":
@@ -619,7 +621,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
             # Get listings using the function
             vehicleListing=extract_facebook_listing_details(current_listing, credentials.session_cookie)
             if vehicleListing:
-                logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('title')} and profile id: {seller_id}")
+                logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('year')} {vehicleListing.get('make')} {vehicleListing.get('model')} and profile id: {seller_id}")
                 count+=1
                 enhanced_description=format_car_description(vehicleListing.get("description"))
                 VehicleListing.objects.create(
