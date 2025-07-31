@@ -686,6 +686,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                     elif relisting and relisting.status == "completed":
                         listed_on = timezone.localtime(relisting.relisting_date)
                         if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+                            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                             response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                             if response[0] == 1:
                                 logging.info(f"Deleted relisted Facebook listing for {search_query}")
@@ -711,6 +712,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                         continue
                 elif credentials and not listing.is_relist:
                     if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+                        time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                         if response[0] == 1:
                             logging.info(f"Deleted Facebook listing for {search_query}")

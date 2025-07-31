@@ -396,6 +396,10 @@ def check_facebook_profile_relisting_task(self):
                 success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url,credentials.session_cookie)
                 logger.info(f"Success: {success} and listings count: {len(listings)} for the user {facebook_profile_listing_instance.user.email} and profile id: {facebook_profile_listing_instance.profile_id}")
                 if success:
+                    facebook_profile_listing_instance.total_listings = len(listings)
+                    facebook_profile_listing_instance.processed_listings = 0
+                    facebook_profile_listing_instance.status = "processing"
+                    facebook_profile_listing_instance.save()
                     update_credentials_success(credentials)
                     thread = threading.Thread(target=facebook_profile_listings_thread, args=(listings, credentials,facebook_profile_listing_instance.user,facebook_profile_listing_instance.profile_id,facebook_profile_listing_instance))
                     thread.start()

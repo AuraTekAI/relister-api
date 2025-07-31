@@ -264,7 +264,12 @@ def get_gumtree_listings(profile_url,user):
         gumtree_profile_listing_instance = GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).first()
         if not gumtree_profile_listing_instance:
             gumtree_profile_listing_instance = GumtreeProfileListing.objects.create(url=profile_url,user=user,status="pending",profile_id=seller_id,total_listings=total_count)
-
+        gumtree_profile_listing_instance.total_listings = total_count
+        gumtree_profile_listing_instance.processed_listings = 0
+        gumtree_profile_listing_instance.status = "processing"
+        gumtree_profile_listing_instance.save()
+        logging.info(f"Total listings found for seller ID {seller_id}: {total_count}")
+        # Process each listing via threading
         thread = threading.Thread(target=gumtree_profile_listings_thread, args=(listings,gumtree_profile_listing_instance,user,seller_id))
         thread.start()        
         return True,"Started processing to extract listings"
@@ -492,6 +497,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     elif relisting and relisting.status == "completed":
                         listed_on = timezone.localtime(relisting.relisting_date)
                         if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+                            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                             response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                             if response[0] == 1:
                                 logging.info(f"Deleted relisted Facebook listing for {search_query}")
@@ -517,6 +523,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         continue
                 elif credentials and not listing.is_relist:
                     if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+                        time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                         if response[0] == 1:
                             logging.info(f"Deleted Facebook listing for {search_query}")
