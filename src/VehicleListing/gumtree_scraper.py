@@ -400,7 +400,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists}")
-            if (already_exists.status == "pending" or already_exists.status == "failed") and already_exists.created_at < timezone.now() - timedelta(days=5) and not already_exists.is_relist:
+            if (already_exists.status in ["pending", "failed"] and already_exists.created_at < timezone.now() - timedelta(days=5) and not already_exists.is_relist):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"update the listing {already_exists.list_id} details")
@@ -428,7 +428,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=5):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
-                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and already_exists.mileage == result.get("mileage") and already_exists.location == result.get("location") and already_exists.description == result.get("description") and already_exists.images == result.get("image"):
+                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and already_exists.mileage == result.get("mileage") and already_exists.location == result.get("location"):
                     logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
                     logging.info(f"No need to update the listing {already_exists.list_id} details")
                     continue

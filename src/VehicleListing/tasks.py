@@ -764,10 +764,14 @@ def send_daily_activity_report(self):
     seven_days_ago = today - timedelta(days=7)
     
     try:
+        total_active_listings_for_all_users = VehicleListing.objects.filter(
+            status='completed',
+        ).count()
+        logger.info(f"Total active listings for all users: {total_active_listings_for_all_users}")
         # Get successful relisted items for the day
         relisted_items = RelistingFacebooklisting.objects.filter(
             relisting_date__date=yesterday,
-            status='completed',
+            status='completed', last_relisting_status=False,
             user__is_approved=True
         ).select_related('listing', 'user')
         logger.info(f"Found {len(relisted_items)} relisted items for yesterday.")
@@ -817,7 +821,6 @@ def send_daily_activity_report(self):
         # Get sold listings (updated yesterday)
         sold_listings = VehicleListing.objects.filter(
             status='sold',
-            updated_at__date=yesterday,
             user__is_approved=True
         ).select_related('user')
         logger.info(f"Found {len(sold_listings)} sold listings for yesterday.")
@@ -839,8 +842,75 @@ def send_daily_activity_report(self):
         # Get approved users
         approved_users = User.objects.filter(is_approved=True)
         
+        # Generate per-user statistics
+        user_stats = []
+        for user in approved_users:
+            # Total listings (all time)
+            total_listings = VehicleListing.objects.filter(user=user).count()
+            
+            # Total relistings (all time)
+            total_relistings = RelistingFacebooklisting.objects.filter(user=user,last_relisting_status=False).count()
+            
+            # Yesterday relistings (successful)
+            yesterday_relistings = RelistingFacebooklisting.objects.filter(
+                user=user, relisting_date__date=yesterday, status='completed'
+            ).count()
+            
+            # Yesterday failed relistings
+            yesterday_failed_relistings = RelistingFacebooklisting.objects.filter(
+                user=user, relisting_date__date=yesterday, status='failed'
+            ).count()
+            
+            # Ready for relisting (7+ days old)
+            user_eligible_listings = VehicleListing.objects.filter(
+                user=user, status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
+            ).count()
+            user_eligible_relistings = RelistingFacebooklisting.objects.filter(
+                user=user, relisting_date__date__lte=seven_days_ago,
+                listing__status="completed", listing__is_relist=True,
+                last_relisting_status=False, status="completed"
+            ).count()
+            ready_for_relisting = user_eligible_listings + user_eligible_relistings
+            
+            # Active listings (current)
+            active_listings_count = VehicleListing.objects.filter(
+                user=user, status='completed'
+            ).count()
+            
+            # Failed listings (current)
+            failed_listings_count = VehicleListing.objects.filter(
+                user=user, status='failed'
+            ).count()
+            
+            # Pending listings (current)
+            pending_listings_count = VehicleListing.objects.filter(
+                user=user, status='pending'
+            ).count()
+            
+            # Sold listings (current)
+            sold_listings_count = VehicleListing.objects.filter(
+                user=user, status='sold'
+            ).count()
+            
+            user_stats.append({
+                'email': user.email,
+                'dealership_name': user.dealership_name or 'N/A',
+                'contact_person_name': user.contact_person_name or 'N/A',
+                'daily_listing_count': user.daily_listing_count,
+                'total_listings': total_listings,
+                'total_relistings': total_relistings,
+                'yesterday_relistings': yesterday_relistings,
+                'yesterday_failed_relistings': yesterday_failed_relistings,
+                'ready_for_relisting': ready_for_relisting,
+                'active_listings': active_listings_count,
+                'failed_listings': failed_listings_count,
+                'pending_listings': pending_listings_count,
+                'sold_listings': sold_listings_count
+            })
+        
         # Prepare report data
         report_data = {
+            'total_active_listings_for_all_users': total_active_listings_for_all_users,
             'report_date': yesterday.strftime('%Y-%m-%d'),
             'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
             'relisted_count': relisted_items.count(),
@@ -853,6 +923,7 @@ def send_daily_activity_report(self):
             'sold_count': sold_listings.count(),
             'eligible_count': len(eligible_items_list),
             'approved_users_count': approved_users.count(),
+            'user_statistics': user_stats,
             'relisted_items': [{
                 'list_id': r.listing.list_id,
                 'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
@@ -1012,11 +1083,18 @@ def _generate_csv_report(data):
             writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['last_listed'], item['next_eligible']])
         writer.writerow([])
     
-    # Approved users
-    if data['approved_users']:
-        writer.writerow(['APPROVED USERS'])
-        writer.writerow(['Email', 'Dealership Name', 'Contact Person', 'Daily Count'])
-        for user in data['approved_users']:
-            writer.writerow([user['email'], user['dealership_name'], user['contact_person_name'], user['daily_listing_count']])
+    # User statistics
+    if data.get('user_statistics'):
+        writer.writerow(['USER STATISTICS'])
+        writer.writerow(['Email', 'Dealership', 'Contact Person', 'Daily Count', 'Total Listings', 'Total Relistings', 'Yesterday Relistings', 'Yesterday Failed', 'Ready for Relisting', 'Active', 'Failed', 'Pending', 'Sold'])
+        for user in data['user_statistics']:
+            writer.writerow([
+                user['email'], user['dealership_name'], user['contact_person_name'],
+                user['daily_listing_count'], user['total_listings'], user['total_relistings'],
+                user['yesterday_relistings'], user['yesterday_failed_relistings'],
+                user['ready_for_relisting'], user['active_listings'], user['failed_listings'],
+                user['pending_listings'], user['sold_listings']
+            ])
+        writer.writerow([])
     
     return output.getvalue()
