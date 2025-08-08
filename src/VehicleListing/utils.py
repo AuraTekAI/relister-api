@@ -47,6 +47,7 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
     if not relisting:
         listing.has_images = False
         listing.is_relist = True
+        listing.retry_count = 0
         listing.save()
         relisting=RelistingFacebooklisting.objects.create(
         user=user,
@@ -59,6 +60,8 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
         logger.info(f"Relisting created for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
     else:
         relisting.listing.has_images = False
+        relisting.listing.retry_count = 0
+        relisting.listing.is_relist = True
         relisting.listing.save()
         relisting.updated_at = now
         relisting.last_relisting_status = True
