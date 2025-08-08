@@ -808,7 +808,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                 if not success:
                                     browser.close()
                                     logging.info(f"Delete button not found for {search_for} and the message is {message}")
-                                    return 3, message
+                                    return 4, message
 
                                 delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
                                 if delete_buttons:
@@ -829,11 +829,11 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                                     
                                 logging.error("Delete button not found or not visible.")
                                 browser.close()
-                                return 3, "Delete button not found"
+                                return 4, "Delete button not found"
                             else:
                                 browser.close()
                                 logging.info(f"Price element not found or not visible for {search_for}")
-                                return 3, "Price element not found or not visible"
+                                return 4, "Price element not found or not visible"
                 except Exception as e:
                     logging.error(f"Error evaluating listing match: {e}")
                     continue
@@ -846,7 +846,7 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")
         if 'browser' in locals():
             browser.close()
-        return 5, str(e)
+        return 4, str(e)
 
 
 
@@ -1335,10 +1335,6 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                 browser.close()
                                 return 4, "Price element not found or not visible"
 
-                        # elif status == "mark as available":
-                        #     logging.info("Listing is already marked as available.")
-                        #     browser.close()
-                        #     return 3, "This listing is already marked as available"
                         else:
                             logging.info(f"Got unexpected listing status: {status}")
                             browser.close()
@@ -1351,13 +1347,13 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                     continue
 
             browser.close()
-            return 2, "No matching listing found"
+            return 4, "No matching listing found"
 
     except Exception as e:
         logging.error(f"Unhandled error in perform_search_and_delete: {e}")
         if 'browser' in locals():
             browser.close()
-        return 5, str(e)
+        return 4, str(e)
 
 def is_image_uploaded(page):
     """
@@ -1831,10 +1827,6 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                                 return 4, "Delete button not found"
                         else:
                             return 4, "Price element not found or not visible"
-
-                    # elif status == "mark as available":
-                    #     logging.info("Listing is already marked as available.")
-                    #     return 3, "This listing is already marked as available"
                     else:
                         logging.info(f"Got unexpected listing status: {status}")
                         return 4, "Got unexpected listing status"
@@ -1894,12 +1886,6 @@ def image_upload_verification(relisting,vehicle_listing):
                         browser.close()
                         logging.info("Browser closed successfully")
                         return 0, "Restricted listing has no image uploaded and deleted successfully"
-                    # elif result[0] == 6:
-                    #     logging.info(f"Failed to load the page")
-                    #     browser.close()
-                    #     logging.info("Browser closed successfully")
-                    #     handle_retry_or_disable_credentials(credentials, user)
-                    #     return 6, "Failed to load the page"
                     elif result[0] == 4:
                         logging.info(f"Restricted listing {search_title} has no image uploaded and failed to delete")
                         logging.info(f"Error: {result[1]}")
@@ -1926,11 +1912,6 @@ def image_upload_verification(relisting,vehicle_listing):
                             browser.close()
                             logging.info("Browser closed successfully")
                             return 2, "Approved listing not found, Retrying daily one time"
-                        # elif result[0] == 3:
-                        #     logging.info(f"Approved listing {search_title} has sold successfully")
-                        #     browser.close()
-                        #     logging.info("Browser closed successfully")
-                        #     return 3, "Approved listing has sold successfully"
                         elif result[0] == 4:
                             logging.info(f"Approved listing {search_title} has no image uploaded and failed to delete.. Retry attempt daily one time")
                             browser.close()

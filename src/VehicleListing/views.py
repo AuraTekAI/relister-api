@@ -49,6 +49,8 @@ def delete_vehicle_listing_worker(user_id):
             response = perform_search_and_delete(search_query,price,listed_on,session_cookie)
             if response[0] == 1:
                 break
+            elif response[0] == 6:
+                break
             else:
                 time.sleep(300,360)
         vehicle_listing_user_queues[user_id].task_done()
@@ -270,19 +272,6 @@ class ListingUrlViewSet(ModelViewSet):
                     import_url.delete()
                     vehicle_listing.delete()
                     return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-                    # response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                    # if response[0] in [1, 2]:
-                    #     credentials.status = True
-                    #     credentials.retry_count = 0
-                    #     credentials.save()
-                    #     import_url.delete()
-                    #     vehicle_listing.delete()
-                    #     message = 'Listing deleted successfully' if response[0] == 1 else 'Listing already sold , Now deleted successfully'
-                    #     return JsonResponse({'message': message}, status=200)
-                    # else:
-                    #     import_url.delete()
-                    #     vehicle_listing.delete()
-                    #     return JsonResponse({'error': 'Failed to find and delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
                 else:
                     if credentials:
                         credentials.status = False
@@ -343,22 +332,6 @@ class VehicleListingViewSet(ModelViewSet):
                 vehicle_listing_user_queues[user_id].put((search_query,price,listed_on,credentials.session_cookie))
                 vehicle_listing.delete()
                 return JsonResponse({'message': 'Listing deleted successfully'}, status=200)
-                # for retry in range(3):
-                #     response = perform_search_and_delete(search_query,price,listed_on,credentials.session_cookie)
-                #     if response[0] == 1:
-                #         credentials.status = True
-                #         credentials.retry_count = 0
-                #         credentials.save()
-                #         break
-                # elif response[0] == 2:
-                #     credentials.status = True
-                #     credentials.retry_count = 0
-                #     credentials.save()
-                #     vehicle_listing.delete()
-                #     return JsonResponse({'message': 'Listing already sold , Now deleted successfully'}, status=200)
-                # else:
-                #     vehicle_listing.delete()
-                #     return JsonResponse({'error': 'Failed to delete listing in facebook marketplace but deleted successfully from relister'}, status=200)
             else:
                 if credentials:
                     credentials.status = False
@@ -685,49 +658,94 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                         continue
                     elif relisting and relisting.status == "completed":
                         listed_on = timezone.localtime(relisting.relisting_date)
-                        if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
-                            time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                            response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                            if response[0] == 1:
-                                logging.info(f"Deleted relisted Facebook listing for {search_query}")
-                                listing.delete()
-                            # elif response[0] == 2:
-                            #     listing.status = "sold"
-                            #     listing.save()
-                            #     relisting.status = "completed"
-                            #     relisting.last_relisting_status = True
-                            #     relisting.save()
-                            #     logging.info(f"Relisting {search_query} marked as sold and on Facebook, status updated to sold")
-                            else:
-                                relisting.listing.retry_count += 1
-                                relisting.listing.save()
-                                logging.info(f"Failed to delete relisting for {search_query} from facebook marketplace, retry count increased")
-                        else:
-                            listing.delete()
-                            logging.info(f"Failed to delete the relisting {search_query} and completed the retry attempt. System deleted the listing")
-                    else:
-                        logging.info(f"Unknown relisting status {getattr(relisting, 'status', None)} for user {listing.user.email} and listing {search_query} and last relisting status {getattr(relisting, 'last_relisting_status', None)}")
-                        logging.info(f"Deleting the listing ID {listing.list_id}")
-                        listing.delete()
-                        continue
-                elif credentials and not listing.is_relist:
-                    if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                         time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
                         if response[0] == 1:
-                            logging.info(f"Deleted Facebook listing for {search_query}")
+                            logging.info(f"Deleted relisted Facebook listing for {search_query}")
                             listing.delete()
-                        # elif response[0] == 2:
-                        #     listing.status = "sold"
-                        #     listing.save()
-                        #     logging.info(f"Listing {search_query} marked as sold and on Facebook, status updated to sold")
+                        elif response[0] == 6:
+                            logger.info("Listing not found for relisting and listing title is {listing.year} {listing.make} {listing.model} for the user {user.email}")
+                            logger.info(f"response[1]: {response[1]}")
+                            listing.delete()
+                        elif response[0] == 4:
+                            logger.info(f"Got issue inside the automation for deleting the relisting {listing.year} {listing.make} {listing.model} and for user {user.email} ")
+                            logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                            logger.info(f"response[1]: {response[1]}")
+                            logger.info(f"number of retries: {listing.retry_count}")
+                            if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+                                listing.retry_count += 1
+                                listing.save()
+                                logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
+                            else:
+                                #send email to user related listing
+                                logger.info(f"Failed to found the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} using this automation after all attempts. Please check your listing manually.")
+                                logger.info(f"response[1]: {response[1]}")
+                                logger.info(f"number of retries: {listing.retry_count}")
+                                # send_email_to_user(user, listing)
+                                #------------------------------------------------------------------------
+                                #---------------------------------------------------------------------------
+                                #---------------------------------------------------------------------------
+                        elif response[0] == 0:
+                            logger.info(f"Failed to load the facebook page for listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                            logger.info(f"response[1]: {response[1]}")
+                            if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                                credentials.retry_count += 1
+                                credentials.save()
+                                logger.info(f"Retrying relisting for user {user.email} (Attempt {credentials.retry_count})")
+                            else:
+                                credentials.status = False
+                                credentials.save()
+                                logger.warning(f"Max retry attempts reached. Credentials disabled for user {user.email}")
                         else:
+                            logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                            logger.info(f"response[1]: {response[1]}")
+                        continue
+                    else:
+                        logging.info(f"Unknown relisting status {getattr(relisting, 'status', None)} for user {listing.user.email} and listing {search_query} and last relisting status {getattr(relisting, 'last_relisting_status', None)}")
+                        logging.info(f"Deleting the listing ID {listing.list_id}")
+                        continue
+                elif credentials and not listing.is_relist:
+                    time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                    response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
+                    if response[0] == 1:
+                        logging.info(f"Deleted relisted Facebook listing for {search_query}")
+                        listing.delete()
+                    elif response[0] == 6:
+                        logger.info("Listing not found for relisting and listing title is {listing.year} {listing.make} {listing.model} for the user {user.email}")
+                        logger.info(f"response[1]: {response[1]}")
+                        listing.delete()
+                    elif response[0] == 4:
+                        #email to me and hussain bhai
+                        logger.info(f"Got issue inside the automation for deleting the relisting {listing.year} {listing.make} {listing.model} and for user {user.email} ")
+                        logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                        logger.info(f"response[1]: {response[1]}")
+                        logger.info(f"number of retries: {listing.retry_count}")
+                        if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                             listing.retry_count += 1
                             listing.save()
-                            logging.info(f"Failed to delete listing for {search_query} from facebook marketplace, retry count increased")
+                            logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
+                        else:
+                            #send email to user related listing
+                            logger.info(f"Failed to found the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} using this automation after all attempts. Please check your listing manually.")
+                            # send_email_to_user(user, listing)
+                            #------------------------------------------------------------------------
+                            #---------------------------------------------------------------------------
+                            #---------------------------------------------------------------------------
+                    elif response[0] == 0:
+                        logger.info(f"Failed to load the facebook page for listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                        logger.info(f"response[1]: {response[1]}")
+                        if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+                            credentials.retry_count += 1
+                            credentials.save()
+                            logger.info(f"Retrying relisting for user {user.email} (Attempt {credentials.retry_count})")
+                        else:
+                            credentials.status = False
+                            credentials.save()
+                            logger.warning(f"Max retry attempts reached. Credentials disabled for user {user.email}")
                     else:
-                        logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. System marked as sold and deleted")
-                        listing.delete()
+                        logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                        logger.info(f"response[1]: {response[1]}")
+                    continue
                 else:
                     logging.info(f"No credentials found for user {listing.user.email}")
                     continue
@@ -881,9 +899,6 @@ def delete_multiple_vehicle_listings(year_make_model_list,session_cookie):
                 if result[0] == 1:
                     time.sleep(random.uniform(300,360))
                     break
-                # elif result[0] == 2:
-                #     time.sleep(random.uniform(300,360))
-                #     break
                 elif result[0] == 6:
                     time.sleep(random.uniform(300, 360))
                     break
@@ -977,14 +992,8 @@ def image_verification(relisting,vehicle_listing):
         elif response[0] == 0:
             relisting.status="failed"
             relisting.save()
-        # elif response[0] == 3:
-        #     relisting.listing.status="sold"
-        #     relisting.listing.save()
-        #     relisting.status="completed"
-        #     relisting.last_relisting_status=True
-        #     relisting.save()
         elif response[0] == 7:
-            if relisting.listing.retry_count < 3:
+            if relisting.listing.retry_count < 5:
                 relisting.listing.retry_count += 1
                 relisting.listing.save()
             else:
@@ -995,6 +1004,25 @@ def image_verification(relisting,vehicle_listing):
                 relisting.save()
         else:
             pass
+    elif vehicle_listing and vehicle_listing.is_relist == True:
+        failed_relisting = RelistingFacebooklisting.objects.filter(listing=vehicle_listing, user=vehicle_listing.user, status__in=["completed", "failed"], last_relisting_status=False).first()
+        if failed_relisting:
+            if response[0] == 1:
+                failed_relisting.listing.has_images=True
+                failed_relisting.listing.save()
+            elif response[0] == 0:
+                failed_relisting.status="failed"
+                failed_relisting.save()
+            elif response[0] == 7:
+                if failed_relisting.listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                    failed_relisting.listing.retry_count += 1
+                    failed_relisting.listing.save()
+                else:
+                    failed_relisting.listing.status = "sold" 
+                    failed_relisting.listing.save()
+                    failed_relisting.status="completed"
+                    failed_relisting.last_relisting_status=True
+                    failed_relisting.save()
     else:
         if response[0] == 1:
             vehicle_listing.has_images=True
@@ -1002,9 +1030,6 @@ def image_verification(relisting,vehicle_listing):
         elif response[0] == 0:
             vehicle_listing.status="failed"
             vehicle_listing.save()
-        # elif response[0] == 3:
-        #     vehicle_listing.status="sold"
-        #     vehicle_listing.save()
         elif response[0] == 7:
             if vehicle_listing.retry_count < 3:
                 vehicle_listing.retry_count += 1
