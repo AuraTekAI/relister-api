@@ -28,7 +28,7 @@ logger = logging.getLogger('facebook_listing_cronjob')
 def create_pending_facebook_marketplace_listing_task(self):
     """Create pending Facebook Marketplace listings."""
 
-    pending_listings = list(VehicleListing.objects.filter(status="pending").select_related("user"))
+    pending_listings = list(VehicleListing.objects.filter(status="pending",is_relist=False).select_related("user"))
     logger.info(f"Found {len(pending_listings)} pending listings for Facebook Marketplace")
 
     if not pending_listings:
@@ -42,9 +42,7 @@ def create_pending_facebook_marketplace_listing_task(self):
         try:
             logger.info(f"Processing pending listing: {user.email} - {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
-
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
-
             if not credentials or not credentials.session_cookie or not credentials.status:
                 if credentials:
                     credentials.status = False
@@ -53,15 +51,7 @@ def create_pending_facebook_marketplace_listing_task(self):
                 logger.info(f"Invalid credentials for {user.email}")
                 continue
 
-            # if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-            #     listing.status = "completed"
-            #     listing.listed_on = timezone.now()
-            #     listing.save()
-            #     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-            #     continue
-
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-
             if not should_create_listing(user):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 pending_listings.append(listing)  # Re-queue for later
@@ -69,10 +59,10 @@ def create_pending_facebook_marketplace_listing_task(self):
             last_24_hours_time = timezone.now() - timedelta(hours=24)
             current_user=User.objects.filter(id=user.id).first()
             logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_24_hours_time}")
-            if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_24_hours_time:
-                logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
-                current_user.daily_listing_count = 0
-                current_user.save()
+            # if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time < last_24_hours_time:
+            #     logger.info(f"Resetting daily listing count for user {user.email} and after 24 hours")
+            #     current_user.daily_listing_count = 0
+            #     current_user.save()
             if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
@@ -101,13 +91,11 @@ def create_pending_facebook_marketplace_listing_task(self):
                 else:
                     credentials.status = False
                     credentials.save()
-                
                 logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
             logger.exception(f"Error creating listing for {user.email}: {e}")
             continue
-
     logger.info("Completed all pending Facebook listings.")
 
 
@@ -163,14 +151,12 @@ def retry_failed_relistings():
         else:
             relisting.status = "failed"
             relisting.updated_at = now
+            relisting.relisting_date = now
             relisting.save()
             logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
     logging.info("Completed retrying failed relistings process.")
         
         
-        
-
-
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def relist_facebook_marketplace_listing_task(self):
     """Relist 7-day-old Facebook Marketplace listings"""
@@ -212,7 +198,7 @@ def relist_facebook_marketplace_listing_task(self):
             
         if not should_create_listing(user):
             logger.info(f"10-minute cooldown for user {relisting.user.email}")
-            listings_to_process.append(relisting)  # Re-queue for later
+            listings_to_process.append(item)  # Re-queue for later
             continue
 
         logger.info(f"Processing relisting for user {user.email}")
@@ -232,8 +218,6 @@ def relist_facebook_marketplace_listing_task(self):
 
         if current_user.daily_listing_count >= 15:
             logger.info(f"Daily listing count limit reached for user {user.email}")
-            listing.status = "failed"
-            listing.save()
             continue
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query} and listing price {relisting_price} and relisting date {relisting_date} for the user {user.email}")
@@ -259,26 +243,42 @@ def relist_facebook_marketplace_listing_task(self):
             else:
                 logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 handle_failed_relisting(listing, user, relisting)
-        # elif response[0] == 2:  # Listing sold
-        #     logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-        #     mark_listing_sold(listing, relisting)
+        elif response[0] == 0:
+            logger.info(f"Failed to lead the page. Netwrok issue or page not found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            logger.info(f"Error: {response[1]}")
+            handle_retry_or_disable_credentials(credentials, user)
         elif response[0] == 6:
-            logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            logger.info(f"response[1]: {response[1]}")
-            logger.info(f"number of retries: {listing.retry_count}")
-            if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
+            logger.info(f"Listing not found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            logger.info(f"Got : Do not found anything")
+            logger.info(f"response [1] : {response[1]}")
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            listing_created, message = create_marketplace_listing(listing, credentials.session_cookie)
+
+            if listing_created:
+                update_credentials_success(credentials)
+                logger.info(f"Relisting successful for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                current_user.daily_listing_count += 1
+                current_user.save()
+                relisting=create_or_update_relisting_entry(listing, user, relisting)
+                logger.info(f"Relisting created for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and relisting date {relisting.relisting_date}")
+                logger.info(f"Relisting created for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                image_verification(relisting,None)
+            else:
+                logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                handle_failed_relisting(listing, user, relisting)
+        else:
+            logger.error(f"Failed to relist the listing for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+            logger.error(f"Error: {response[1]}")
+            if listing.retry_count < MAX_RETRIES_ATTEMPTS:
                 listing.retry_count += 1
                 listing.save()
-                logger.info(f"No matching listing found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
             else:
-                listing.status = "sold"
-                listing.save()
-                logger.info(f"Listing sold for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} and number of retries: {listing.retry_count}")
-        elif response[0] == 0:
-            handle_retry_or_disable_credentials(credentials, user)
-        else:
-            logger.error(f"Relisting failed for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            logger.info(f"response[1]: {response[1]}")
+                logger.info(f"Max retries reached for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                logger.info("send notification about listing to user and admin")
+            #save the logs into the db  for review ---------------------------------------------------
+            #--------------------------------------------------------------------------------
+            #-----------------------------------------------------------------------------------
     logger.info(f"Now, Relisting failed listing")
     retry_failed_relistings()
 
@@ -289,7 +289,6 @@ def create_failed_facebook_marketplace_listing_task(self):
 
     failed_listings = list(VehicleListing.objects.filter(status="failed").select_related("user"))
     logger.info(f"Found {len(failed_listings)} failed listings for Facebook Marketplace")
-
     if not failed_listings:
         logger.info("No failed listings found for Facebook Marketplace")
         return
@@ -301,9 +300,7 @@ def create_failed_facebook_marketplace_listing_task(self):
         try:
             logger.info(f"Processing failed listing: {user.email} - {listing.year} {listing.make} {listing.model}")
             time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
-
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
-
             if not credentials or not credentials.session_cookie or not credentials.status:
                 if credentials:
                     credentials.status = False
@@ -312,14 +309,7 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"Invalid credentials for {user.email}")
                 continue
 
-            # if FacebookListing.objects.filter(user=user, listing=listing, status="success").exists():
-            #     listing.status = "completed"
-            #     listing.listed_on = timezone.now()
-            #     logger.info(f"Already listed: {user.email} - {listing.year} {listing.make} {listing.model}")
-            #     continue
-
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-
             if not should_create_listing(user):
                 logger.info(f"10-minute cooldown for user {user.email}")
                 failed_listings.append(listing)  # Re-queue for later
@@ -335,12 +325,15 @@ def create_failed_facebook_marketplace_listing_task(self):
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
 
+            logger.info(f"Creating listing for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
             created, message = create_marketplace_listing(listing, credentials.session_cookie)
 
             if created:
                 update_credentials_success(credentials)
                 FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
                 listing.status = "completed"
+                listing.has_images = False
+                listing.retry_count = 0
                 listing.listed_on = timezone.now()
                 listing.updated_at = timezone.now()
                 listing.save()
@@ -650,17 +643,34 @@ def check_images_upload_status(self):
     if vehicle_listings or relistings:
         combined_listings = vehicle_listings + relistings
         while combined_listings:
-            item = combined_listings.pop(0)
+            current_listing = combined_listings.pop(0)
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
+            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(current_listing, VehicleListing) else 'relisting'} {current_listing.id}")
+            if isinstance(current_listing, VehicleListing):
+                logger.info(f"item.price: {current_listing.price}")
+                logger.info(f"item.listed_on: {timezone.localtime(current_listing.listed_on)}")
+                listing_date = timezone.localtime(current_listing.listed_on)
+                price = current_listing.price
+                listing=current_listing
+                relisting = None
+                user= current_listing.user
+                search_query = f"{current_listing.year} {current_listing.make} {current_listing.model}"
+            else:
+                logger.info(f"item.listing.price: {current_listing.listing.price}")
+                logger.info(f"item.relisting_date: {timezone.localtime(current_listing.relisting_date)}")
+                listing_date = timezone.localtime(current_listing.relisting_date)
+                price = current_listing.listing.price
+                listing=current_listing.listing
+                relisting = current_listing
+                user = current_listing.user
+                search_query = f"{current_listing.listing.year} {current_listing.listing.make} {current_listing.listing.model}"
 
             # ⏱️ Cooldown logic
-            if not should_check_images_upload_status_time(item.user):
-                logger.info(f"10-minute cooldown for user {item.user.email}")
-                combined_listings.append(item)  # Requeue to check later
+            if not should_check_images_upload_status_time(user):
+                logger.info(f"10-minute cooldown for user {user.email}")
+                combined_listings.append(current_listing)  # Requeue to check later
                 continue
-            user = item.user
-            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {item.id}")
+            logger.info(f"Checking images upload status for the {'vehicle listing' if isinstance(current_listing, VehicleListing) else 'relisting'} {current_listing.id}")
             credentials = FacebookUserCredentials.objects.filter(user=user).first()
             if not credentials or not credentials.session_cookie or not credentials.status or credentials.session_cookie == {}:
                 if credentials:
@@ -670,40 +680,31 @@ def check_images_upload_status(self):
                 logger.warning(f"No valid Facebook credentials for user {user.email}")
                 continue
             logger.info(f"Credentials found for user {user.email}")
-            search_query = f"{item.year} {item.make} {item.model}" if isinstance(item, VehicleListing) else f"{item.listing.year} {item.listing.make} {item.listing.model}"
-            logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query}")
+            logger.info(f"Searching and deleting the {'vehicle listing' if isinstance(current_listing, VehicleListing) else 'relisting'} {search_query}")
             time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            if isinstance(item, VehicleListing):
-                logger.info(f"item.price: {item.price}")
-                logger.info(f"item.listed_on: {timezone.localtime(item.listed_on)}")
-                listing_date = timezone.localtime(item.listed_on)
-                price = item.price
-            else:
-                logger.info(f"item.listing.price: {item.listing.price}")
-                logger.info(f"item.relisting_date: {timezone.localtime(item.relisting_date)}")
-                listing_date = timezone.localtime(item.relisting_date)
-                price = item.listing.price
+
+            # Perform search and delete operation
             response = verify_facebook_listing_images_upload(search_query, price, listing_date, credentials.session_cookie)
             user.last_images_check_status_time = timezone.now()
             user.save()
             if response[0] == 1:  #Image upload successful
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has images uploaded")
-                item.has_images = True
-                item.save()
-            elif response[0] == 2: #Image upload failed
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has not published yet")
-                logger.info(f"Error: {response[1]}")
-                logger.info("retring attempt to check images upload status")
-                continue
-            # elif response[0] == 3: #Image upload successful
-            #     logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} is already marked as available")
-            #     logger.info(f"info: {response[1]}")
-            #     item.status = "sold"
-            #     item.save()
-            #     continue
-            elif response[0] == 4: #Failed to check images upload status    
+                logger.info(f"{'Vehicle listing' if isinstance(current_listing, VehicleListing) else 'Relisting'} has images uploaded")
+                listing.has_images = True
+                listing.save()
+            elif response[0] == 4: #Failed to check images upload status
                 logger.info("failed to check images upload status. need to retry...")
                 logger.info(f"Error: {response[1]}")
+                if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                    listing.retry_count += 1
+                    listing.save()    
+                else:
+                    #send email to user
+                    logger.info(f"Max retries reached for user {user.email} and listing title {search_query}")
+                    logger.info(f"Error: {response[1]}")
+                    logger.info("send email to user")
+                # save logs into db    ---------------------------------------------------------------------------
+                #-----------------------------------------------------------------------------------
+                #-----------------------------------------------------------------------------------
                 continue
             elif response[0] == 5: #facebook login failed
                 logger.info(f"Facebook login failed for user {user.email}. please check your credentials")
@@ -713,23 +714,23 @@ def check_images_upload_status(self):
             elif response[0] == 6:
                 logger.info(f"No matching listing found for the user {user.email} and listing title {search_query}")
                 logger.info(f"response[1]: {response[1]}")
-                logger.info(f"number of retries: {item.retry_count}")
-                if item.retry_count < MAX_RETRIES_ATTEMPTS:
-                    item.retry_count += 1
-                    item.save()
-                    logger.info(f"No matching listing found for the user {user.email} and listing title {search_query} and number of retries: {item.retry_count}")
-                else:
-                    item.status = "sold"
-                    item.save()
-                    logger.info(f"Listing sold for the user {user.email} and listing title {search_query} and number of retries: {item.retry_count}")
+                logger.info(f"number of retries: {listing.retry_count}")
+                listing.delete()
             elif response[0] == 0: #No matching listing found
-                logger.info(f"listing found for the {'vehicle listing' if isinstance(item, VehicleListing) else 'relisting'} {search_query} has no images uploaded, Successfully deleted and marked as failed")
+                logger.info(f"listing found for the {'vehicle listing' if isinstance(current_listing, VehicleListing) else 'relisting'} {search_query} has no images uploaded, Successfully deleted and marked as failed")
                 logger.info(f"info: {response[1]}")
-                item.status = "failed"
-                item.save()
+                if relisting:
+                    relisting.status = "failed"
+                    relisting.last_relisting_status = False
+                    relisting.save()
+                else:
+                    current_listing.status = "failed"
+                    current_listing.is_relist = False
+                    current_listing.has_images = False
+                    current_listing.save()
                 continue
             else: #Image upload failed
-                logger.info(f"{'Vehicle listing' if isinstance(item, VehicleListing) else 'Relisting'} has no images uploaded")
+                logger.info(f"{'Vehicle listing' if isinstance(current_listing, VehicleListing) else 'Relisting'} has no images uploaded")
                 logger.info(f"info: {response[1]}")
                 continue
     else:
