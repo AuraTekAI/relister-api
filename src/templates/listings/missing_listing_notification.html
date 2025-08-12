@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Missing Facebook Listing Notification</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+        .alert { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .listing-details { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .action-required { background: #d1ecf1; border: 1px solid #bee5eb; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666; }
+        h2 { color: #e74c3c; }
+        h3 { color: #2c3e50; }
+        .highlight { background: #fff3cd; padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>🚨 Facebook Listing Not Found</h2>
+            <p><strong>Dealership:</strong> {{ dealership_name }}</p>
+            <p><strong>Contact:</strong> {{ user_name }}</p>
+        </div>
+
+        <div class="alert">
+            <h3>⚠️ Action Required</h3>
+            <p>Our system could not locate the following listing on Facebook Marketplace. Please manually check and delete if it exists.</p>
+        </div>
+
+        <div class="listing-details">
+            <h3>📋 Listing Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><strong>Listing ID:</strong></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{{ listing_id }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><strong>Vehicle:</strong></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><span class="highlight">{{ year }} {{ make }} {{ model }}</span></td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><strong>Price:</strong></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">${{ price }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><strong>Listed On:</strong></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{{ listed_on }}</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="action-required">
+            <h3>🔍 What You Need to Do</h3>
+            <ol>
+                <li><strong>Search Facebook Marketplace</strong> for: <span class="highlight">{{ year }} {{ make }} {{ model }}</span></li>
+                <li><strong>Look for listings</strong> with price around <strong>${{ price }}</strong></li>
+                <li><strong>Check the listing date</strong> around {{ listed_on }}</li>
+                <li><strong>If found, please delete the listing</strong> manually from Facebook</li>
+                <li><strong>If not found,</strong> no action is required - the listing may have already been removed</li>
+            </ol>
+        </div>
+
+        <div style="background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h3>💡 Why This Happens</h3>
+            <p>Sometimes Facebook's search functionality may not return expected results due to:</p>
+            <ul>
+                <li>Listing title variations</li>
+                <li>Facebook's search algorithm changes</li>
+                <li>Temporary Facebook platform issues</li>
+                <li>Listing already sold or removed</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <p>This is an automated notification from the Relister system.</p>
+            <p>If you have questions, please contact support.</p>
+        </div>
+    </div>
+</body>
+</html>
