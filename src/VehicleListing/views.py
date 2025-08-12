@@ -681,6 +681,8 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                                 logger.info(f"Failed to found the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} using this automation after all attempts. Please check your listing manually.")
                                 logger.info(f"response[1]: {response[1]}")
                                 logger.info(f"number of retries: {listing.retry_count}")
+                                logger.info(f"delete the listing andlisting ID {listing.list_id}")
+                                listing.delete()
                                 # send_email_to_user(user, listing)
                                 #------------------------------------------------------------------------
                                 #---------------------------------------------------------------------------
@@ -727,6 +729,10 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                         else:
                             #send email to user related listing
                             logger.info(f"Failed to found the listing for the user {user.email} and listing title {listing.year} {listing.make} {listing.model} using this automation after all attempts. Please check your listing manually.")
+                            logger.info(f"response[1]: {response[1]}")
+                            logger.info(f"number of retries: {listing.retry_count}")
+                            logger.info(f"delete the listing andlisting ID {listing.list_id}")
+                            listing.delete()
                             # send_email_to_user(user, listing)
                             #------------------------------------------------------------------------
                             #---------------------------------------------------------------------------

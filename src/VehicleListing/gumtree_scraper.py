@@ -387,7 +387,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
-            if (already_exists.status in ["pending", "failed"] and already_exists.created_at < timezone.now() - timedelta(days=7) and not already_exists.is_relist):
+            if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=7) and not already_exists.is_relist):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.year} {already_exists.make} {already_exists.model} and price is {already_exists.price} and mileage is {already_exists.mileage} and location is {already_exists.location}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"result: {result}")
@@ -417,7 +417,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.save()
                         logging.info(f"Updated listing {already_exists.list_id} with new details")
                     else:
-                        logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping update")
+                        logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
             elif already_exists.status == "completed" and already_exists.is_relist and already_exists.listed_on < timezone.now() - timedelta(days=7):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
@@ -476,7 +476,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
     ).exclude(list_id__in=incoming_list_ids)
     if existing_listings:
         for listing in existing_listings:
-            if listing.status in ["pending", "failed"]:
+            if listing.status in ["pending", "failed","sold"]and listing.is_relist == False:
                 logging.info(f"Marking listing ID {listing.list_id} as sold (deleting)")
                 listing.delete()
                 continue
@@ -496,7 +496,8 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                             time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                             response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                            if response[0] == 1:
+                            if response[0] == 1 or response[0] == 6:
+                                logging.info(f"response[1]: {response[1]}")
                                 logging.info(f"Deleted relisted Facebook listing for {search_query}")
                                 listing.delete()
                             else:
@@ -515,7 +516,8 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
                         time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
                         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                        if response[0] == 1:
+                        if response[0] == 1 or response[0] == 6:
+                            logging.info (f"response[1]: {response[1]}")
                             logging.info(f"Deleted Facebook listing for {search_query}")
                             listing.delete()
                         else:

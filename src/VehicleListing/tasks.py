@@ -11,7 +11,7 @@ from VehicleListing.views import facebook_profile_listings_thread,image_verifica
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time
+from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time, _clean_log_file, send_missing_listing_notification, _generate_csv_report
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL
 from openpyxl import Workbook
 from django.conf import settings
@@ -20,8 +20,7 @@ import time
 import random
 import logging
 import threading
-import csv
-from io import StringIO
+import os
 logger = logging.getLogger('facebook_listing_cronjob')
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
@@ -276,6 +275,7 @@ def relist_facebook_marketplace_listing_task(self):
             else:
                 logger.info(f"Max retries reached for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
                 logger.info("send notification about listing to user and admin")
+                send_missing_listing_notification(listing.list_id, listing.year, listing.make, listing.model, listing.listed_on, listing.price, user.email)
             #save the logs into the db  for review ---------------------------------------------------
             #--------------------------------------------------------------------------------
             #-----------------------------------------------------------------------------------
@@ -287,7 +287,7 @@ def relist_facebook_marketplace_listing_task(self):
 def create_failed_facebook_marketplace_listing_task(self):
     """Create failed Facebook Marketplace listings."""
 
-    failed_listings = list(VehicleListing.objects.filter(status="failed").select_related("user"))
+    failed_listings = list(VehicleListing.objects.filter(status="failed",is_relist=False).select_related("user"))
     logger.info(f"Found {len(failed_listings)} failed listings for Facebook Marketplace")
     if not failed_listings:
         logger.info("No failed listings found for Facebook Marketplace")
@@ -702,6 +702,7 @@ def check_images_upload_status(self):
                     logger.info(f"Max retries reached for user {user.email} and listing title {search_query}")
                     logger.info(f"Error: {response[1]}")
                     logger.info("send email to user")
+                    send_missing_listing_notification(listing.list_id, listing.year, listing.make, listing.model, listing.listed_on, listing.price, user.email)
                 # save logs into db    ---------------------------------------------------------------------------
                 #-----------------------------------------------------------------------------------
                 #-----------------------------------------------------------------------------------
@@ -726,6 +727,7 @@ def check_images_upload_status(self):
                 else:
                     current_listing.status = "failed"
                     current_listing.is_relist = False
+                    current_listing.retry_count = 0
                     current_listing.has_images = False
                     current_listing.save()
                 continue
@@ -1008,94 +1010,62 @@ def send_daily_activity_report(self):
     
     logger.info("Daily activity report task completed")
 
-def _generate_csv_report(data):
-    """Generate CSV content for the report"""
-    output = StringIO()
-    writer = csv.writer(output)
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def cleanup_old_logs(self):
+    """Remove log entries older than 30 days from log files, preserving newer entries"""
+    logger.info("Starting log cleanup task")    
+    log_directory = settings.LOG_DIR
+    cutoff_date = timezone.now() - timedelta(days=30)
+    processed_files = 0
+    total_lines_removed = 0
     
-    # Summary
-    writer.writerow(['DAILY ACTIVITY SUMMARY'])
-    writer.writerow(['Date', data['report_date']])
-    writer.writerow(['Yesterday Successful Relistings', data['relisted_count']])
-    writer.writerow(['Yesterday Failed Relistings', data['failed_relistings_count']])
-    writer.writerow(['Total Successful Relistings', data['total_successful_relistings']])
-    writer.writerow(['Total Failed Relistings', data['total_failed_relistings']])
-    writer.writerow(['Active Listings', data['active_count']])
-    writer.writerow(['Pending Listings', data['pending_count']])
-    writer.writerow(['Failed Listings', data['failed_count']])
-    writer.writerow(['Sold Listings', data['sold_count']])
-    writer.writerow(['Eligible for Relisting', data['eligible_count']])
-    writer.writerow(['Approved Users', data['approved_users_count']])
-    writer.writerow([])
+    try:
+        if not os.path.exists(log_directory):
+            logger.warning(f"Log directory {log_directory} does not exist")
+            return
+        
+        for filename in os.listdir(log_directory):
+            file_path = os.path.join(log_directory, filename)
+            
+            if os.path.isfile(file_path) and filename.endswith('.log'):
+                lines_removed = _clean_log_file(file_path, cutoff_date)
+                if lines_removed > 0:
+                    total_lines_removed += lines_removed
+                    logger.info(f"Cleaned {lines_removed} old entries from {filename}")
+                processed_files += 1
+        
+        logger.info(f"Log cleanup completed. Processed {processed_files} files, removed {total_lines_removed} old entries")
+        
+    except Exception as e:
+        logger.error(f"Error during log cleanup: {e}")
+        raise
+
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def cleanup_high_retry_listings(self):
+    """Delete listings with retry_count >= 10"""
+    logger.info("Starting cleanup of high retry count listings")
     
-    # Successful relistings
-    if data['relisted_items']:
-        writer.writerow(['SUCCESSFUL RELISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Timestamp'])
-        for item in data['relisted_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['timestamp']])
-        writer.writerow([])
-    
-    # Failed relistings
-    if data['failed_relistings']:
-        writer.writerow(['FAILED RELISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Error', 'Timestamp'])
-        for item in data['failed_relistings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['error_reason'], item['timestamp']])
-        writer.writerow([])
-    
-    # Active listings
-    if data['active_listings']:
-        writer.writerow(['ACTIVE LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Listed At'])
-        for item in data['active_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['listed_at']])
-        writer.writerow([])
-    
-    # Pending listings
-    if data['pending_listings']:
-        writer.writerow(['PENDING LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Created At'])
-        for item in data['pending_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['created_at']])
-        writer.writerow([])
-    
-    # Failed listings
-    if data['failed_listings']:
-        writer.writerow(['FAILED LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Failed At'])
-        for item in data['failed_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['failed_at']])
-        writer.writerow([])
-    
-    # Sold listings
-    if data['sold_listings']:
-        writer.writerow(['SOLD LISTINGS'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Sold At'])
-        for item in data['sold_listings']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['sold_at']])
-        writer.writerow([])
-    
-    # Eligible items
-    if data['eligible_items']:
-        writer.writerow(['ELIGIBLE FOR RELISTING'])
-        writer.writerow(['ID', 'Title', 'User', 'Price', 'Last Listed', 'Next Eligible'])
-        for item in data['eligible_items']:
-            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['last_listed'], item['next_eligible']])
-        writer.writerow([])
-    
-    # User statistics
-    if data.get('user_statistics'):
-        writer.writerow(['USER STATISTICS'])
-        writer.writerow(['Email', 'Dealership', 'Contact Person', 'Daily Count', 'Total Listings', 'Total Relistings', 'Yesterday Relistings', 'Yesterday Failed', 'Ready for Relisting', 'Active', 'Failed', 'Pending', 'Sold'])
-        for user in data['user_statistics']:
-            writer.writerow([
-                user['email'], user['dealership_name'], user['contact_person_name'],
-                user['daily_listing_count'], user['total_listings'], user['total_relistings'],
-                user['yesterday_relistings'], user['yesterday_failed_relistings'],
-                user['ready_for_relisting'], user['active_listings'], user['failed_listings'],
-                user['pending_listings'], user['sold_listings']
-            ])
-        writer.writerow([])
-    
-    return output.getvalue()
+    try:
+        # Get listings with retry_count >= 10
+        high_retry_listings = VehicleListing.objects.filter(retry_count__gte=10)
+        deleted_count = high_retry_listings.count()
+        
+        if deleted_count == 0:
+            logger.info("No listings found with retry_count >= 10")
+            return
+        
+        # Log details before deletion
+        for listing in high_retry_listings:
+            logger.info(f"Deleting listing: {listing.year} {listing.make} {listing.model} "
+                       f"(ID: {listing.list_id}, User: {listing.user.email}, Retries: {listing.retry_count})")
+        
+        # Delete all high retry listings
+        high_retry_listings.delete()
+        
+        logger.info(f"Cleanup completed. Deleted {deleted_count} listings with retry_count >= 10")
+        
+    except Exception as e:
+        logger.error(f"Error during high retry listings cleanup: {e}")
+        raise
