@@ -31,6 +31,8 @@ class VehiclelistingConfig(AppConfig):
                     "daily_6pm": CrontabSchedule.objects.get_or_create(minute='0', hour='18')[0],
                     "daily_3am": CrontabSchedule.objects.get_or_create(minute='0', hour='3')[0],
                     "daily_2am": CrontabSchedule.objects.get_or_create(minute='0', hour='2')[0],
+                    "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
+                    "daily_12am": CrontabSchedule.objects.get_or_create(minute='0', hour='0')[0],
                 }
 
                 tasks = [
@@ -85,6 +87,16 @@ class VehiclelistingConfig(AppConfig):
                         "name": "Send_Daily_Activity_Report",
                         "task": "VehicleListing.tasks.send_daily_activity_report",
                         "crontab": crontab_map["daily_2am"],
+                    },
+                    {
+                        "name": "Clean_30_days_Old_logs",
+                        "task": "VehicleListing.tasks.cleanup_old_logs",
+                        "crontab": crontab_map["daily_1am"],
+                    },
+                    {
+                        "name": "Delete_high_retry_listings",
+                        "task": "VehicleListing.tasks.cleanup_high_retry_listings",
+                        "crontab": crontab_map["daily_12am"],
                     },
                 ]
 

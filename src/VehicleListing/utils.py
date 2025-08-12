@@ -10,6 +10,11 @@ from .models import  RelistingFacebooklisting
 from relister.settings import MAX_RETRIES_ATTEMPTS
 from accounts.models import User
 from django.conf import settings
+from datetime import datetime
+import re
+import csv
+from io import StringIO
+from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL, TECH_SUPPORT_EMAIL
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -184,3 +189,171 @@ def get_full_state_name(input_state):
     }
 
     return state_mapping.get(state_input, input_state)
+
+
+def _clean_log_file(file_path, cutoff_date):
+    """Clean old entries from a single log file"""    
+    lines_removed = 0
+    new_lines = []
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Match log format: INFO 2025-02-24 05:05:45,952 facebook_listing
+                match = re.match(r'^\w+\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}),\d+', line)
+                if match:
+                    log_date_str = match.group(1)
+                    try:
+                        log_date = datetime.strptime(log_date_str, '%Y-%m-%d %H:%M:%S')
+                        log_date = timezone.make_aware(log_date)
+                        
+                        if log_date >= cutoff_date:
+                            new_lines.append(line)
+                        else:
+                            lines_removed += 1
+                    except ValueError:
+                        new_lines.append(line)  # Keep malformed lines
+                else:
+                    new_lines.append(line)  # Keep non-log lines
+        
+        # Write back only newer entries
+        if lines_removed > 0:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+                
+    except Exception as e:
+        logger.error(f"Error cleaning log file {file_path}: {e}")
+    
+    return lines_removed
+
+
+def send_missing_listing_notification(listing_id, year, make, model, listed_on, price, user_email):
+    """Send email notification when listing not found on Facebook"""
+    logger.info(f"Sending missing listing notification for {year} {make} {model}")
+    
+    try:
+        user = User.objects.get(email=user_email)
+        
+        # Prepare email data
+        email_data = {
+            'listing_id': listing_id,
+            'year': year,
+            'make': make,
+            'model': model,
+            'listed_on': listed_on,
+            'price': price,
+            'user_name': user.contact_person_name or user.email,
+            'dealership_name': user.dealership_name or 'N/A'
+        }
+        
+        # Render email template
+        html_content = render_to_string('listings/missing_listing_notification.html', email_data)
+        
+        # Send to user
+        user_email_obj = EmailMessage(
+            subject=f"Action Required: Facebook Listing Not Found - {year} {make} {model}",
+            body=html_content,
+            from_email=EMAIL_HOST_USER,
+            to=[user.email,TECH_SUPPORT_EMAIL]
+        )
+        user_email_obj.content_subtype = 'html'
+        user_email_obj.send()
+        
+        logger.info(f"Missing listing notification sent to {user.email} and {ADMIN_EMAIL}")
+        
+    except Exception as e:
+        logger.error(f"Error sending missing listing notification: {e}")
+        raise
+
+
+def _generate_csv_report(data):
+    """Generate CSV content for the report"""
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Summary
+    writer.writerow(['DAILY ACTIVITY SUMMARY'])
+    writer.writerow(['Date', data['report_date']])
+    writer.writerow(['Yesterday Successful Relistings', data['relisted_count']])
+    writer.writerow(['Yesterday Failed Relistings', data['failed_relistings_count']])
+    writer.writerow(['Total Successful Relistings', data['total_successful_relistings']])
+    writer.writerow(['Total Failed Relistings', data['total_failed_relistings']])
+    writer.writerow(['Active Listings', data['active_count']])
+    writer.writerow(['Pending Listings', data['pending_count']])
+    writer.writerow(['Failed Listings', data['failed_count']])
+    writer.writerow(['Sold Listings', data['sold_count']])
+    writer.writerow(['Eligible for Relisting', data['eligible_count']])
+    writer.writerow(['Approved Users', data['approved_users_count']])
+    writer.writerow([])
+    
+    # Successful relistings
+    if data['relisted_items']:
+        writer.writerow(['SUCCESSFUL RELISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Timestamp'])
+        for item in data['relisted_items']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['timestamp']])
+        writer.writerow([])
+    
+    # Failed relistings
+    if data['failed_relistings']:
+        writer.writerow(['FAILED RELISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Error', 'Timestamp'])
+        for item in data['failed_relistings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['error_reason'], item['timestamp']])
+        writer.writerow([])
+    
+    # Active listings
+    if data['active_listings']:
+        writer.writerow(['ACTIVE LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Listed At'])
+        for item in data['active_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['listed_at']])
+        writer.writerow([])
+    
+    # Pending listings
+    if data['pending_listings']:
+        writer.writerow(['PENDING LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Created At'])
+        for item in data['pending_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['created_at']])
+        writer.writerow([])
+    
+    # Failed listings
+    if data['failed_listings']:
+        writer.writerow(['FAILED LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Failed At'])
+        for item in data['failed_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['failed_at']])
+        writer.writerow([])
+    
+    # Sold listings
+    if data['sold_listings']:
+        writer.writerow(['SOLD LISTINGS'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Sold At'])
+        for item in data['sold_listings']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['sold_at']])
+        writer.writerow([])
+    
+    # Eligible items
+    if data['eligible_items']:
+        writer.writerow(['ELIGIBLE FOR RELISTING'])
+        writer.writerow(['ID', 'Title', 'User', 'Price', 'Last Listed', 'Next Eligible'])
+        for item in data['eligible_items']:
+            writer.writerow([item['list_id'], item['title'], item['user'], item['price'], item['last_listed'], item['next_eligible']])
+        writer.writerow([])
+    
+    # User statistics
+    if data.get('user_statistics'):
+        writer.writerow(['USER STATISTICS'])
+        writer.writerow(['Email', 'Dealership', 'Contact Person', 'Daily Count', 'Total Listings', 'Total Relistings', 'Yesterday Relistings', 'Yesterday Failed', 'Ready for Relisting', 'Active', 'Failed', 'Pending', 'Sold'])
+        for user in data['user_statistics']:
+            writer.writerow([
+                user['email'], user['dealership_name'], user['contact_person_name'],
+                user['daily_listing_count'], user['total_listings'], user['total_relistings'],
+                user['yesterday_relistings'], user['yesterday_failed_relistings'],
+                user['ready_for_relisting'], user['active_listings'], user['failed_listings'],
+                user['pending_listings'], user['sold_listings']
+            ])
+        writer.writerow([])
+    
+    return output.getvalue()
