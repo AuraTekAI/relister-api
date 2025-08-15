@@ -1945,3 +1945,321 @@ def image_upload_verification(relisting,vehicle_listing):
     else:
         logging.info(f"Vehicle listing {search_title} is not completed")
         return 5, "Vehicle listing is not completed"
+
+def search_facebook_listing(page, old_listings):
+    """
+    Optimized function to search for listings and extract details.
+    
+    Args:
+        page: Playwright page object
+        old_listings: List of listings to search for
+    
+    Returns:
+        list: List of found listings or empty list if none found
+    """
+    already_present_listings = []
+    
+    # Input validation
+    if not old_listings:
+        logging.error("Missing required parameter: old_listings")
+        return already_present_listings
+    
+    if not isinstance(old_listings, list) or len(old_listings) == 0:
+        logging.error("old_listings must be a non-empty list")
+        return already_present_listings
+    
+    logging.info(f"Starting search for {len(old_listings)} listings")
+    
+    try:
+        # Navigate to marketplace
+        logging.info("Navigating to Facebook Marketplace selling page")
+        page.goto("https://www.facebook.com/marketplace/you/selling", wait_until="networkidle", timeout=30000)
+        logging.info("Successfully navigated to marketplace")
+        random_sleep(2, 4)
+        
+    except Exception as e:
+        logging.error(f"Navigation failed: {e}")
+        return already_present_listings
+    
+    # Process each listing
+    for idx, current_listing in enumerate(old_listings, 1):
+        try:
+            # Validate listing data
+            if not current_listing or not isinstance(current_listing, dict):
+                logging.warning(f"Listing {idx}: Invalid listing data, skipping")
+                continue
+                
+            search_title = current_listing.get('title', '').strip()
+            search_price = str(current_listing.get('price', '')).strip()
+            
+            if not search_title or not search_price:
+                logging.warning(f"Listing {idx}: Missing title or price, skipping")
+                continue
+            
+            logging.info(f"Processing listing {idx}/{len(old_listings)}: {search_title} - ${search_price}")
+            
+            # Find search input
+            search_input = page.locator(
+                "input[type='text'][placeholder='Search your listings'], "
+                "input[type='text'][aria-label='Search your listings']"
+            ).first
+            
+            if not search_input.is_visible(timeout=5000):
+                logging.error(f"Listing {idx}: Search input not found")
+                continue
+            
+            # Perform search
+            logging.info(f"Listing {idx}: Searching for '{search_title}'")
+            search_input.click()
+            search_input.clear()
+            search_input.fill(search_title)
+            page.wait_for_timeout(3000)
+            
+            # Check for matches
+            matches_count = get_count_of_elements_with_text(search_title, page)
+            logging.info(f"Listing {idx}: Found {matches_count} potential matches")
+            
+            if matches_count == 0:
+                if page.locator("text='We didn't find anything'").is_visible():
+                    logging.info(f"Listing {idx}: No results found (Facebook message displayed)")
+                else:
+                    logging.info(f"Listing {idx}: No matches found for '{search_title}'")
+                continue
+            
+            # Extract and verify listings
+            elements = get_elements_with_text(search_title, page)
+            price_digits = "".join(filter(str.isdigit, search_price))
+            
+            logging.info(f"Listing {idx}: Extracted {len(elements)} elements for verification")
+            
+            matches_found = 0
+            for element in elements:
+                try:
+                    element_title = element.get('title', '').strip()
+                    element_price = str(element.get('price', '')).strip()
+                    element_date = element.get('date', '')
+                    
+                    # Match criteria
+                    title_match = element_title.lower() == search_title.lower()
+                    price_match = element_price == price_digits
+                    
+                    if title_match and price_match:
+                        logging.info(f"Listing {idx}: Found exact match - Title: '{element_title}', Price: ${element_price}, Date: {element_date}")
+                        already_present_listings.append({
+                            'title': element_title,
+                            'price': element_price,
+                            'date': element_date,
+                            'listed_on': element_date,
+                            'original_listing': current_listing
+                        })
+                        matches_found += 1
+                    else:
+                        logging.debug(f"Listing {idx}: No match - Title match: {title_match}, Price match: {price_match}")
+                        
+                except Exception as e:
+                    logging.error(f"Listing {idx}: Error processing element: {e}")
+                    continue
+            
+            logging.info(f"Listing {idx}: Found {matches_found} exact matches")
+            
+        except Exception as e:
+            logging.error(f"Listing {idx}: Error processing listing '{search_title}': {e}")
+            continue
+    
+    logging.info(f"Search completed. Found {len(already_present_listings)} total matches out of {len(old_listings)} searched listings")
+    return already_present_listings
+    
+
+def find_and_delete_duplicate_listing(page, listings, relistings):
+    """Find and delete duplicate restricted listings from Facebook Marketplace"""
+    deleted_listings = []
+    
+    try:
+        logging.info("Navigating to Facebook Marketplace")
+        page.goto("https://www.facebook.com/marketplace/you/selling", wait_until="networkidle", timeout=30000)
+        random_sleep(2, 4)
+        
+        # Process listings or relistings
+        items_to_process = listings or relistings
+        if not items_to_process:
+            logging.warning("No items to process")
+            return deleted_listings
+        
+        for idx, item in enumerate(items_to_process, 1):
+            try:
+                # Extract item details
+                if listings:
+                    title = f"{item.year} {item.make} {item.model}"
+                    price = str(item.price)
+                    date = timezone.localtime(item.listed_on).strftime("%d/%m")
+                    item_type = "listing"
+                else:
+                    title = f"{item.listing.year} {item.listing.make} {item.listing.model}"
+                    price = str(item.listing.price)
+                    date = timezone.localtime(item.relisting_date).strftime("%d/%m")
+                    item_type = "relisting"
+                
+                logging.info(f"Processing {item_type} {idx}/{len(items_to_process)}: {title} - ${price} - {date}")
+                
+                # Find restricted listings
+                restricted_listings = extract_restricted_listing_details(page, title)
+                if not restricted_listings:
+                    logging.info(f"{item_type} {idx}: No restricted listings found")
+                    continue
+                
+                logging.info(f"{item_type} {idx}: Found {len(restricted_listings)} restricted listings")
+                
+                # Verify matches
+                verified_listings = verify_restricted_listing_matches(
+                    restricted_listings, title=title, price=price, listing_date=date
+                )
+                
+                if not verified_listings:
+                    logging.info(f"{item_type} {idx}: No verified matches found")
+                    continue
+                
+                logging.info(f"{item_type} {idx}: Found {len(verified_listings)} verified matches")
+                
+                # Delete first match
+                target = verified_listings[0]
+                if not target.get('image_url'):
+                    target['image_url'] = None  # Ensure image_url is set for deletion
+                logging.info(f"{item_type} {idx}: Deleting '{target['title']}'")
+                
+                success, message = delete_restricted_listings_without_images(page, target)
+                if success:
+                    logging.info(f"{item_type} {idx}: Successfully deleted - {message}")
+                    deleted_listings.append(target)
+                else:
+                    logging.warning(f"{item_type} {idx}: Deletion failed - {message}")
+                
+                random_sleep(2, 4)
+                
+            except Exception as e:
+                logging.error(f"Error processing item {idx}: {e}")
+                continue
+        
+        logging.info(f"Completed processing. Deleted {len(deleted_listings)} duplicate listings")
+        return deleted_listings
+        
+    except Exception as e:
+        logging.error(f"Navigation or processing error: {e}")
+        return deleted_listings
+
+
+def perform_search_and_extract_listings(search_title, search_price, listed_on, session_cookies):
+    """
+    Optimized function to search for listings and extract details.
+    
+    Args:
+        search_title (str): Title to search for
+        search_price (str): Price to match
+        listed_on (datetime): Listing date
+        session_cookies (str): Session cookies for authentication
+    
+    Returns:
+        tuple: (status_code, message)
+            0 = timeout, 1 = success, 2 = not_found, 3 = error, 4 = failed
+    """
+    # Validate inputs
+    if not search_title or not search_price or not session_cookies:
+        logging.error("Missing required parameters")
+        return 4, "Missing required parameters"
+    
+    if not listed_on:
+        logging.error(f"Listing date not set for: {search_title}")
+        return 2, "Listing date not set"
+    
+    # Format date
+    try:
+        formatted_date = timezone.localtime(listed_on).strftime("%d/%m")
+    except Exception as e:
+        logging.error(f"Date formatting error: {e}")
+        return 4, "Date formatting error"
+    
+    browser = None
+    try:
+        with sync_playwright() as p:
+            # Initialize browser
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--start-maximized", "--disable-notifications", "--no-sandbox"]
+            )
+            
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                storage_state=session_cookies
+            )
+            
+            page = context.new_page()
+            
+            # Navigate to marketplace
+            try:
+                page.goto(
+                    "https://www.facebook.com/marketplace/you/selling",
+                    wait_until="networkidle",
+                    timeout=30000
+                )
+            except Exception as e:
+                logging.error(f"Navigation timeout: {e}")
+                browser.close()
+                return 0, "Navigation timeout"
+            
+            random_sleep(2, 4)
+            
+            # Perform search
+            search_input = page.locator(
+                "input[type='text'][placeholder='Search your listings'], "
+                "input[type='text'][aria-label='Search your listings']"
+            ).first
+            
+            if not search_input.is_visible(timeout=5000):
+                logging.error("Search input not found")
+                browser.close()
+                return 4, "Search input not found"
+            
+            search_input.click()
+            search_input.fill(search_title)
+            page.wait_for_timeout(3000)
+            
+            # Check for matches
+            matches_count = get_count_of_elements_with_text(search_title, page)
+            
+            if matches_count == 0:
+                if page.locator("text='We didn't find anything'").is_visible():
+                    logging.info("No results found message displayed")
+                    browser.close()
+                    return 2, "No results found"
+                logging.info(f"No matches for: {search_title}")
+                browser.close()
+                return 4, "No matching listings"
+            
+            logging.info(f"Found {matches_count} matches for: {search_title}")
+            
+            # Extract and verify listings
+            elements = get_elements_with_text(search_title, page)
+            price_digits = "".join(filter(str.isdigit, search_price))
+            
+            for element in elements:
+                if (element.get('title', '').lower() == search_title.lower() and
+                    element.get('price') == price_digits and
+                    element.get('date') == formatted_date):
+                    
+                    logging.info(f"Found exact match: {element['title']} - {element['price']} - {element['date']}")
+                    browser.close()
+                    return 1, "Matching listing found"
+            
+            logging.info("No exact matches found")
+            browser.close()
+            return 2, "No exact matches"
+            
+    except Exception as e:
+        logging.error(f"Search operation failed: {e}")
+        return 4, f"Search operation failed: {str(e)}"
+    
+    finally:
+        if browser:
+            try:
+                browser.close()
+            except Exception as e:
+                logging.warning(f"Browser cleanup error: {e}")
