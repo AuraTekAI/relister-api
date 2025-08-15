@@ -33,6 +33,7 @@ class VehiclelistingConfig(AppConfig):
                     "daily_2am": CrontabSchedule.objects.get_or_create(minute='0', hour='2')[0],
                     "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
                     "daily_12am": CrontabSchedule.objects.get_or_create(minute='0', hour='0')[0],
+                    "daily_10pm": CrontabSchedule.objects.get_or_create(minute='0', hour='22')[0],
                 }
 
                 tasks = [
@@ -97,6 +98,11 @@ class VehiclelistingConfig(AppConfig):
                         "name": "Delete_high_retry_listings",
                         "task": "VehicleListing.tasks.cleanup_high_retry_listings",
                         "crontab": crontab_map["daily_12am"],
+                    },
+                    {
+                        "name": "Remove_Duplicate_Listings",
+                        "task": "VehicleListing.tasks.remove_duplicate_listings_task",
+                        "crontab": crontab_map["daily_10pm"],
                     },
                 ]
 
