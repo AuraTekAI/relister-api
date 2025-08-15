@@ -1,6 +1,6 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload
+from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing, search_facebook_listing
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -13,6 +13,7 @@ from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time, _clean_log_file, send_missing_listing_notification, _generate_csv_report
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from openpyxl import Workbook
 from django.conf import settings
 import uuid
@@ -65,32 +66,54 @@ def create_pending_facebook_marketplace_listing_task(self):
             if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
-            created, message = create_marketplace_listing(listing, credentials.session_cookie)
-    
-            if created:
-                update_credentials_success(credentials)
-                FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
-                listing.status = "completed"
-                listing.listed_on = timezone.now()
-                listing.updated_at = timezone.now()
+            result = perform_search_and_extract_listings(f"{listing.year} {listing.make} {listing.model}",listing.price,listing.listed_on, credentials.session_cookie)
+            if result[0] == 1:  # No matching listing found
+                listing.status= "completed"
                 listing.save()
-                current_user.last_facebook_listing_time = timezone.now()
-                current_user.daily_listing_count += 1
-                current_user.save()
-                logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
-                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_verification(None,listing)
-            else:
-                FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
-                listing.status = "failed"
-                listing.save()
-                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
-                    credentials.retry_count += 1
-                    credentials.save()
+                continue
+            elif result[0] == 0:
+                logger.info(f"Failed to lead the page. Netwrok issue or page not found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                logger.info(f"Error: {result[1]}")
+                handle_retry_or_disable_credentials(credentials, user)
+                continue
+            elif result[0] == 4:
+                logger.info(f"Error in perform_search_and_extract_listings: {result[1]}")
+                if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                    listing.retry_count += 1
+                    listing.save()
                 else:
-                    credentials.status = False
-                    credentials.save()
-                logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
+                    logger.info(f"Max retries reached for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                    logger.info("send notification about listing to user and admin")
+                    send_missing_listing_notification(listing.list_id, listing.year, listing.make, listing.model, listing.listed_on, listing.price, user.email)
+                continue
+            else:
+                time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
+                created, message = create_marketplace_listing(listing, credentials.session_cookie)
+        
+                if created:
+                    update_credentials_success(credentials)
+                    FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
+                    listing.status = "completed"
+                    listing.listed_on = timezone.now()
+                    listing.updated_at = timezone.now()
+                    listing.save()
+                    current_user.last_facebook_listing_time = timezone.now()
+                    current_user.daily_listing_count += 1
+                    current_user.save()
+                    logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
+                    time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                    image_verification(None,listing)
+                else:
+                    FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
+                    listing.status = "failed"
+                    listing.save()
+                    if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                        credentials.retry_count += 1
+                        credentials.save()
+                    else:
+                        credentials.status = False
+                        credentials.save()
+                    logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
             logger.exception(f"Error creating listing for {user.email}: {e}")
@@ -127,32 +150,71 @@ def retry_failed_relistings():
             logger.info(f"10-minute cooldown for user {relisting.user.email}")
             failed_relistings.append(relisting)  # Re-queue for later
             continue
-
-        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
-        now = timezone.now()
-        if listing_created:
+        search_title= f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}"
+        search_price = relisting.listing.price
+        search_completed_relisting_instance=RelistingFacebooklisting.objects.filter(last_relisting_status=True, status="completed", listing=relisting.listing).order_by('-relisting_date').first()
+        if search_completed_relisting_instance:
+            search_date = search_completed_relisting_instance.relisting_date
+        else:
+            search_date = relisting.listing.listed_on
+        result = perform_search_and_extract_listings(f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}",search_price,search_date, credentials.session_cookie)
+        if result[0] == 1:  # No matching listing found
             update_credentials_success(credentials)
             relisting.status = "completed"
             relisting.listing.has_images = False
+            relisting.listing.retry_count = 0
+            relisting.listing.status = "completed"
             relisting.listing.save()
             relisting.updated_at = now
             relisting.last_relisting_status = False
             relisting.relisting_date = now
             relisting.save()
-            relisting.user.daily_listing_count += 1 
+            relisting.user.daily_listing_count += 1
             relisting.user.last_facebook_listing_time = now
             relisting.user.save()
-            logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-            image_verification(relisting,None)
+            continue
+        elif result[0] == 0:
+            logger.info(f"Failed to lead the page. Netwrok issue or page not found for the user {relisting.user.email} and listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+            logger.info(f"Error: {result[1]}")
+            handle_retry_or_disable_credentials(credentials, relisting.user)
+            continue
+        elif result[0] == 4:
+            logger.info(f"Error in perform_search_and_extract_listings: {result[1]}")
+            if relisting.listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                relisting.listing.retry_count += 1
+                relisting.listing.save()
+            else:
+                logger.info(f"Max retries reached for user {relisting.user.email} and listing title {search_title}")
+                logger.info("send notification about listing to user and admin")
+                send_missing_listing_notification(relisting.listing.list_id, relisting.listing.year, relisting.listing.make, relisting.listing.model, relisting.listing.listed_on, relisting.listing.price, relisting.user.email)
+            continue
         else:
-            relisting.status = "failed"
-            relisting.updated_at = now
-            relisting.relisting_date = now
-            relisting.save()
-            logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+
+            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+            listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
+            now = timezone.now()
+            if listing_created:
+                update_credentials_success(credentials)
+                relisting.status = "completed"
+                relisting.listing.has_images = False
+                relisting.listing.save()
+                relisting.updated_at = now
+                relisting.last_relisting_status = False
+                relisting.relisting_date = now
+                relisting.save()
+                relisting.user.daily_listing_count += 1 
+                relisting.user.last_facebook_listing_time = now
+                relisting.user.save()
+                logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
+                image_verification(relisting,None)
+            else:
+                relisting.status = "failed"
+                relisting.updated_at = now
+                relisting.relisting_date = now
+                relisting.save()
+                logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
     logging.info("Completed retrying failed relistings process.")
         
         
@@ -324,36 +386,59 @@ def create_failed_facebook_marketplace_listing_task(self):
             if current_user.daily_listing_count >= 15:
                 logger.info(f"Daily listing count limit reached for user {user.email}")
                 continue
-
-            logger.info(f"Creating listing for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-            created, message = create_marketplace_listing(listing, credentials.session_cookie)
-
-            if created:
-                update_credentials_success(credentials)
-                FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
-                listing.status = "completed"
-                listing.has_images = False
-                listing.retry_count = 0
-                listing.listed_on = timezone.now()
-                listing.updated_at = timezone.now()
+            search_title=f"{listing.year} {listing.make} {listing.model}"
+            search_price = listing.price
+            result = perform_search_and_extract_listings(search_title, search_price,listing.listed_on, credentials.session_cookie)
+            if result[0] == 1:  # No matching listing found
+                listing.status= "completed"
                 listing.save()
-                current_user.last_facebook_listing_time = timezone.now()
-                current_user.daily_listing_count += 1
-                current_user.save()
-                logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
-                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                image_verification(None,listing)
-            else:
-                FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
-                listing.status = "failed"
-                listing.save()
-                if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
-                    credentials.retry_count += 1
-                    credentials.save()
+                continue
+            elif result[0] == 0:
+                logger.info(f"Failed to lead the page. Netwrok issue or page not found for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                logger.info(f"Error: {result[1]}")
+                handle_retry_or_disable_credentials(credentials, user)
+                continue
+            elif result[0] == 4:
+                logger.info(f"Error in perform_search_and_extract_listings: {result[1]}")
+                if listing.retry_count < MAX_RETRIES_ATTEMPTS:
+                    listing.retry_count += 1
+                    listing.save()
                 else:
-                    credentials.status = False
-                    credentials.save()
-                logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
+                    logger.info(f"Max retries reached for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                    logger.info("send notification about listing to user and admin")
+                    send_missing_listing_notification(listing.list_id, listing.year, listing.make, listing.model, listing.listed_on, listing.price, user.email)
+                continue
+            else:
+
+                logger.info(f"Creating listing for user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+                created, message = create_marketplace_listing(listing, credentials.session_cookie)
+
+                if created:
+                    update_credentials_success(credentials)
+                    FacebookListing.objects.create(user=user, listing=listing, status="success", error_message=message)
+                    listing.status = "completed"
+                    listing.has_images = False
+                    listing.retry_count = 0
+                    listing.listed_on = timezone.now()
+                    listing.updated_at = timezone.now()
+                    listing.save()
+                    current_user.last_facebook_listing_time = timezone.now()
+                    current_user.daily_listing_count += 1
+                    current_user.save()
+                    logger.info(f"Created: {user.email} - {listing.year} {listing.make} {listing.model}")
+                    time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                    image_verification(None,listing)
+                else:
+                    FacebookListing.objects.create(user=user, listing=listing, status="failed", error_message=message)
+                    listing.status = "failed"
+                    listing.save()
+                    if credentials.retry_count <= MAX_RETRIES_ATTEMPTS:
+                        credentials.retry_count += 1
+                        credentials.save()
+                    else:
+                        credentials.status = False
+                        credentials.save()
+                    logger.info(f"Failed: {user.email} - {listing.year} {listing.make} {listing.model}")
 
         except Exception as e:
             logger.exception(f"Error creating listing for {user.email}: {e}")
@@ -1068,4 +1153,143 @@ def cleanup_high_retry_listings(self):
         
     except Exception as e:
         logger.error(f"Error during high retry listings cleanup: {e}")
+        raise
+    
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def remove_duplicate_listings_task(self):
+    """Remove duplicate listings from Facebook Marketplace for approved users"""
+    logger.info("Starting duplicate listings removal task")
+    
+    today = timezone.now().date()
+    yesterday = today - timedelta(days=1)
+    processed_users = 0
+    total_duplicates = 0
+    
+    try:
+        users = User.objects.filter(is_approved=True)
+        if not users.exists():
+            logger.info("No approved users found")
+            return
+        
+        logger.info(f"Processing {users.count()} users for date: {yesterday}")
+        
+        for user in users:
+            try:
+                logger.info(f"Processing user: {user.email} (ID: {user.id})")
+                
+                # Validate credentials
+                credential = FacebookUserCredentials.objects.filter(user=user).first()
+                if not credential or not credential.session_cookie or not credential.status or credential.session_cookie == {}:
+                    if credential:
+                        credential.status = False
+                        credential.save()
+                        send_status_reminder_email(credential)
+                    logger.warning(f"Invalid credentials for user {user.email}")
+                    continue
+                
+                # Get listings
+                vehicle_listings = VehicleListing.objects.filter(user=user, listed_on__date=yesterday, is_relist=False)
+                relistings = RelistingFacebooklisting.objects.filter(
+                    user=user, relisting_date__date=yesterday, 
+                    listing__is_relist=True, status='completed', last_relisting_status=False
+                )
+                
+                logger.info(f"User {user.email}: {vehicle_listings.count()} listings, {relistings.count()} relistings")
+                
+                if not vehicle_listings.exists() and not relistings.exists():
+                    logger.info(f"No listings found for user {user.email}")
+                    continue
+                
+                # Process with browser
+                browser = None
+                try:
+                    with sync_playwright() as p:
+                        logger.info(f"Initializing browser for user {user.email}")
+                        browser = p.chromium.launch(
+                            headless=True,
+                            args=["--start-maximized", "--disable-notifications", "--no-sandbox"]
+                        )
+                        
+                        context = browser.new_context(
+                            viewport={'width': 1920, 'height': 1080},
+                            storage_state=credential.session_cookie
+                        )
+                        page = context.new_page()
+                        
+                        # Process vehicle listings
+                        if vehicle_listings.exists():
+                            logger.info(f"Processing {vehicle_listings.count()} vehicle listings")
+                            result = find_and_delete_duplicate_listing(page, vehicle_listings, None)
+                            if result:
+                                updated_listings = search_facebook_listing(page, result)
+                                if updated_listings:
+                                    count = 0
+                                    for fb_listing in updated_listings:
+                                        for listing in vehicle_listings:
+                                            if (fb_listing['title'].lower() == f"{listing.year} {listing.make} {listing.model}".lower() and 
+                                                fb_listing['price'] == "".join(filter(str.isdigit, listing.price))):
+                                                try:
+                                                    day, month = map(int, fb_listing['listed_on'].split('/'))
+                                                    listing.listed_on = listing.listed_on.replace(day=day, month=month)
+                                                    listing.retry_count = 0
+                                                    listing.status="completed"
+                                                    listing.save()
+                                                    count += 1
+                                                    logger.info(f"Updated listing ID {listing.id}")
+                                                except Exception as e:
+                                                    logger.error(f"Error updating listing {listing.id}: {e}")
+                                    total_duplicates += count
+                                    logger.info(f"Updated {count} vehicle listings for {user.email}")
+                            else:
+                                logger.info(f"No duplicate vehicle listings found for {user.email}")
+                        
+                        # Process relistings
+                        if relistings.exists():
+                            logger.info(f"Processing {relistings.count()} relistings")
+                            result = find_and_delete_duplicate_listing(page, None, relistings)
+                            if result:
+                                updated_listings = search_facebook_listing(page, result)
+                                if updated_listings:
+                                    count = 0
+                                    for fb_listing in updated_listings:
+                                        for relisting in relistings:
+                                            if (fb_listing['title'].lower() == f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}".lower() and 
+                                                fb_listing['price'] == "".join(filter(str.isdigit, relisting.listing.price))):
+                                                try:
+                                                    day, month = map(int, fb_listing['listed_on'].split('/'))
+                                                    relisting.relisting_date = relisting.relisting_date.replace(day=day, month=month)
+                                                    relisting.listing.retry_count = 0
+                                                    relisting.listing.status = "completed"
+                                                    relisting.listing.is_relist = True
+                                                    relisting.listing.save()
+                                                    relisting.status = "completed"
+                                                    relisting.save()
+                                                    count += 1
+                                                    logger.info(f"Updated relisting ID {relisting.id}")
+                                                except Exception as e:
+                                                    logger.error(f"Error updating relisting {relisting.id}: {e}")
+                                    total_duplicates += count
+                                    logger.info(f"Updated {count} relistings for {user.email}")
+                            else:
+                                logger.info(f"No duplicate relistings found for {user.email}")
+                        
+                        processed_users += 1
+                        
+                except Exception as e:
+                    logger.error(f"Browser error for user {user.email}: {e}")
+                finally:
+                    if browser:
+                        try:
+                            browser.close()
+                        except Exception as e:
+                            logger.warning(f"Browser cleanup error: {e}")
+                            
+            except Exception as e:
+                logger.error(f"Error processing user {user.email}: {e}")
+                continue
+        
+        logger.info(f"Task completed. Processed {processed_users} users, updated {total_duplicates} duplicates")
+        
+    except Exception as e:
+        logger.error(f"Critical error in duplicate removal task: {e}")
         raise
