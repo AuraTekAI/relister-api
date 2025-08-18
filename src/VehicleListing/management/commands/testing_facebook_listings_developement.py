@@ -24,6 +24,10 @@ class Command(BaseCommand):
         except FacebookUserCredentials.DoesNotExist:
             self.stdout.write(self.style.ERROR(f'No credentials found for {email}'))
             return
+        # search_for="2010 Holden COMMODORE INTERNATIONAL VE MY10"
+        # listing_price='7999'
+        # listing_date="25/07"
+        # perform_search_and_delete(search_for, listing_price, listing_date, fb_cred.session_cookie)
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=False,args=["--start-maximized"])

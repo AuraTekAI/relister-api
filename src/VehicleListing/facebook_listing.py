@@ -713,6 +713,36 @@ def get_elements_with_text(search_for, page):
     logging.info(f"search_listings: {search_listings}")
     return search_listings
 
+
+def get_listing_image(page, alt_text: str = None):
+    """
+    Find the first listing image on the page.
+    If alt_text is provided, match the <img> by its alt attribute.
+    
+    Returns:
+        dict with {"image_element": Locator, "src": str} or None
+    """
+    try:
+        if alt_text:
+            # More precise: match by alt text
+            img_loc = page.locator(f"img[alt='{alt_text}']").first
+        else:
+            # Fallback: match by stable classes inside listing container
+            img_loc = page.locator(
+                "div[aria-label] img.x15mokao.x1ga7v0g.x16uus16"
+            ).first
+
+        if img_loc.count() == 0:
+            return None
+
+        img_src = img_loc.get_attribute("src")
+        return {"image_element": img_loc, "src": img_src}
+
+    except Exception as e:
+        logging.error(f"Failed to find listing image: {e}")
+        return None
+
+
 def perform_search_and_delete(search_for, listing_price, listing_date, session_cookie):
     """Perform search and delete listing with retry and timeout handling"""
 
@@ -797,10 +827,9 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                     if title_match and price_match and date_match:
                         # if status == "mark as sold" or status == "mark as available":
                         logging.info(f"Deleting listing: {element['title']} - {element['price']}")
-
-                        price_element = element.get('price_element')
-                        if price_element and price_element.is_visible():
-                            price_element.click()
+                        result=get_listing_image(page, alt_text=f"{search_for}")
+                        if result and result['image_element'] and result['image_element'].is_visible():
+                            result["image_element"].click()
                             random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
 
                             success, message = find_and_click_delete_button(page)
@@ -1293,9 +1322,9 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                     if title_match and price_match and date_match:
                         # if status == "mark as sold" or status == "mark as available":
                         logging.info(f"Deleting listing: {element['title']} - {element['price']}")
-                        price_element = element.get('price_element')
-                        if price_element and price_element.is_visible():
-                            price_element.click()
+                        result=get_listing_image(page, alt_text=f"{search_for}")
+                        if result and result['image_element'] and result['image_element'].is_visible():
+                            result["image_element"].click()
                             random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                             if is_image_uploaded(page):
                                 browser.close()
@@ -1513,43 +1542,45 @@ def delete_restricted_listings_without_images(page, listing):
         if listing.get('image_url') is None:
             logging.info(f"Processing deletion for restricted listing: {listing['title']}")
                 
-            # Get the element from the listing
-            element = listing['element']
+            result=get_listing_image(page, alt_text=f"{listing['title']}")
+                        
+            if result and result['image_element'] and result['image_element'].is_visible():
+                result["image_element"].click()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 
-            # Click on the listing to open details
-            element.click()
-            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)  # Wait for details to load
-                
-            # First attempt with find_and_click_delete_button
-            success, message = find_and_click_delete_button(page)
-            if not success:
-                logging.error(f"Failed to delete restricted listing {listing['title']}: {message}")
-                return False, "Failed to delete the restricted listing"
-                
-            # First Attempt with specific selector
-            delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
-            if delete_buttons:
-                logging.info(f"First attempt: Found {len(delete_buttons)} delete buttons")
-                target_button = delete_buttons[len(delete_buttons)-1]
-                if target_button.is_visible():
-                    target_button.click()
-                    logging.info(f"target_button: {target_button} is clicked successfully")
-                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
-                    return True, "Successfully deleted the restricted listing"
-                
-            # Second Attempt with alternative selector
-            delete_buttons = page.locator("span:text('Delete')").all()
-            if delete_buttons:
-                logging.info(f"Second attempt: Found {len(delete_buttons)} delete buttons")
-                target_button = delete_buttons[len(delete_buttons)-1]
-                if target_button.is_visible():
-                    target_button.click()
-                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
-                    return True, "Successfully deleted the restricted listing"   
+                # First attempt with find_and_click_delete_button
+                success, message = find_and_click_delete_button(page)
+                if not success:
+                    logging.error(f"Failed to delete restricted listing {listing['title']}: {message}")
+                    return False, "Failed to delete the restricted listing"
+                    
+                # First Attempt with specific selector
+                delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                if delete_buttons:
+                    logging.info(f"First attempt: Found {len(delete_buttons)} delete buttons")
+                    target_button = delete_buttons[len(delete_buttons)-1]
+                    if target_button.is_visible():
+                        target_button.click()
+                        logging.info(f"target_button: {target_button} is clicked successfully")
+                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                        return True, "Successfully deleted the restricted listing"
+                    
+                # Second Attempt with alternative selector
+                delete_buttons = page.locator("span:text('Delete')").all()
+                if delete_buttons:
+                    logging.info(f"Second attempt: Found {len(delete_buttons)} delete buttons")
+                    target_button = delete_buttons[len(delete_buttons)-1]
+                    if target_button.is_visible():
+                        target_button.click()
+                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                        return True, "Successfully deleted the restricted listing"   
 
+                else:
+                    logging.error("Delete button not found or not visible.")
+                    return False, "Delete button not found"
             else:
-                logging.error("Delete button not found or not visible.")
-                return False, "Delete button not found"
+                logging.error(f"Image element not found for restricted listing {listing['title']}")
+                return False, "Image element not found for restricted listing"
         
     except Exception as e:
         logging.error(f"Error in delete_restricted_listings_without_images: {e}")
@@ -1784,9 +1815,10 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                 if title_match and price_match and date_match:
                     # if status == "mark as sold" or status == "mark as available":
                     logging.info(f"Deleting listing: {element['title']} - {element['price']}")
-                    price_element = element.get('price_element')
-                    if price_element and price_element.is_visible():
-                        price_element.click()
+                    result=get_listing_image(page, alt_text=f"{search_for}")
+                                
+                    if result and result['image_element'] and result['image_element'].is_visible():
+                        result["image_element"].click()
                         random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                         if is_image_uploaded(page):
                             logging.info("Image is uploaded and visible")
@@ -1821,7 +1853,7 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                             logging.error("Delete button not found or not visible.")
                             return 4, "Delete button not found"
                     else:
-                        return 4, "Price element not found or not visible"
+                        return 4, "Image element not found for edit/delete the listings"
 
                 else:
                     logging.info(f"Listing does not match: {element['title']} - {element['price']} - {element['date']}")
