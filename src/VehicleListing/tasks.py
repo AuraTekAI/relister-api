@@ -205,7 +205,7 @@ def relist_facebook_marketplace_listing_task(self):
 
     while listings_to_process:
         item = listings_to_process.pop(0)
-        if hasattr(item, 'listing'):  # RelistingFacebooklisting
+        if hasattr(item, 'listing'):
             relisting, listing = item, item.listing
             user = relisting.user
             relisting_price = listing.price
