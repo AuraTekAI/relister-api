@@ -104,6 +104,12 @@ class VehiclelistingConfig(AppConfig):
                         "task": "VehicleListing.tasks.remove_duplicate_listings_task",
                         "crontab": crontab_map["daily_10pm"],
                     },
+                    {
+                        "name": "Retry_Failed_Re_Listings",
+                        "task": "VehicleListing.tasks.retry_failed_relistings",
+                        "crontab": crontab_map["daily_3am"],
+                    },
+                    
                 ]
 
                 for t in tasks:
