@@ -788,12 +788,11 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
 
             for element in elements:
                 try:
-                    logging.info(f"Evaluating listing match for {element['title']} with price {element['price']} and date {element['date']} and status {element.get('status', '')}")
+                    logging.info(f"Evaluating listing match for {element['title']} with price {element['price']} and date {element['date']}")
                     title_match = element['title'] and element['title'].lower() == search_for.lower()
                     price_match = element['price'] == "".join(filter(str.isdigit, listing_price))
                     date_match = element['date'] == formatted_date
-                    status = element.get('status', '').lower()
-                    logging.info(f"Title match: {title_match}, Price match: {price_match}, Date match: {date_match}, Status: {status}")
+                    logging.info(f"Title match: {title_match}, Price match: {price_match}, Date match: {date_match}")
 
                     if title_match and price_match and date_match:
                         # if status == "mark as sold" or status == "mark as available":
@@ -1287,8 +1286,9 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
 
                     date_match = element['date'] == formatted_date
                     logging.info(f"both dates are {element['date']} and  from database{formatted_date}")
-                    status = element.get('status', '').lower()
-                    logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
+                    
+                    # status = element.get('status', '').lower()
+                    logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match}")
 
                     if title_match and price_match and date_match:
                         # if status == "mark as sold" or status == "mark as available":
@@ -1778,8 +1778,8 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
 
                 date_match = element['date'] == listing_date
                 logging.info(f"both dates are {element['date']} and  from database{listing_date}")
-                status = element.get('status', '').lower()
-                logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match} and status: {status}")
+                # status = element.get('status', '').lower()
+                logging.info(f"title_match: {title_match} and price_match: {price_match} and date_match: {date_match}")
 
                 if title_match and price_match and date_match:
                     # if status == "mark as sold" or status == "mark as available":
