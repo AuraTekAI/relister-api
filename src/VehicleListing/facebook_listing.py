@@ -858,6 +858,36 @@ def perform_search_and_delete(search_for, listing_price, listing_date, session_c
                             logging.error("Delete button not found or not visible.")
                             browser.close()
                             return 4, "Delete button not found"
+                        elif element['price_element'] and element['price_element'].is_visible():
+                            element['price_element'].click()
+                            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+
+                            success, message = find_and_click_delete_button(page)
+                            if not success:
+                                browser.close()
+                                logging.info(f"Delete button not found for {search_for} and the message is {message}")
+                                return 4, message
+
+                            delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                            if delete_buttons:
+                                target_button = delete_buttons[len(delete_buttons)-1]
+                                if target_button.is_visible():
+                                    target_button.click()
+                                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                    return handle_post_delete_flow(page, browser)
+                            #2nd Attempt
+                            delete_buttons = page.locator("span:text('Delete')").all()
+                            if delete_buttons:
+                                logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                target_button = delete_buttons[len(delete_buttons)-1]
+                                if target_button.is_visible():
+                                    target_button.click()
+                                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                    return handle_post_delete_flow(page, browser)
+                                
+                            logging.error("Delete button not found or not visible.")
+                            browser.close()
+                            return 4, "Delete button not found"
                         else:
                             browser.close()
                             logging.info(f"Price element not found or not visible for {search_for}")
@@ -1360,6 +1390,46 @@ def verify_facebook_listing_images_upload(search_for, listing_price, listing_dat
                                 logging.error("Delete button not found or not visible.")
                                 browser.close()
                                 return 4, "Delete button not found"
+                        
+                        elif element['price_element'] and element['price_element'].is_visible():
+                            element['price_element'].click()
+                            random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+
+                            if is_image_uploaded(page):
+                                browser.close()
+                                return 1, "Image is uploaded and visible"
+                            else:
+                                logging.info("Image is not uploaded")
+
+                                success, message = find_and_click_delete_button(page)
+                                if not success:
+                                    browser.close()
+                                    return 4, message
+                                #first Attempt
+                                delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                                if delete_buttons:
+                                    logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                    
+                                    target_button = delete_buttons[len(delete_buttons)-1]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                        return handle_post_delete_flow(page, browser)
+
+                                #2nd Attempt
+                                delete_buttons = page.locator("span:text('Delete')").all()
+                                if delete_buttons:
+                                    logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                    target_button = delete_buttons[len(delete_buttons)-1]
+                                    if target_button.is_visible():
+                                        target_button.click()
+                                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                        return handle_post_delete_flow(page, browser)
+                                
+                                logging.error("Delete button not found or not visible.")
+                                browser.close()
+                                return 4, "Delete button not found"
+                        
                         else:
                             browser.close()
                             return 4, "Price element not found or not visible"
@@ -1548,6 +1618,40 @@ def delete_restricted_listings_without_images(page, listing):
                 result["image_element"].click()
                 random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                 
+                # First attempt with find_and_click_delete_button
+                success, message = find_and_click_delete_button(page)
+                if not success:
+                    logging.error(f"Failed to delete restricted listing {listing['title']}: {message}")
+                    return False, "Failed to delete the restricted listing"
+                    
+                # First Attempt with specific selector
+                delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                if delete_buttons:
+                    logging.info(f"First attempt: Found {len(delete_buttons)} delete buttons")
+                    target_button = delete_buttons[len(delete_buttons)-1]
+                    if target_button.is_visible():
+                        target_button.click()
+                        logging.info(f"target_button: {target_button} is clicked successfully")
+                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                        return True, "Successfully deleted the restricted listing"
+                    
+                # Second Attempt with alternative selector
+                delete_buttons = page.locator("span:text('Delete')").all()
+                if delete_buttons:
+                    logging.info(f"Second attempt: Found {len(delete_buttons)} delete buttons")
+                    target_button = delete_buttons[len(delete_buttons)-1]
+                    if target_button.is_visible():
+                        target_button.click()
+                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                        return True, "Successfully deleted the restricted listing"   
+
+                else:
+                    logging.error("Delete button not found or not visible.")
+                    return False, "Delete button not found"
+            elif listing['element'] and listing['element'].is_visible():
+                listing['element'].click()
+                random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+
                 # First attempt with find_and_click_delete_button
                 success, message = find_and_click_delete_button(page)
                 if not success:
@@ -1816,9 +1920,44 @@ def image_upload_verification_with_search(page,browser,search_for, listing_price
                     # if status == "mark as sold" or status == "mark as available":
                     logging.info(f"Deleting listing: {element['title']} - {element['price']}")
                     result=get_listing_image(page, alt_text=f"{search_for}")
-                                
                     if result and result['image_element'] and result['image_element'].is_visible():
                         result["image_element"].click()
+                        random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                        if is_image_uploaded(page):
+                            logging.info("Image is uploaded and visible")
+                            return 1, "Image is uploaded and visible"
+                        else:
+                            logging.info("Image is not uploaded")
+
+                            success, message = find_and_click_delete_button(page)
+                            if not success:
+                                return 4, message
+                            #first Attempt
+                            delete_buttons = page.locator("span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft:has-text('Delete')").all()
+                            if delete_buttons:
+                                logging.info(f"first attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                    
+                                target_button = delete_buttons[len(delete_buttons)-1]
+                                if target_button.is_visible():
+                                    target_button.click()
+                                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                    return handle_post_delete_flow(page, browser)
+
+                            #2nd Attempt
+                            delete_buttons = page.locator("span:text('Delete')").all()
+                            if delete_buttons:
+                                logging.info(f"2nd attempt: delete_buttons: {delete_buttons} and length of delete_buttons: {len(delete_buttons)}")
+                                target_button = delete_buttons[len(delete_buttons)-1]
+                                if target_button.is_visible():
+                                    target_button.click()
+                                    random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
+                                    return handle_post_delete_flow(page, browser)
+                                
+                            logging.error("Delete button not found or not visible.")
+                            return 4, "Delete button not found"
+                        
+                    elif element['price_element'] and element['price_element'].is_visible():
+                        element["price_element"].click()
                         random_sleep(settings.LONG_DELAY_START_TIME_BETWEEN_ELEMENTS_SELECTION, settings.LONG_DELAY_END_TIME_BETWEEN_ELEMENTS_SELECTION)
                         if is_image_uploaded(page):
                             logging.info("Image is uploaded and visible")
