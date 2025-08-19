@@ -13,7 +13,8 @@ from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time, _clean_log_file, send_missing_listing_notification, _generate_csv_report
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from asgiref.sync import sync_to_async
 from openpyxl import Workbook
 from django.conf import settings
 import uuid
@@ -1158,89 +1159,103 @@ def remove_duplicate_listings_task(self):
                     logger.info(f"No listings found for user {user.email}")
                     continue
                 
-                # Process with browser
-                browser = None
+                # Process with browser using async
+                async def _process_browser():
+                    browser = None
+                    try:
+                        async with async_playwright() as p:
+                            logger.info(f"Initializing browser for user {user.email}")
+                            browser = await p.chromium.launch(
+                                headless=True,
+                                args=["--start-maximized", "--disable-notifications", "--no-sandbox"]
+                            )
+                            
+                            context = await browser.new_context(
+                                viewport={'width': 1920, 'height': 1080},
+                                storage_state=credential.session_cookie
+                            )
+                            page = await context.new_page()
+                            
+                            vehicle_count = 0
+                            relisting_count = 0
+                            
+                            # Process vehicle listings
+                            if vehicle_listings.exists():
+                                logger.info(f"Processing {vehicle_listings.count()} vehicle listings")
+                                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                                result = await sync_to_async(find_and_delete_duplicate_listing)(page, vehicle_listings, None)
+                                if result:
+                                    time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                                    updated_listings = await sync_to_async(search_facebook_listing)(page, result)
+                                    if updated_listings:
+                                        for fb_listing in updated_listings:
+                                            for listing in vehicle_listings:
+                                                if (fb_listing['title'].lower() == f"{listing.year} {listing.make} {listing.model}".lower() and 
+                                                    fb_listing['price'] == "".join(filter(str.isdigit, listing.price))):
+                                                    try:
+                                                        day, month = map(int, fb_listing['listed_on'].split('/'))
+                                                        listing.listed_on = listing.listed_on.replace(day=day, month=month)
+                                                        listing.retry_count = 0
+                                                        listing.status="completed"
+                                                        await sync_to_async(listing.save)()
+                                                        vehicle_count += 1
+                                                        logger.info(f"Updated listing ID {listing.id}")
+                                                    except Exception as e:
+                                                        logger.error(f"Error updating listing {listing.id}: {e}")
+                                        logger.info(f"Updated {vehicle_count} vehicle listings for {user.email}")
+                                else:
+                                    logger.info(f"No duplicate vehicle listings found for {user.email}")
+                            
+                            # Process relistings
+                            if relistings.exists():
+                                logger.info(f"Processing {relistings.count()} relistings")
+                                time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                                result = await sync_to_async(find_and_delete_duplicate_listing)(page, None, relistings)
+                                if result:
+                                    time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
+                                    updated_listings = await sync_to_async(search_facebook_listing)(page, result)
+                                    if updated_listings:
+                                        for fb_listing in updated_listings:
+                                            for relisting in relistings:
+                                                if (fb_listing['title'].lower() == f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}".lower() and 
+                                                    fb_listing['price'] == "".join(filter(str.isdigit, relisting.listing.price))):
+                                                    try:
+                                                        day, month = map(int, fb_listing['listed_on'].split('/'))
+                                                        relisting.relisting_date = relisting.relisting_date.replace(day=day, month=month)
+                                                        relisting.listing.retry_count = 0
+                                                        relisting.listing.status = "completed"
+                                                        relisting.listing.is_relist = True
+                                                        await sync_to_async(relisting.listing.save)()
+                                                        relisting.status = "completed"
+                                                        await sync_to_async(relisting.save)()
+                                                        relisting_count += 1
+                                                        logger.info(f"Updated relisting ID {relisting.id}")
+                                                    except Exception as e:
+                                                        logger.error(f"Error updating relisting {relisting.id}: {e}")
+                                        logger.info(f"Updated {relisting_count} relistings for {user.email}")
+                                else:
+                                    logger.info(f"No duplicate relistings found for {user.email}")
+                            
+                            return vehicle_count + relisting_count
+                            
+                    except Exception as e:
+                        logger.error(f"Browser error for user {user.email}: {e}")
+                        return 0
+                    finally:
+                        if browser:
+                            try:
+                                await browser.close()
+                            except Exception as e:
+                                logger.warning(f"Browser cleanup error: {e}")
+                
                 try:
-                    with sync_playwright() as p:
-                        logger.info(f"Initializing browser for user {user.email}")
-                        browser = p.chromium.launch(
-                            headless=True,
-                            args=["--start-maximized", "--disable-notifications", "--no-sandbox"]
-                        )
-                        
-                        context = browser.new_context(
-                            viewport={'width': 1920, 'height': 1080},
-                            storage_state=credential.session_cookie
-                        )
-                        page = context.new_page()
-                        
-                        # Process vehicle listings
-                        if vehicle_listings.exists():
-                            logger.info(f"Processing {vehicle_listings.count()} vehicle listings")
-                            result = find_and_delete_duplicate_listing(page, vehicle_listings, None)
-                            if result:
-                                updated_listings = search_facebook_listing(page, result)
-                                if updated_listings:
-                                    count = 0
-                                    for fb_listing in updated_listings:
-                                        for listing in vehicle_listings:
-                                            if (fb_listing['title'].lower() == f"{listing.year} {listing.make} {listing.model}".lower() and 
-                                                fb_listing['price'] == "".join(filter(str.isdigit, listing.price))):
-                                                try:
-                                                    day, month = map(int, fb_listing['listed_on'].split('/'))
-                                                    listing.listed_on = listing.listed_on.replace(day=day, month=month)
-                                                    listing.retry_count = 0
-                                                    listing.status="completed"
-                                                    listing.save()
-                                                    count += 1
-                                                    logger.info(f"Updated listing ID {listing.id}")
-                                                except Exception as e:
-                                                    logger.error(f"Error updating listing {listing.id}: {e}")
-                                    total_duplicates += count
-                                    logger.info(f"Updated {count} vehicle listings for {user.email}")
-                            else:
-                                logger.info(f"No duplicate vehicle listings found for {user.email}")
-                        
-                        # Process relistings
-                        if relistings.exists():
-                            logger.info(f"Processing {relistings.count()} relistings")
-                            result = find_and_delete_duplicate_listing(page, None, relistings)
-                            if result:
-                                updated_listings = search_facebook_listing(page, result)
-                                if updated_listings:
-                                    count = 0
-                                    for fb_listing in updated_listings:
-                                        for relisting in relistings:
-                                            if (fb_listing['title'].lower() == f"{relisting.listing.year} {relisting.listing.make} {relisting.listing.model}".lower() and 
-                                                fb_listing['price'] == "".join(filter(str.isdigit, relisting.listing.price))):
-                                                try:
-                                                    day, month = map(int, fb_listing['listed_on'].split('/'))
-                                                    relisting.relisting_date = relisting.relisting_date.replace(day=day, month=month)
-                                                    relisting.listing.retry_count = 0
-                                                    relisting.listing.status = "completed"
-                                                    relisting.listing.is_relist = True
-                                                    relisting.listing.save()
-                                                    relisting.status = "completed"
-                                                    relisting.save()
-                                                    count += 1
-                                                    logger.info(f"Updated relisting ID {relisting.id}")
-                                                except Exception as e:
-                                                    logger.error(f"Error updating relisting {relisting.id}: {e}")
-                                    total_duplicates += count
-                                    logger.info(f"Updated {count} relistings for {user.email}")
-                            else:
-                                logger.info(f"No duplicate relistings found for {user.email}")
-                        
-                        processed_users += 1
+                    import asyncio
+                    duplicates_found = asyncio.run(_process_browser())
+                    total_duplicates += duplicates_found
+                    processed_users += 1
                         
                 except Exception as e:
-                    logger.error(f"Browser error for user {user.email}: {e}")
-                finally:
-                    if browser:
-                        try:
-                            browser.close()
-                        except Exception as e:
-                            logger.warning(f"Browser cleanup error: {e}")
+                    logger.error(f"Error processing user {user.email}: {e}")
                             
             except Exception as e:
                 logger.error(f"Error processing user {user.email}: {e}")
