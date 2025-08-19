@@ -421,7 +421,7 @@ def create_facebook_listing(vehicle_listing):
                 if current_user.last_facebook_listing_time and current_user.last_facebook_listing_time > last_day_time:
                     current_user.daily_listing_count = 0
                     current_user.save()
-                if current_user.daily_listing_count >= 15:
+                if current_user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
                     vehicle_listing.status="failed"
                     vehicle_listing.save()
                     return False, "Daily listing count limit reached"

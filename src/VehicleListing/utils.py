@@ -153,7 +153,11 @@ def should_check_images_upload_status_time(user):
     if not user.last_images_check_status_time:
         return True
     return timezone.now() - user.last_images_check_status_time >= timedelta(minutes=10)
-
+def should_delete_listing(user):
+    """Check if user is eligible to delete a listing based on time."""
+    if not user.last_delete_listing_time:
+        return True
+    return timezone.now() - user.last_delete_listing_time >= timedelta(minutes=5)
 
 def get_full_state_name(input_state):
     # Normalize input

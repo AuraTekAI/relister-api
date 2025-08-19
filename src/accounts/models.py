@@ -62,6 +62,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     daily_listing_count = models.IntegerField(default=0)
     
     # Extra information
+    last_delete_listing_time = models.DateTimeField(null=True, blank=True)
     last_facebook_listing_time = models.DateTimeField(null=True, blank=True)
     last_login = models.DateTimeField(verbose_name="last login", auto_now=True)
     is_superuser = models.BooleanField(default=False)
