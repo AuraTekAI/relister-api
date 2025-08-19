@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 from VehicleListing.models import FacebookUserCredentials
 from accounts.models import User
-import asyncio
 from playwright.sync_api import sync_playwright
 import time
 
