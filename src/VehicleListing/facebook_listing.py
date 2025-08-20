@@ -561,9 +561,9 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
 
 def create_marketplace_listing_sync(vehicle_listing, session_cookie):
     """
-    Threaded wrapper for create_marketplace_listing to avoid async context issues.
-    This function runs create_marketplace_listing in a separate thread to isolate
-    it from Django's async context detection.
+    Process-based wrapper for create_marketplace_listing to avoid async context issues.
+    This function runs create_marketplace_listing in a separate process to completely
+    isolate it from Django's async context detection.
     
     Args:
         vehicle_listing: VehicleListing instance
@@ -572,22 +572,114 @@ def create_marketplace_listing_sync(vehicle_listing, session_cookie):
     Returns:
         tuple: (success: bool, message: str)
     """
-    def _playwright_worker():
-        """Worker function that runs in a separate thread to avoid async context issues"""
-        try:
-            return create_marketplace_listing(vehicle_listing, session_cookie)
-        except Exception as e:
-            logging.error(f"Error in threaded create_marketplace_listing: {e}")
-            return False, f"Threaded execution error: {str(e)}"
+    import multiprocessing
+    import pickle
+    import tempfile
+    import os
     
-    # Run in a separate thread to completely isolate from Django's async context
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_playwright_worker)
+    def _isolated_process_worker(vehicle_data, session_cookie, result_file):
+        """
+        Worker function that runs in a separate process.
+        This completely isolates from Django's async context.
+        """
         try:
-            return future.result(timeout=900)  # 10 minute timeout for listing creation
+            # Setup Django in the process
+            import os
+            import django
+            from django.conf import settings as django_settings
+            
+            # Set Django settings module
+            os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'relister.settings')
+            django.setup()
+            
+            # Now import what we need
+            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+            import logging
+            import random
+            import time
+            import requests
+            from relister.settings import IMAGES_DIR
+            
+            # Reconstruct a minimal vehicle_listing object with necessary attributes
+            class MockVehicleListing:
+                def __init__(self, data):
+                    for key, value in data.items():
+                        if key != 'user':
+                            setattr(self, key, value)
+                    
+                    # Handle user object
+                    if 'user' in data and data['user']:
+                        class MockUser:
+                            def __init__(self, user_data):
+                                self.email = user_data.get('email')
+                        self.user = MockUser(data['user'])
+            
+            vehicle_listing = MockVehicleListing(vehicle_data)
+            
+            # Call the original function in the isolated process
+            result = create_marketplace_listing(vehicle_listing, session_cookie)
+            
+            # Write result to file
+            with open(result_file, 'wb') as f:
+                pickle.dump(result, f)
+            
         except Exception as e:
-            logging.error(f"ThreadPoolExecutor error in create_marketplace_listing: {e}")
-            return False, f"ThreadPoolExecutor error: {str(e)}"
+            # Write error to file
+            with open(result_file, 'wb') as f:
+                pickle.dump((False, f"Process execution error: {str(e)}"), f)
+    
+    try:
+        # Serialize vehicle_listing data
+        vehicle_data = {
+            'list_id': getattr(vehicle_listing, 'list_id', None),
+            'year': getattr(vehicle_listing, 'year', None),
+            'make': getattr(vehicle_listing, 'make', None),
+            'model': getattr(vehicle_listing, 'model', None),
+            'price': getattr(vehicle_listing, 'price', None),
+            'location': getattr(vehicle_listing, 'location', None),
+            'mileage': getattr(vehicle_listing, 'mileage', None),
+            'description': getattr(vehicle_listing, 'description', None),
+            'images': getattr(vehicle_listing, 'images', []),
+            'user': {
+                'email': vehicle_listing.user.email if hasattr(vehicle_listing, 'user') else None
+            }
+        }
+        
+        # Create temporary file for result
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            result_file = temp_file.name
+        
+        try:
+            # Create and start process
+            process = multiprocessing.Process(
+                target=_isolated_process_worker,
+                args=(vehicle_data, session_cookie, result_file)
+            )
+            process.start()
+            process.join(timeout=900)  # 15 minute timeout
+            
+            if process.is_alive():
+                process.terminate()
+                process.join()
+                logging.error("Process timeout in create_marketplace_listing_sync")
+                return False, "Operation timeout"
+            
+            # Read result from file
+            if os.path.exists(result_file):
+                with open(result_file, 'rb') as f:
+                    result = pickle.load(f)
+                return result
+            else:
+                return False, "No result file created"
+                
+        finally:
+            # Clean up temporary file
+            if os.path.exists(result_file):
+                os.unlink(result_file)
+                
+    except Exception as e:
+        logging.error(f"Error in process-based create_marketplace_listing_sync: {e}")
+        return False, f"Process setup error: {str(e)}"
 
 
 def is_logged_in(page):
