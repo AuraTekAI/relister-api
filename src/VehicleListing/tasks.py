@@ -120,7 +120,7 @@ def create_pending_facebook_marketplace_listing_task(self):
             continue
     logger.info("Completed all pending Facebook listings.")
 
-@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+@shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def retry_failed_relistings(self):
     failed_relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed",
