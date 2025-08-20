@@ -10,6 +10,7 @@ from django.conf import settings
 from VehicleListing.models import FacebookUserCredentials
 from django.utils import timezone
 from .utils import handle_retry_or_disable_credentials,should_delete_listing
+from concurrent.futures import ThreadPoolExecutor
 
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
@@ -556,6 +557,37 @@ def create_marketplace_listing(vehicle_listing,session_cookie):
     except Exception as e:
         logging.error(f"Error in create_marketplace_listing: {e}")
         return False, str(e)
+
+
+def create_marketplace_listing_sync(vehicle_listing, session_cookie):
+    """
+    Threaded wrapper for create_marketplace_listing to avoid async context issues.
+    This function runs create_marketplace_listing in a separate thread to isolate
+    it from Django's async context detection.
+    
+    Args:
+        vehicle_listing: VehicleListing instance
+        session_cookie: Session cookie for authentication
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    def _playwright_worker():
+        """Worker function that runs in a separate thread to avoid async context issues"""
+        try:
+            return create_marketplace_listing(vehicle_listing, session_cookie)
+        except Exception as e:
+            logging.error(f"Error in threaded create_marketplace_listing: {e}")
+            return False, f"Threaded execution error: {str(e)}"
+    
+    # Run in a separate thread to completely isolate from Django's async context
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_playwright_worker)
+        try:
+            return future.result(timeout=900)  # 10 minute timeout for listing creation
+        except Exception as e:
+            logging.error(f"ThreadPoolExecutor error in create_marketplace_listing: {e}")
+            return False, f"ThreadPoolExecutor error: {str(e)}"
 
 
 def is_logged_in(page):

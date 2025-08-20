@@ -1,6 +1,6 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync
+from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync, create_marketplace_listing_sync
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -152,7 +152,7 @@ def retry_failed_relistings(self):
             continue
 
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
+        listing_created, message = create_marketplace_listing_sync(relisting.listing, credentials.session_cookie)
         now = timezone.now()
         if listing_created:
             update_credentials_success(credentials)
