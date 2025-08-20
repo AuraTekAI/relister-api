@@ -295,9 +295,9 @@ def relist_facebook_marketplace_listing_task(self):
         current_user=User.objects.filter(id=user.id).first()
         logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
 
-        if current_user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
-            logger.info(f"Daily listing count limit reached for user {user.email}")
-            continue
+        # if current_user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
+        #     logger.info(f"Daily listing count limit reached for user {user.email}")
+        #     continue
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query} and listing price {relisting_price} and relisting date {relisting_date} for the user {user.email}")
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))

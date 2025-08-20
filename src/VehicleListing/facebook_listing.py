@@ -2770,7 +2770,7 @@ def create_marketplace_listing_sync(vehicle_listing, session_cookie):
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_playwright_worker)
         try:
-            return future.result(timeout=600)  # 10 minute timeout for deletion operations
+            return future.result(timeout=900)  # 10 minute timeout for deletion operations
         except Exception as e:
             logging.error(f"ThreadPoolExecutor error in duplicate deletion: {e}")
             raise
