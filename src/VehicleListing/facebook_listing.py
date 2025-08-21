@@ -10,7 +10,6 @@ from django.conf import settings
 from VehicleListing.models import FacebookUserCredentials
 from django.utils import timezone
 from .utils import handle_retry_or_disable_credentials,should_delete_listing
-from concurrent.futures import ThreadPoolExecutor
 
 logging = logging.getLogger('facebook')
 def human_like_typing(element, text):
@@ -2031,7 +2030,7 @@ def image_upload_verification(relisting,vehicle_listing):
                 logging.info("Initializing browser...")
                 browser = p.chromium.launch(
                     headless=True,
-                    args=["--start-maximized", "--disable-notifications"]
+                    args=["--start-maximized"]
                 )
                 context = browser.new_context(
                     viewport={'width': 1920, 'height': 1080},
@@ -2147,7 +2146,7 @@ def perform_search_and_extract_listings(search_title, search_price, listed_on, s
             # Initialize browser
             browser = p.chromium.launch(
                 headless=True,
-                args=["--start-maximized", "--disable-notifications", "--no-sandbox"]
+                args=["--start-maximized"]
             )
             
             context = browser.new_context(
@@ -2241,7 +2240,6 @@ def search_facebook_listing_sync(credential, listings, relistings):
     Returns:
         None
     """
-    import threading
     from concurrent.futures import ThreadPoolExecutor
     
     def _playwright_worker():
@@ -2255,7 +2253,7 @@ def search_facebook_listing_sync(credential, listings, relistings):
                 return None
             
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                browser = p.chromium.launch(headless=True, args=["--start-maximized"])
                 context = browser.new_context(
                     viewport={'width': 1920, 'height': 1080},
                     storage_state=credential.session_cookie
@@ -2416,7 +2414,6 @@ def find_and_delete_duplicate_listing_sync(credential, listings, relistings):
     Returns:
         tuple: (success_count, error_count)
     """
-    import threading
     from concurrent.futures import ThreadPoolExecutor
     
     def _playwright_worker():
@@ -2430,7 +2427,7 @@ def find_and_delete_duplicate_listing_sync(credential, listings, relistings):
                 return 0, 0
             
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                browser = p.chromium.launch(headless=True, args=["--start-maximized"])
                 context = browser.new_context(
                     viewport={'width': 1920, 'height': 1080},
                     storage_state=credential.session_cookie
@@ -2573,7 +2570,6 @@ def create_marketplace_listing_sync(vehicle_listing, session_cookie):
     Returns:
         tuple: (success: bool, message: str)
     """
-    import threading
     from concurrent.futures import ThreadPoolExecutor
     
     def _playwright_worker():

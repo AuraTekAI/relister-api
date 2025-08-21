@@ -11,9 +11,8 @@ from VehicleListing.views import facebook_profile_listings_thread,image_verifica
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import send_status_reminder_email,mark_listing_sold,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time, _clean_log_file, send_missing_listing_notification, _generate_csv_report
+from .utils import send_status_reminder_email,handle_retry_or_disable_credentials,create_or_update_relisting_entry,handle_failed_relisting,update_credentials_success,should_create_listing,should_check_images_upload_status_time, _clean_log_file, send_missing_listing_notification, _generate_csv_report
 from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from openpyxl import Workbook
 from django.conf import settings
 import uuid
@@ -120,7 +119,7 @@ def create_pending_facebook_marketplace_listing_task(self):
             continue
     logger.info("Completed all pending Facebook listings.")
 
-@shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 def retry_failed_relistings(self):
     failed_relistings = list(RelistingFacebooklisting.objects.filter(
         listing__status="completed",
