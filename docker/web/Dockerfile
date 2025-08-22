@@ -39,7 +39,11 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcairo-gobject2 \
     libgtk-3-0 \
-    libgdk-pixbuf2.0-0 || true \
+    libgdk-pixbuf2.0-0 \
+    libdbus-1-3 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libxkbcommon0 || true \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment
@@ -54,11 +58,6 @@ RUN pip install --upgrade pip setuptools
 # Install Python dependencies
 RUN pip install -r /app/requirements.txt
 
-# Install Playwright **without browsers** (since you install them manually inside the container)
-RUN playwright install --with-deps --dry-run
-
-# Install Playwright dependencies
-RUN playwright install-deps
 
 # Install Playwright browsers only (skip system deps since we handled them manually)
 RUN playwright install chromium firefox webkit
