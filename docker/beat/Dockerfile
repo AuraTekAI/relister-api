@@ -57,6 +57,12 @@ RUN pip install --upgrade pip setuptools
 # Install Python dependencies
 RUN pip install -r /app/requirements.txt
 
+# Install Playwright **without browsers** (since you install them manually inside the container)
+RUN playwright install --with-deps --dry-run
+
+# Install Playwright dependencies
+RUN playwright install-deps
+
 # Install Playwright browsers only (skip system deps since we handled them manually)
 RUN playwright install chromium firefox webkit
 
