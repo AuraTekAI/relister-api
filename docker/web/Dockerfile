@@ -39,11 +39,15 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcairo-gobject2 \
     libgtk-3-0 \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf2.0-0 || true \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the specific Playwright runtime dependencies that are missing
+RUN apt-get update && apt-get install -y \
     libdbus-1-3 \
     libatk-bridge2.0-0 \
     libatspi2.0-0 \
-    libxkbcommon0 || true \
+    libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment
