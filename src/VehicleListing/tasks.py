@@ -1,6 +1,6 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
-from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync, create_marketplace_listing_sync
+from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync
 from VehicleListing.models import VehicleListing, FacebookListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
 from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -151,7 +151,7 @@ def retry_failed_relistings(self):
             continue
 
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        listing_created, message = create_marketplace_listing_sync(relisting.listing, credentials.session_cookie)
+        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
         now = timezone.now()
         if listing_created:
             update_credentials_success(credentials)
@@ -179,63 +179,6 @@ def retry_failed_relistings(self):
     logging.info("Completed retrying failed relistings process.")
         
 
-def retry_failed_relistings_sync():
-    failed_relistings = list(RelistingFacebooklisting.objects.filter(
-        listing__status="completed",
-        listing__is_relist=True,
-        last_relisting_status=False,
-        status="failed"
-    ))
-    if not failed_relistings:
-        logger.info("No failed relistings found for the user {user.email}")
-        return
-
-    while failed_relistings:
-        relisting = failed_relistings.pop(0)
-        logger.info(f"Relisting failed for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-        credentials = FacebookUserCredentials.objects.filter(user=relisting.user).first()
-        if not credentials or credentials.session_cookie == {} or not credentials.status:
-            if credentials:
-                credentials.status = False
-                credentials.save()
-                send_status_reminder_email(credentials)
-            logger.warning(f"No valid credentials for user {relisting.user.email}")
-            continue
-        if relisting.user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
-            logger.info(f"Daily listing count limit reached for user {relisting.user.email}")
-            continue
-        if not should_create_listing(relisting.user):
-            logger.info(f"10-minute cooldown for user {relisting.user.email}")
-            failed_relistings.append(relisting)  # Re-queue for later
-            continue
-
-        time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-        listing_created, message = create_marketplace_listing(relisting.listing, credentials.session_cookie)
-        now = timezone.now()
-        if listing_created:
-            update_credentials_success(credentials)
-            relisting.status = "completed"
-            relisting.listing.has_images = False
-            relisting.listing.retry_count = 0
-            relisting.listing.save()
-            relisting.updated_at = now
-            relisting.last_relisting_status = False
-            relisting.relisting_date = now
-            relisting.save()
-            relisting.user.daily_listing_count += 1 
-            relisting.user.last_facebook_listing_time = now
-            relisting.user.save()
-            logger.info(f"Successfully relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-            time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-            logger.info(f"Checking the images upload status for the relisting {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-            image_verification(relisting,None)
-        else:
-            relisting.status = "failed"
-            relisting.updated_at = now
-            relisting.relisting_date = now
-            relisting.save()
-            logger.error(f"Failed to relisting the failed relisting for the user {relisting.user.email} and re-listing title {relisting.listing.year} {relisting.listing.make} {relisting.listing.model}")
-    logging.info("Completed retrying failed relistings process.")
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 def relist_facebook_marketplace_listing_task(self):
@@ -294,9 +237,9 @@ def relist_facebook_marketplace_listing_task(self):
         current_user=User.objects.filter(id=user.id).first()
         logger.info(f"Last facebook listing time: {current_user.last_facebook_listing_time} and last day time: {last_day_time}")
 
-        # if current_user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
-        #     logger.info(f"Daily listing count limit reached for user {user.email}")
-        #     continue
+        if current_user.daily_listing_count >= settings.MAX_DAILY_LISTINGS_COUNT:
+            logger.info(f"Daily listing count limit reached for user {user.email}")
+            continue
         search_query = f"{listing.year} {listing.make} {listing.model}"
         logger.info(f"Searching and deleting the listing {search_query} and listing price {relisting_price} and relisting date {relisting_date} for the user {user.email}")
         time.sleep(random.randint(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
@@ -358,9 +301,6 @@ def relist_facebook_marketplace_listing_task(self):
             #save the logs into the db  for review ---------------------------------------------------
             #--------------------------------------------------------------------------------
             #-----------------------------------------------------------------------------------
-
-    logger.info("Processing retrying failed relistings process.")
-    retry_failed_relistings_sync()
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
