@@ -214,13 +214,13 @@ def relist_facebook_marketplace_listing_task(self):
 
     vehicle_listings = VehicleListing.objects.filter(
         status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
-    )
+    ).order_by("listed_on")
     relistings = RelistingFacebooklisting.objects.filter(
         relisting_date__date__lte=seven_days_ago,
         listing__status="completed",listing__is_relist=True,
         last_relisting_status=False,
         status="completed"
-    )
+    ).order_by("relisting_date")
     listings_to_process = list(vehicle_listings) + list(relistings)
     logger.info(f"Found {len(listings_to_process)} 7 days old listings(completed) for Facebook Marketplace.")
 
