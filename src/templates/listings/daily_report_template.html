@@ -7,9 +7,11 @@
         .section { margin: 20px 0; }
         .metric { background-color: #e8f4fd; padding: 10px; margin: 5px 0; border-radius: 3px; }
         table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
         th { background-color: #f2f2f2; }
         .warning { color: #ff6b35; }
+        .active { color: #28a745; }
+        .inactive { color: #dc3545; }
     </style>
 </head>
 <body>
@@ -20,173 +22,52 @@
     </div>
 
     <div class="section">
-        <h3> Summary Metrics</h3>
-        <div class="metric"> Yesterday Successful Relistings: <strong>{{ relisted_count }}</strong></div>
-        <div class="metric"> Yesterday Failed Relistings: <strong>{{ failed_relistings_count }}</strong></div>
-        <div class="metric"> Total Successful Relistings: <strong>{{ total_successful_relistings }}</strong></div>
-        <div class="metric"> Total Failed Relistings: <strong>{{ total_failed_relistings }}</strong></div>
-        <div class="metric"> Total Listings: <strong>{{ total_active_listings_for_all_users }}</strong></div>
-        <div class="metric"> Total Pending Listings: <strong>{{ pending_count }}</strong></div>
-        <div class="metric"> Total Failed Listings: <strong>{{ failed_count }}</strong></div>
-        <div class="metric"> Total Sold Listings: <strong>{{ sold_count }}</strong></div>
-        <div class="metric"> Yesterday Listings: <strong>{{ active_count }}</strong></div>
-        <div class="metric"> Eligible for Relisting: <strong>{{ eligible_count }}</strong></div>
-        <div class="metric"> Approved Users: <strong>{{ approved_users_count }}</strong></div>
+        <h3>Summary Metrics</h3>
+        <div class="metric">Total Active Listings: <strong>{{ total_active_listings }}</strong></div>
+        <div class="metric">Total Pending Listings: <strong>{{ total_pending_listings }}</strong></div>
+        <div class="metric">Total Failed Listings: <strong>{{ total_failed_listings }}</strong></div>
+        <div class="metric">Yesterday New Listings: <strong>{{ yesterday_total_listings }}</strong></div>
+        <div class="metric">Yesterday Relistings: <strong>{{ yesterday_total_relistings }}</strong></div>
+        <div class="metric">Yesterday Failed Relistings: <strong>{{ yesterday_total_failed_relistings }}</strong></div>
+        <div class="metric">Approved Users: <strong>{{ approved_users_count }}</strong></div>
     </div>
-
-    {% if relisted_items %}
-    <div class="section">
-        <h3> Successful Relistings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Time</th></tr>
-            {% for item in relisted_items %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td>{{ item.timestamp }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if failed_relistings %}
-    <div class="section">
-        <h3> Failed Relistings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Error</th><th>Time</th></tr>
-            {% for item in failed_relistings %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td class="warning">{{ item.error_reason }}</td>
-                <td>{{ item.timestamp }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if active_listings %}
-    <div class="section">
-        <h3> Active Listings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Listed At</th></tr>
-            {% for item in active_listings %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td>{{ item.listed_at }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if pending_listings %}
-    <div class="section">
-        <h3> Pending Listings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Created At</th></tr>
-            {% for item in pending_listings %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td>{{ item.created_at }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if failed_listings %}
-    <div class="section">
-        <h3> Failed Listings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Failed At</th></tr>
-            {% for item in failed_listings %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td class="warning">{{ item.failed_at }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if sold_listings %}
-    <div class="section">
-        <h3> Sold Listings</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Sold At</th></tr>
-            {% for item in sold_listings %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td>{{ item.sold_at }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if eligible_items %}
-    <div class="section">
-        <h3> Eligible for Relisting</h3>
-        <table>
-            <tr><th>ID</th><th>Title</th><th>User</th><th>Price</th><th>Last Listed</th><th>Next Eligible</th></tr>
-            {% for item in eligible_items %}
-            <tr>
-                <td>{{ item.list_id }}</td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.user }}</td>
-                <td>${{ item.price }}</td>
-                <td>{{ item.last_listed }}</td>
-                <td class="warning">{{ item.next_eligible }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endif %}
 
     {% if user_statistics %}
     <div class="section">
-        <h3> User Statistics</h3>
+        <h3>User Statistics</h3>
         <table>
             <tr>
-                <th>Email</th><th>Dealership</th><th>Contact Person</th><th>Daily Count</th>
-                <th>Total Listings</th><th>Total Relistings</th><th>Yesterday Relistings</th>
-                <th>Yesterday Failed</th><th>Ready for Relisting</th><th>Active</th>
-                <th>Failed</th><th>Pending</th><th>Sold</th>
+                <th>Email</th>
+                <th>Dealership</th>
+                <th>Contact Person</th>
+                <th>Total Active</th>
+                <th>Pending</th>
+                <th>Failed</th>
+                <th>Yesterday Listings</th>
+                <th>Yesterday Relistings</th>
+                <th>Yesterday Failed Relistings</th>
+                <th>Total Failed Relistings</th>
+                <th>Total Relistings</th>
+                <th>Total Listing Count</th>
+                <th>Credential Status</th>
             </tr>
             {% for user in user_statistics %}
             <tr>
                 <td>{{ user.email }}</td>
                 <td>{{ user.dealership_name }}</td>
                 <td>{{ user.contact_person_name }}</td>
-                <td>{{ user.daily_listing_count }}</td>
-                <td>{{ user.total_listings }}</td>
-                <td>{{ user.total_relistings }}</td>
+                <td>{{ user.total_active_listings }}</td>
+                <td>{{ user.pending_listings }}</td>
+                <td>{{ user.failed_listings }}</td>
+                <td>{{ user.yesterday_listings }}</td>
                 <td>{{ user.yesterday_relistings }}</td>
                 <td>{{ user.yesterday_failed_relistings }}</td>
-                <td>{{ user.ready_for_relisting }}</td>
-                <td>{{ user.active_listings }}</td>
-                <td>{{ user.failed_listings }}</td>
-                <td>{{ user.pending_listings }}</td>
-                <td>{{ user.sold_listings }}</td>
+                <td>{{ user.total_failed_relistings }}</td>
+                <td>{{ user.total_relistings }}</td>
+                <td>{{ user.total_listing_count }}</td>
+                <td class="{% if user.credential_status == 'Active' %}active{% else %}inactive{% endif %}">
+                    {{ user.credential_status }}
+                </td>
             </tr>
             {% endfor %}
         </table>

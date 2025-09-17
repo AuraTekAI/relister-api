@@ -2240,166 +2240,153 @@ def search_facebook_listing_sync(credential, listings, relistings):
     Returns:
         None
     """
-    from concurrent.futures import ThreadPoolExecutor
-    
-    def _playwright_worker():
-        """Worker function that runs in a separate thread to avoid async context issues"""
-        try:
-            items = list(listings) if listings else []
-            items.extend(list(relistings) if relistings else [])
+    try:
+        items = list(listings) if listings else []
+        items.extend(list(relistings) if relistings else [])
+        
+        if not items:
+            logging.info(f"No items to process for user {credential.user.email}")
+            return None
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--start-maximized"])
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                storage_state=credential.session_cookie
+            )
+            page = context.new_page()
             
-            if not items:
-                logging.info(f"No items to process for user {credential.user.email}")
-                return None
-            
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--start-maximized"])
-                context = browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    storage_state=credential.session_cookie
-                )
-                page = context.new_page()
+            try:
+                page.goto("https://www.facebook.com/marketplace/you/selling", 
+                        wait_until="networkidle", timeout=30000)
+                random_sleep(2, 3)
                 
-                try:
-                    page.goto("https://www.facebook.com/marketplace/you/selling", 
-                            wait_until="networkidle", timeout=30000)
-                    random_sleep(2, 3)
-                    
-                    while items:
-                        item = items.pop(0)
-                        if not should_delete_listing(item.user):
-                            logging.info(f"5-minute cooldown for user {item.user.email}")
-                            items.append(item)  # Re-queue for later
-                            continue
-                            
-                        # Extract item details
-                        if hasattr(item, 'listing'):
-                            title = f"{item.listing.year} {item.listing.make} {item.listing.model}"
-                            price = str(item.listing.price)
-                            date = timezone.localtime(item.relisting_date).strftime("%d/%m")
-                        else:
-                            title = f"{item.year} {item.make} {item.model}"
-                            price = str(item.price)
-                            date = timezone.localtime(item.listed_on).strftime("%d/%m")
-                
-                        # Find search input
-                        search_input = page.locator(
-                            "input[type='text'][placeholder='Search your listings'], "
-                            "input[type='text'][aria-label='Search your listings']"
-                        ).first
-                        
-                        if not search_input.is_visible(timeout=5000):
-                            logging.error(f"Listing {title}: Search input not found")
-                            continue
-                        
-                        # Perform search
-                        logging.info(f"Searching for '{title}'")
-                        search_input.click()
-                        search_input.clear()
-                        search_input.fill(title)
-                        page.wait_for_timeout(3000)
-                        
-                        # Check for matches
-                        matches_count = get_count_of_elements_with_text(title, page)
-                        logging.info(f"Listing {title}: Found {matches_count} potential matches")
-                        
-                        if matches_count == 0:
-                            if page.locator("text='We didn't find anything'").is_visible():
-                                logging.info(f"Listing {title}: No results found (Facebook message displayed)")
-                            else:
-                                logging.info(f"No matches found for {title}")
-                            continue
-                        
-                        # Extract and verify listings
-                        elements = get_elements_with_text(title, page)
-                        price_digits = "".join(filter(str.isdigit, price))
-                        
-                        logging.info(f"Listing {title}: Extracted {len(elements)} elements for verification")
-                        for element in elements:
-                            try:
-                                element_title = element.get('title', '').strip()
-                                element_price = str(element.get('price', '')).strip()
-                                element_date = element.get('date', '')
-                                
-                                # Match criteria
-                                title_match = element_title.lower() == title.lower()
-                                price_match = element_price == price_digits
-                                date_match = element_date == date
-                                
-                                if title_match and price_match and date_match:
-                                    logging.info(f"listing {title} already exist, not update the listed date")
-                                    logging.info(f"Listing {title}: Found exact match - Title: '{element_title}', Price: ${element_price}, Date: {element_date}")
-                                    continue
-                                elif title_match and price_match:
-                                    logging.info(f"listing {title} already exist, updating the listed date")
-                                    logging.info(f"Listing {title}: Found match - Title: '{element_title}', Price: ${element_price}, Date: {element_date}")
-                                    if hasattr(item, 'listing'):
-                                        day, month = map(int, element_date.split('/'))
-                                        item.relisting_date = item.relisting_date.replace(day=day, month=month)
-                                        item.status="completed"
-                                        item.listing.save()
-                                        logging.info(f"Listing {title}: Updated the listed date")
-                                        credential.user.last_listing_time = timezone.now()
-                                        credential.user.save()
-                                    else:
-                                        day, month = map(int, element_date.split('/'))
-                                        item.listed_on = item.listed_on.replace(day=day, month=month)
-                                        item.status="completed"
-                                        item.save()
-                                        logging.info(f"Listing {title}: Updated the listed date")
-                                        credential.user.last_listing_time = timezone.now()
-                                        credential.user.save()
-                                else:
-                                    credential.user.last_listing_time = timezone.now()
-                                    credential.user.save()
-                                    logging.debug(f"Listing {title}: No match - Title match: {title_match}, Price match: {price_match}")
-                                    logging.info(f"Retry attempt for searching the listing in marketplace")
-                                    if hasattr(item, 'listing'):
-                                        if item.listing.retry_count < settings.MAX_RETRIES_ATTEMPTS:
-                                            item.listing.retry_count += 1
-                                            item.listing.save()
-                                            items.append(item)
-                                        else:
-                                            item.status = "duplicate"
-                                            item.save()
-                                            logging.error(f"Max retries reached for {title}, marking as duplicate")
-                                    else:
-                                        if item.retry_count < settings.MAX_RETRIES_ATTEMPTS:
-                                            item.retry_count += 1
-                                            item.save()
-                                            items.append(item)
-                                        else:
-                                            item.status = "action_needed"
-                                            item.save()
-                                            logging.error(f"Max retries reached for {title}, marking as action_needed")
-                                    continue
-                                    
-                            except Exception as e:
-                                logging.error(f"Listing {title}: Error processing element: {e}")
-                                continue
-                        
-                        logging.info(f"Listing {title}: not found in marketplace, retrying with search")
+                while items:
+                    item = items.pop(0)
+                    if not should_delete_listing(item.user):
+                        logging.info(f"5-minute cooldown for user {item.user.email}")
+                        items.append(item)  # Re-queue for later
                         continue
                         
-                finally:
-                    if browser:
-                        try:
-                            browser.close()
-                        except Exception as e:
-                            logging.warning(f"Error closing browser: {e}")
+                    # Extract item details
+                    if hasattr(item, 'listing'):
+                        title = f"{item.listing.year} {item.listing.make} {item.listing.model}"
+                        price = str(item.listing.price)
+                        date = timezone.localtime(item.relisting_date).strftime("%d/%m")
+                    else:
+                        title = f"{item.year} {item.make} {item.model}"
+                        price = str(item.price)
+                        date = timezone.localtime(item.listed_on).strftime("%d/%m")
+            
+                    # Find search input
+                    search_input = page.locator(
+                        "input[type='text'][placeholder='Search your listings'], "
+                        "input[type='text'][aria-label='Search your listings']"
+                    ).first
                     
-        except Exception as e:
-            logging.error(f"Error processing listing for user '{credential.user.email}': {e}")
-            raise
-    
-    # Run in a separate thread to completely isolate from Django's async context
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_playwright_worker)
-        try:
-            return future.result(timeout=300)  # 5 minute timeout
-        except Exception as e:
-            logging.error(f"ThreadPoolExecutor error: {e}")
-            raise
+                    if not search_input.is_visible(timeout=5000):
+                        logging.error(f"Listing {title}: Search input not found")
+                        continue
+                    
+                    # Perform search
+                    logging.info(f"Searching for '{title}'")
+                    search_input.click()
+                    search_input.clear()
+                    search_input.fill(title)
+                    page.wait_for_timeout(3000)
+                    
+                    # Check for matches
+                    matches_count = get_count_of_elements_with_text(title, page)
+                    logging.info(f"Listing {title}: Found {matches_count} potential matches")
+                    
+                    if matches_count == 0:
+                        if page.locator("text='We didn't find anything'").is_visible():
+                            logging.info(f"Listing {title}: No results found (Facebook message displayed)")
+                        else:
+                            logging.info(f"No matches found for {title}")
+                        continue
+                    
+                    # Extract and verify listings
+                    elements = get_elements_with_text(title, page)
+                    price_digits = "".join(filter(str.isdigit, price))
+                    
+                    logging.info(f"Listing {title}: Extracted {len(elements)} elements for verification")
+                    for element in elements:
+                        try:
+                            element_title = element.get('title', '').strip()
+                            element_price = str(element.get('price', '')).strip()
+                            element_date = element.get('date', '')
+                            
+                            # Match criteria
+                            title_match = element_title.lower() == title.lower()
+                            price_match = element_price == price_digits
+                            date_match = element_date == date
+                            
+                            if title_match and price_match and date_match:
+                                logging.info(f"listing {title} already exist, not update the listed date")
+                                logging.info(f"Listing {title}: Found exact match - Title: '{element_title}', Price: ${element_price}, Date: {element_date}")
+                                continue
+                            elif title_match and price_match:
+                                logging.info(f"listing {title} already exist, updating the listed date")
+                                logging.info(f"Listing {title}: Found match - Title: '{element_title}', Price: ${element_price}, Date: {element_date}")
+                                if hasattr(item, 'listing'):
+                                    day, month = map(int, element_date.split('/'))
+                                    item.relisting_date = item.relisting_date.replace(day=day, month=month)
+                                    item.status="completed"
+                                    item.listing.save()
+                                    logging.info(f"Listing {title}: Updated the listed date")
+                                    credential.user.last_listing_time = timezone.now()
+                                    credential.user.save()
+                                else:
+                                    day, month = map(int, element_date.split('/'))
+                                    item.listed_on = item.listed_on.replace(day=day, month=month)
+                                    item.status="completed"
+                                    item.save()
+                                    logging.info(f"Listing {title}: Updated the listed date")
+                                    credential.user.last_listing_time = timezone.now()
+                                    credential.user.save()
+                            else:
+                                credential.user.last_listing_time = timezone.now()
+                                credential.user.save()
+                                logging.debug(f"Listing {title}: No match - Title match: {title_match}, Price match: {price_match}")
+                                logging.info(f"Retry attempt for searching the listing in marketplace")
+                                if hasattr(item, 'listing'):
+                                    if item.listing.retry_count < settings.MAX_RETRIES_ATTEMPTS:
+                                        item.listing.retry_count += 1
+                                        item.listing.save()
+                                        items.append(item)
+                                    else:
+                                        item.status = "duplicate"
+                                        item.save()
+                                        logging.error(f"Max retries reached for {title}, marking as duplicate")
+                                else:
+                                    if item.retry_count < settings.MAX_RETRIES_ATTEMPTS:
+                                        item.retry_count += 1
+                                        item.save()
+                                        items.append(item)
+                                    else:
+                                        item.status = "action_needed"
+                                        item.save()
+                                        logging.error(f"Max retries reached for {title}, marking as action_needed")
+                                continue
+                                
+                        except Exception as e:
+                            logging.error(f"Listing {title}: Error processing element: {e}")
+                            continue
+                    
+                    logging.info(f"Listing {title}: not found in marketplace, retrying with search")
+                    continue
+                    
+            finally:
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception as e:
+                        logging.warning(f"Error closing browser: {e}")
+                
+    except Exception as e:
+        logging.error(f"Error processing listing for user '{credential.user.email}': {e}")
+        raise
 
 def find_and_delete_duplicate_listing_sync(credential, listings, relistings):
     """
@@ -2414,146 +2401,134 @@ def find_and_delete_duplicate_listing_sync(credential, listings, relistings):
     Returns:
         tuple: (success_count, error_count)
     """
-    from concurrent.futures import ThreadPoolExecutor
     
-    def _playwright_worker():
-        """Worker function that runs in a separate thread to avoid async context issues"""
-        try:
-            items = list(listings) if listings else []
-            items.extend(list(relistings) if relistings else [])
+    try:
+        items = list(listings) if listings else []
+        items.extend(list(relistings) if relistings else [])
+        
+        if not items:
+            logging.info(f"No items to process for user {credential.user.email}")
+            return 0, 0
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--start-maximized"])
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                storage_state=credential.session_cookie
+            )
+            page = context.new_page()
             
-            if not items:
-                logging.info(f"No items to process for user {credential.user.email}")
-                return 0, 0
-            
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--start-maximized"])
-                context = browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    storage_state=credential.session_cookie
-                )
-                page = context.new_page()
+            try:
+                page.goto("https://www.facebook.com/marketplace/you/selling", 
+                        wait_until="networkidle", timeout=30000)
+                random_sleep(2, 3)
                 
-                try:
-                    page.goto("https://www.facebook.com/marketplace/you/selling", 
-                            wait_until="networkidle", timeout=30000)
-                    random_sleep(2, 3)
-                    
-                    deleted_count = 0
-                    error_count = 0
-                    
-                    while items:
-                        item = items.pop(0)
-                        if not should_delete_listing(item.user):
-                            logging.info(f"5-minute cooldown for user {item.user.email}")
-                            items.append(item)  # Re-queue for later
+                deleted_count = 0
+                error_count = 0
+                
+                while items:
+                    item = items.pop(0)
+                    if not should_delete_listing(item.user):
+                        logging.info(f"5-minute cooldown for user {item.user.email}")
+                        items.append(item)  # Re-queue for later
+                        continue
+                        
+                    try:
+                        # Extract item details
+                        if hasattr(item, 'listing'):
+                            title = f"{item.listing.year} {item.listing.make} {item.listing.model}"
+                            price = str(item.listing.price)
+                            date = timezone.localtime(item.relisting_date).strftime("%d/%m")
+                        else:
+                            title = f"{item.year} {item.make} {item.model}"
+                            price = str(item.price)
+                            date = timezone.localtime(item.listed_on).strftime("%d/%m")
+                        
+                        logging.info(f"Processing duplicate deletion for: {title}")
+                        
+                        # Find and delete restricted listings
+                        restricted_listings = extract_restricted_listing_details(page, title)
+                        if not restricted_listings:
+                            logging.info(f"No duplicate listings found for {title}, skipping")
                             continue
-                            
-                        try:
-                            # Extract item details
-                            if hasattr(item, 'listing'):
-                                title = f"{item.listing.year} {item.listing.make} {item.listing.model}"
-                                price = str(item.listing.price)
-                                date = timezone.localtime(item.relisting_date).strftime("%d/%m")
-                            else:
-                                title = f"{item.year} {item.make} {item.model}"
-                                price = str(item.price)
-                                date = timezone.localtime(item.listed_on).strftime("%d/%m")
-                            
-                            logging.info(f"Processing duplicate deletion for: {title}")
-                            
-                            # Find and delete restricted listings
-                            restricted_listings = extract_restricted_listing_details(page, title)
-                            if not restricted_listings:
-                                logging.info(f"No duplicate listings found for {title}, skipping")
-                                continue
-                            
-                            verified_listings = verify_restricted_listing_matches(
-                                restricted_listings, title=title, price=price, listing_date=date
-                            )
-                            
-                            if verified_listings:
-                                target = verified_listings[0]
-                                if not target.get('image_url'):
-                                    logging.info(f"Listing {title} has no image URL, preparing for deletion")
-                                    target['image_url'] = None
-                                    
-                                success, message = delete_restricted_listings_without_images(page, target)
-                                if success:
-                                    # Update item status
-                                    if hasattr(item, 'listing'):
-                                        item.listing.status = "deleted"
-                                        item.listing.retry_count = 0
-                                        item.listing.save()
-                                    else:
-                                        item.status = "deleted"
-                                        item.retry_count = 0
-                                        item.save()
-                                    
-                                    # Update user timestamp
-                                    item.user.last_delete_listing_time = timezone.now()
-                                    item.user.save()
-                                    
-                                    deleted_count += 1
-                                    logging.info(f"Successfully deleted duplicate listing: {title}")
+                        
+                        verified_listings = verify_restricted_listing_matches(
+                            restricted_listings, title=title, price=price, listing_date=date
+                        )
+                        
+                        if verified_listings:
+                            target = verified_listings[0]
+                            if not target.get('image_url'):
+                                logging.info(f"Listing {title} has no image URL, preparing for deletion")
+                                target['image_url'] = None
+                                
+                            success, message = delete_restricted_listings_without_images(page, target)
+                            if success:
+                                # Update item status
+                                if hasattr(item, 'listing'):
+                                    item.listing.status = "deleted"
+                                    item.listing.retry_count = 0
+                                    item.listing.save()
                                 else:
-                                    logging.warning(f"Failed to delete duplicate: {title} - {message}")
-                                    error_count += 1
-                                    
-                                    # Update user timestamp even on failure to respect rate limiting
-                                    item.user.last_delete_listing_time = timezone.now()
-                                    item.user.save()
-                                    
-                                    # Handle retry logic
-                                    if hasattr(item, 'listing'):
-                                        if item.listing.retry_count < settings.MAX_RETRIES_ATTEMPTS:
-                                            item.listing.retry_count += 1
-                                            item.listing.save()
-                                            items.append(item)
-                                        else:
-                                            item.listing.status = "failed_deletion"
-                                            item.listing.save()
-                                            logging.error(f"Max retries reached for {title}, marking as failed_deletion")
-                                    else:
-                                        if item.retry_count < settings.MAX_RETRIES_ATTEMPTS:
-                                            item.retry_count += 1
-                                            item.save()
-                                            items.append(item)
-                                        else:
-                                            item.status = "failed_deletion"
-                                            item.save()
-                                            logging.error(f"Max retries reached for {title}, marking as failed_deletion")
+                                    item.status = "deleted"
+                                    item.retry_count = 0
+                                    item.save()
+                                
+                                # Update user timestamp
+                                item.user.last_delete_listing_time = timezone.now()
+                                item.user.save()
+                                
+                                deleted_count += 1
+                                logging.info(f"Successfully deleted duplicate listing: {title}")
                             else:
-                                logging.info(f"No verified listings found for {title}, skipping duplicate listing deletion")
-                                continue
-                            
-                            # Small delay between operations
-                            random_sleep(1, 2)
-                        
-                        except Exception as e:
-                            logging.error(f"Error processing {title}: {e}")
-                            error_count += 1
+                                logging.warning(f"Failed to delete duplicate: {title} - {message}")
+                                error_count += 1
+                                
+                                # Update user timestamp even on failure to respect rate limiting
+                                item.user.last_delete_listing_time = timezone.now()
+                                item.user.save()
+                                
+                                # Handle retry logic
+                                if hasattr(item, 'listing'):
+                                    if item.listing.retry_count < settings.MAX_RETRIES_ATTEMPTS:
+                                        item.listing.retry_count += 1
+                                        item.listing.save()
+                                        items.append(item)
+                                    else:
+                                        item.listing.status = "failed_deletion"
+                                        item.listing.save()
+                                        logging.error(f"Max retries reached for {title}, marking as failed_deletion")
+                                else:
+                                    if item.retry_count < settings.MAX_RETRIES_ATTEMPTS:
+                                        item.retry_count += 1
+                                        item.save()
+                                        items.append(item)
+                                    else:
+                                        item.status = "failed_deletion"
+                                        item.save()
+                                        logging.error(f"Max retries reached for {title}, marking as failed_deletion")
+                        else:
+                            logging.info(f"No verified listings found for {title}, skipping duplicate listing deletion")
                             continue
-                    
-                    logging.info(f"Duplicate deletion completed. Deleted: {deleted_count}, Errors: {error_count}")
-                    return deleted_count, error_count
                         
-                finally:
-                    if browser:
-                        try:
-                            browser.close()
-                        except Exception as e:
-                            logging.warning(f"Error closing browser: {e}")
+                        # Small delay between operations
+                        random_sleep(1, 2)
                     
-        except Exception as e:
-            logging.error(f"Error in duplicate deletion for user '{credential.user.email}': {e}")
-            raise
-    
-    # Run in a separate thread to completely isolate from Django's async context
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_playwright_worker)
-        try:
-            return future.result(timeout=600)  # 10 minute timeout for deletion operations
-        except Exception as e:
-            logging.error(f"ThreadPoolExecutor error in duplicate deletion: {e}")
-            raise
+                    except Exception as e:
+                        logging.error(f"Error processing {title}: {e}")
+                        error_count += 1
+                        continue
+                
+                logging.info(f"Duplicate deletion completed. Deleted: {deleted_count}, Errors: {error_count}")
+                return deleted_count, error_count
+                    
+            finally:
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception as e:
+                        logging.warning(f"Error closing browser: {e}")
+                
+    except Exception as e:
+        logging.error(f"Error in duplicate deletion for user '{credential.user.email}': {e}")
+        raise

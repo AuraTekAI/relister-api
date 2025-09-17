@@ -832,97 +832,45 @@ def send_daily_activity_report(self):
     
     today = timezone.now().date()
     yesterday = today - timedelta(days=1)
-    seven_days_ago = today - timedelta(days=7)
     
     try:
-        total_active_listings_for_all_users = VehicleListing.objects.filter(
-            status='completed',
-        ).count()
-        logger.info(f"Total active listings for all users: {total_active_listings_for_all_users}")
-        # Get successful relisted items for the day
-        relisted_items = RelistingFacebooklisting.objects.filter(
-            relisting_date__date=yesterday,
-            status='completed', last_relisting_status=False,
-            user__is_approved=True
-        ).select_related('listing', 'user')
-        logger.info(f"Found {len(relisted_items)} relisted items for yesterday.")
-        # Get failed relistings (yesterday)
-        failed_relistings = RelistingFacebooklisting.objects.filter(
-            relisting_date__date=yesterday,
-            status='failed',
-            user__is_approved=True
-        ).select_related('listing', 'user')
-        logger.info(f"Found {len(relisted_items)} relisted items and {len(failed_relistings)} failed relistings for yesterday.")
-        
-        # Get total successful relistings (all time)
-        total_successful_relistings = RelistingFacebooklisting.objects.filter(
-            status='completed',
-            user__is_approved=True
-        ).count()
-        
-        # Get total failed relistings (all time)
-        total_failed_relistings = RelistingFacebooklisting.objects.filter(
-            status='failed',
-            user__is_approved=True
-        ).count()
-        logger.info(f"Total successful relistings: {total_successful_relistings}, Total failed relistings: {total_failed_relistings}")
-        
-        # Get active listings (completed yesterday)
-        active_listings = VehicleListing.objects.filter(
-            status='completed',
-            listed_on__date=yesterday,
-            user__is_approved=True
-        ).select_related('user')
-        logger.info(f"Found {len(active_listings)} active listings for yesterday.")
-        
-        # Get pending listings
-        pending_listings = VehicleListing.objects.filter(
-            status='pending',
-            user__is_approved=True
-        ).select_related('user')
-        logger.info(f"Found {len(pending_listings)} pending listings.")
-        
-        # Get failed listings
-        failed_listings = VehicleListing.objects.filter(
-            status='failed',
-            user__is_approved=True
-        ).select_related('user')
-        logger.info(f"Found {len(failed_listings)} failed listings.")
-        
-        # Get sold listings (updated yesterday)
-        sold_listings = VehicleListing.objects.filter(
-            status='sold',
-            user__is_approved=True
-        ).select_related('user')
-        logger.info(f"Found {len(sold_listings)} sold listings for yesterday.")
-
-        # Get items eligible for relisting (6 days old)
-        vehicle_listings = VehicleListing.objects.filter(
-        status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
-        ).select_related('user')
-        logger.info(f"Found {len(vehicle_listings)} eligible items for relisting.")
-
-        relistings = RelistingFacebooklisting.objects.filter(
-        relisting_date__date__lte=seven_days_ago,
-        listing__status="completed",listing__is_relist=True,
-        last_relisting_status=False,
-        status="completed"
-        )
-        logger.info(f"Found {len(relistings)} relistings eligible for relisting.")
-        eligible_items_list = list(vehicle_listings) + [r.listing for r in relistings]
         # Get approved users
         approved_users = User.objects.filter(is_approved=True)
         
         # Generate per-user statistics
         user_stats = []
         for user in approved_users:
-            # Total listings (all time)
-            total_listings = VehicleListing.objects.filter(user=user).count()
+            # Get Facebook credentials status
+            try:
+                fb_credential = FacebookUserCredentials.objects.filter(user=user).first()
+                if fb_credential:
+                    credential_status = 'Active' if fb_credential.status else 'Inactive'
+                else:
+                    credential_status = 'Not Found'
+            except:
+                credential_status = 'Not Found'
             
-            # Total relistings (all time)
-            total_relistings = RelistingFacebooklisting.objects.filter(user=user,last_relisting_status=False).count()
+            # Total active listings (completed)
+            total_active_listings = VehicleListing.objects.filter(
+                user=user, status='completed'
+            ).count()
             
-            # Yesterday relistings (successful)
+            # Pending listings
+            pending_listings = VehicleListing.objects.filter(
+                user=user, status='pending'
+            ).count()
+            
+            # Failed listings
+            failed_listings = VehicleListing.objects.filter(
+                user=user, status='failed'
+            ).count()
+            
+            # Yesterday listings
+            yesterday_listings = VehicleListing.objects.filter(
+                user=user, status='completed', listed_on__date=yesterday
+            ).count()
+            
+            # Yesterday relistings
             yesterday_relistings = RelistingFacebooklisting.objects.filter(
                 user=user, relisting_date__date=yesterday, status='completed'
             ).count()
@@ -932,135 +880,47 @@ def send_daily_activity_report(self):
                 user=user, relisting_date__date=yesterday, status='failed'
             ).count()
             
-            # Ready for relisting (7+ days old)
-            user_eligible_listings = VehicleListing.objects.filter(
-                user=user, status="completed", listed_on__date__lte=seven_days_ago, is_relist=False
-            ).count()
-            user_eligible_relistings = RelistingFacebooklisting.objects.filter(
-                user=user, relisting_date__date__lte=seven_days_ago,
-                listing__status="completed", listing__is_relist=True,
-                last_relisting_status=False, status="completed"
-            ).count()
-            ready_for_relisting = user_eligible_listings + user_eligible_relistings
-            
-            # Active listings (current)
-            active_listings_count = VehicleListing.objects.filter(
-                user=user, status='completed'
-            ).count()
-            
-            # Failed listings (current)
-            failed_listings_count = VehicleListing.objects.filter(
+            # Total failed relistings
+            total_failed_relistings = RelistingFacebooklisting.objects.filter(
                 user=user, status='failed'
             ).count()
             
-            # Pending listings (current)
-            pending_listings_count = VehicleListing.objects.filter(
-                user=user, status='pending'
+            # Total relistings (successful)
+            total_relistings = RelistingFacebooklisting.objects.filter(
+                user=user, status='completed'
             ).count()
             
-            # Sold listings (current)
-            sold_listings_count = VehicleListing.objects.filter(
-                user=user, status='sold'
-            ).count()
+            # Total listing count
+            total_listing_count = VehicleListing.objects.filter(user=user).count()
             
             user_stats.append({
                 'email': user.email,
                 'dealership_name': user.dealership_name or 'N/A',
                 'contact_person_name': user.contact_person_name or 'N/A',
-                'daily_listing_count': user.daily_listing_count,
-                'total_listings': total_listings,
-                'total_relistings': total_relistings,
+                'total_active_listings': total_active_listings,
+                'pending_listings': pending_listings,
+                'failed_listings': failed_listings,
+                'yesterday_listings': yesterday_listings,
                 'yesterday_relistings': yesterday_relistings,
                 'yesterday_failed_relistings': yesterday_failed_relistings,
-                'ready_for_relisting': ready_for_relisting,
-                'active_listings': active_listings_count,
-                'failed_listings': failed_listings_count,
-                'pending_listings': pending_listings_count,
-                'sold_listings': sold_listings_count
+                'total_failed_relistings': total_failed_relistings,
+                'total_relistings': total_relistings,
+                'total_listing_count': total_listing_count,
+                'credential_status': credential_status
             })
         
-        # Prepare report data
+        # Prepare report data (no CSV, no detailed listings)
         report_data = {
-            'total_active_listings_for_all_users': total_active_listings_for_all_users,
             'report_date': yesterday.strftime('%Y-%m-%d'),
             'generated_at': timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'relisted_count': relisted_items.count(),
-            'failed_relistings_count': failed_relistings.count(),
-            'total_successful_relistings': total_successful_relistings,
-            'total_failed_relistings': total_failed_relistings,
-            'active_count': active_listings.count(),
-            'pending_count': pending_listings.count(),
-            'failed_count': failed_listings.count(),
-            'sold_count': sold_listings.count(),
-            'eligible_count': len(eligible_items_list),
             'approved_users_count': approved_users.count(),
-            'user_statistics': user_stats,
-            'relisted_items': [{
-                'list_id': r.listing.list_id,
-                'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
-                'user': r.user.email,
-                'price': r.listing.price,
-                'timestamp': r.relisting_date.strftime('%H:%M:%S')
-            } for r in relisted_items],
-            'failed_relistings': [{
-                'list_id': r.listing.list_id,
-                'title': f"{r.listing.year} {r.listing.make} {r.listing.model}",
-                'user': r.user.email,
-                'price': r.listing.price,
-                'error_reason': getattr(r, 'error_message', 'N/A'),
-                'timestamp': r.relisting_date.strftime('%H:%M:%S')
-            } for r in failed_relistings],
-            'active_listings': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email,
-                'price': item.price,
-                'listed_at': item.listed_on.strftime('%H:%M:%S') if item.listed_on else 'N/A'
-            } for item in active_listings],
-            'pending_listings': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email,
-                'price': item.price,
-                'created_at': item.created_at.strftime('%Y-%m-%d %H:%M:%S')
-            } for item in pending_listings],
-            'failed_listings': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email,
-                'price': item.price,
-                'failed_at': item.updated_at.strftime('%Y-%m-%d %H:%M:%S')
-            } for item in failed_listings],
-            'sold_listings': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email,
-                'price': item.price,
-                'sold_at': item.updated_at.strftime('%H:%M:%S')
-            } for item in sold_listings],
-            'eligible_items': [{
-                'list_id': item.list_id,
-                'title': f"{item.year} {item.make} {item.model}",
-                'user': item.user.email if hasattr(item, 'user') else 'N/A',
-                'price': item.price,
-                'last_listed': item.listed_on.strftime('%Y-%m-%d') if item.listed_on else 'N/A',
-                'next_eligible': (item.listed_on + timedelta(days=7)).strftime('%Y-%m-%d') if item.listed_on else 'N/A'
-            } for item in eligible_items_list],
-            'approved_users': [{
-                'email': user.email,
-                'dealership_name': user.dealership_name or 'N/A',
-                'contact_person_name': user.contact_person_name or 'N/A',
-                'daily_listing_count': user.daily_listing_count
-            } for user in approved_users]
+            'user_statistics': user_stats
         }
-        
-        # Generate CSV attachment
-        csv_content = _generate_csv_report(report_data)
         
         # Render HTML email
         html_content = render_to_string('listings/daily_report_template.html', report_data)
         
-        # Send email to admin
+        # Send email to admin (no CSV attachment)
         email = EmailMessage(
             subject=f"Daily Activity Report - {yesterday.strftime('%Y-%m-%d')}",
             body=html_content,
@@ -1068,7 +928,6 @@ def send_daily_activity_report(self):
             to=[ADMIN_EMAIL]
         )
         email.content_subtype = 'html'
-        email.attach(f'daily_report_{yesterday.strftime("%Y%m%d")}.csv', csv_content, 'text/csv')
         email.send()
         
         logger.info(f"Daily report sent to {ADMIN_EMAIL}")
@@ -1084,7 +943,7 @@ def cleanup_old_logs(self):
     """Remove log entries older than 30 days from log files, preserving newer entries"""
     logger.info("Starting log cleanup task")    
     log_directory = settings.LOG_DIR
-    cutoff_date = timezone.now() - timedelta(days=30)
+    cutoff_date = timezone.now() - timedelta(days=15)
     processed_files = 0
     total_lines_removed = 0
     
@@ -1117,7 +976,7 @@ def cleanup_high_retry_listings(self):
     
     try:
         # Get listings with retry_count >= 10
-        high_retry_listings = VehicleListing.objects.filter(retry_count__gte=10)
+        high_retry_listings = VehicleListing.objects.filter(retry_count__gte=15)
         deleted_count = high_retry_listings.count()
         
         if deleted_count == 0:
