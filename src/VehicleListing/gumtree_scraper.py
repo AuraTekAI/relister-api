@@ -114,7 +114,7 @@ def get_listings(url,user,import_url_instance):
                 exterior_colour=color,
                 interior_colour="Other",
                 description=enhanced_description,
-                images=[image.get("baseurl") for image in response_data.get("images", [])],
+                images=[image.get("xlarge") for image in response_data.get("images", [])],
                 condition="Excellent",
                 url=url,
                 location=location,
@@ -187,7 +187,7 @@ def get_gumtree_listing_details(listing_id):
             "title": response_data.get("adHeadingData", {}).get("title"),
             "price": int(response_data.get("adPriceData", {}).get("amount")),
             "description": enhanced_description,
-            "image": [image.get("baseurl") for image in response_data.get("images", [])],
+            "image": [image.get("xlarge") for image in response_data.get("images", [])],
             "location": location,
             "body_type": category_info.get("Body Type"),
             "fuel_type": category_info.get("Fuel Type"),
@@ -387,11 +387,11 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
-            if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=7) and not already_exists.is_relist):
+            if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=6) and not already_exists.is_relist):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.year} {already_exists.make} {already_exists.model} and price is {already_exists.price} and mileage is {already_exists.mileage} and location is {already_exists.location}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"result: {result}")
-                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")):
+                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and len(already_exists.images) == len(result.get("image")):
                     logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
                     logging.info(f"No need to update the listing {already_exists.list_id} details")
                     continue
@@ -419,10 +419,10 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
-            elif already_exists.status == "completed" and already_exists.is_relist and already_exists.listed_on < timezone.now() - timedelta(days=7):
+            elif already_exists.status == "completed" and already_exists.is_relist and already_exists.listed_on < timezone.now() - timedelta(days=6):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
-                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")):
+                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and len(already_exists.images) == len(result.get("image")):
                     logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
                     logging.info(f"No need to update the listing {already_exists.list_id} details")
                     continue
