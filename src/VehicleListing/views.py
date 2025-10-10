@@ -991,11 +991,10 @@ def get_facebook_session_status(request):
 def get_user_gumtree_profile_vehicle_listings(request):
     """Get vehicle listings from specific Gumtree profile URL"""
     user = request.user
-    print(request.headers)
-    gumtree_profile_url = request.headers.get('url')
+    gumtree_profile_url = request.GET.get('url')
     
     if not gumtree_profile_url:
-        return JsonResponse({'error': 'gumtree_profile_url header is required'}, status=400)
+        return JsonResponse({'error': 'url parameter is required'}, status=400)
     
     # Verify the profile belongs to the user
     gumtree_profile = GumtreeProfileListing.objects.filter(
