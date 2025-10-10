@@ -986,6 +986,38 @@ def get_facebook_session_status(request):
             return JsonResponse({'facebook_session_status': False}, status=200)
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_gumtree_profile_vehicle_listings(request):
+    """Get vehicle listings from specific Gumtree profile URL"""
+    user = request.user
+    print(request.headers)
+    gumtree_profile_url = request.headers.get('gumtree_profile_url')
+    
+    if not gumtree_profile_url:
+        return JsonResponse({'error': 'gumtree_profile_url header is required'}, status=400)
+    
+    # Verify the profile belongs to the user
+    gumtree_profile = GumtreeProfileListing.objects.filter(
+        user=user, 
+        url=gumtree_profile_url
+    ).first()
+    
+    if not gumtree_profile:
+        return JsonResponse({'error': 'Gumtree profile not found or does not belong to user'}, status=404)
+    
+    vehicle_listings = VehicleListing.objects.filter(
+        user=user, 
+        gumtree_profile=gumtree_profile
+    ).select_related('gumtree_profile').order_by('-updated_at')
+    
+    serializer = VehicleListingSerializer(vehicle_listings, many=True)
+    return JsonResponse({
+        'count': vehicle_listings.count(),
+        'gumtree_profile_url': gumtree_profile_url,
+        'results': serializer.data
+    }, status=200)
+
 
 
 def image_verification(relisting,vehicle_listing):
