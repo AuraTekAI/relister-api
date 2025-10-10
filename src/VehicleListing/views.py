@@ -992,7 +992,7 @@ def get_user_gumtree_profile_vehicle_listings(request):
     """Get vehicle listings from specific Gumtree profile URL"""
     user = request.user
     print(request.headers)
-    gumtree_profile_url = request.headers.get('gumtree_profile_url')
+    gumtree_profile_url = request.headers.get('url')
     
     if not gumtree_profile_url:
         return JsonResponse({'error': 'gumtree_profile_url header is required'}, status=400)
