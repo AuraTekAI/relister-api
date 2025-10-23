@@ -21,6 +21,7 @@ from django.conf import settings
 from django.utils import timezone
 import logging
 from relister.settings import MAX_RETRIES_ATTEMPTS
+from django.shortcuts import get_object_or_404
 
 logger = logging.getLogger('relister_views')
 
@@ -1007,6 +1008,7 @@ def get_user_gumtree_profile_vehicle_listings(request):
     
     vehicle_listings = VehicleListing.objects.filter(
         user=user, 
+        status="pending",
         gumtree_profile=gumtree_profile
     ).select_related('gumtree_profile').order_by('-updated_at')
     
@@ -1076,3 +1078,143 @@ def image_verification(relisting,vehicle_listing):
                 vehicle_listing.save()
         else:
             pass
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_vehicle_listing_listed_on(request):
+    """
+    Update the listed_on date for a specific vehicle listing
+    
+    Request Body:
+    {
+        "id": 123,
+        "listed_on": "2024-01-15T10:30:00Z"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "message": "Vehicle listing listed_on date updated successfully",
+        "data": {
+            "id": 123,
+            "listed_on": "2024-01-15T10:30:00Z"
+        }
+    }
+    """
+    try:
+        # Parse request data
+        data = json.loads(request.body)
+        
+        # Validate required fields
+        if 'id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing ID is required'
+            }, status=400)
+            
+        if 'listed_on' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'listed_on date is required'
+            }, status=400)
+        
+        vehicle_listing_id = data['id']
+        listed_on_date = data['listed_on']
+        
+        # Validate that the ID is a positive integer
+        try:
+            vehicle_listing_id = int(vehicle_listing_id)
+            if vehicle_listing_id <= 0:
+                raise ValueError("ID must be positive")
+        except (ValueError, TypeError):
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid vehicle listing ID format'
+            }, status=400)
+        
+        # Parse and validate the date
+        try:
+            # Parse ISO format datetime
+            if isinstance(listed_on_date, str):
+                listed_on_datetime = datetime.fromisoformat(listed_on_date.replace('Z', '+00:00'))
+            else:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'listed_on must be a valid ISO datetime string'
+                }, status=400)
+        except ValueError:
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid datetime format. Use ISO format (e.g., 2024-01-15T10:30:00Z)'
+            }, status=400)
+        
+        # Get the vehicle listing and check ownership
+        try:
+            vehicle_listing = get_object_or_404(VehicleListing, id=vehicle_listing_id, user=request.user)
+        except VehicleListing.DoesNotExist:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing not found or you do not have permission to update it'
+            }, status=404)
+        
+        # Update the listed_on field
+        vehicle_listing.listed_on = listed_on_datetime
+        vehicle_listing.status = "completed"
+        vehicle_listing.save()
+        
+        # Return success response
+        return JsonResponse({
+            'success': True,
+            'message': 'Vehicle listing listed_on date updated successfully',
+            'data': {
+                'id': vehicle_listing.id,
+                'listed_on': vehicle_listing.listed_on.isoformat() if vehicle_listing.listed_on else None,
+                'updated_at': vehicle_listing.updated_at.isoformat()
+            }
+        }, status=200)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON format in request body'
+        }, status=400)
+        
+    except Exception as e:
+        logger.error(f"Error updating vehicle listing listed_on date: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while updating the vehicle listing'
+        }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_old_vehicle_listings(request):
+    """Get vehicle listings that are older than specified days based on listed_on date"""
+    user = request.user
+    
+    # Get days parameter with validation
+    try:
+    
+        # Calculate the cutoff date
+        cutoff_date = timezone.now().date() - timedelta(days=7)
+        print(cutoff_date)
+        # Get user's vehicle listings older than the cutoff date
+        vehicle_listings = VehicleListing.objects.filter(
+        status="Completed", listed_on__date__lte=cutoff_date, is_relist=False,user=user
+    ).order_by("listed_on")
+        
+        # Serialize the listings using the existing serializer
+        serializer = VehicleListingSerializer(vehicle_listings, many=True)
+        
+        return JsonResponse({
+            'count': vehicle_listings.count(),
+            'results': serializer.data
+        }, status=200)
+    except Exception as e:
+        logger.error(f"Error retrieving old vehicle listings: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': f'An unexpected error occurred while retrieving old vehicle listings: {str(e)}'
+        }, status=500)
