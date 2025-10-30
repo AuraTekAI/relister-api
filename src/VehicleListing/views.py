@@ -1197,12 +1197,11 @@ def get_old_vehicle_listings(request):
     # Get days parameter with validation
     try:
     
-        # Calculate the cutoff date
-        cutoff_date = timezone.now().date() - timedelta(days=7)
-        print(cutoff_date)
-        # Get user's vehicle listings older than the cutoff date
+        # Calculate the cutoff datetime (10 minutes ago)
+        cutoff_datetime = timezone.now() - timedelta(minutes=10)
+        # Get user's vehicle listings older than the cutoff datetime
         vehicle_listings = VehicleListing.objects.filter(
-        status="Completed", listed_on__date__lte=cutoff_date, is_relist=False,user=user
+        status="Completed", listed_on__lte=cutoff_datetime, is_relist=False,user=user
     ).order_by("listed_on")
         
         # Serialize the listings using the existing serializer
