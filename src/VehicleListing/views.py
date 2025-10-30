@@ -1201,7 +1201,7 @@ def get_old_vehicle_listings(request):
         cutoff_datetime = timezone.now() - timedelta(minutes=10)
         # Get user's vehicle listings older than the cutoff datetime
         vehicle_listings = VehicleListing.objects.filter(
-        status="Completed", listed_on__lte=cutoff_datetime, is_relist=False,user=user
+        status="completed", listed_on__lte=cutoff_datetime, is_relist=False,user=user
     ).order_by("listed_on")
         
         # Serialize the listings using the existing serializer
