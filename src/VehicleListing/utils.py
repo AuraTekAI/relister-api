@@ -46,6 +46,42 @@ def send_status_reminder_email(facebook_user):
         logger.info(f"Status reminder email already sent to {facebook_user.user.email}")
 
 
+def send_user_approval_email(user):
+    """
+    Send approval notification email to newly approved users.
+    """
+    logger.info(f"Sending approval email to {user.email}")
+    
+    try:
+        # Check if user has a profile URL set up
+        has_profile_url = bool(user.gumtree_dealarship_url or user.facebook_dealership_url)
+        
+        # Render email template
+        html_content = render_to_string("listings/user_approval_notification.html", {
+            "user_name": user.contact_person_name or user.email,
+            "dealership_name": user.dealership_name or "N/A",
+            "user_email": user.email,
+            "has_profile_url": has_profile_url,
+        })
+        
+        # Send email
+        email = EmailMessage(
+            subject="🎉 Your Relister Account Has Been Approved!",
+            body=html_content,
+            from_email=EMAIL_HOST_USER,
+            to=[user.email]
+        )
+        email.content_subtype = "html"
+        email.send()
+        
+        logger.info(f"Approval email sent successfully to {user.email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error sending approval email to {user.email}: {e}")
+        return False
+
+
 
 def create_or_update_relisting_entry(listing, user, relisting=None):
     now = timezone.now()

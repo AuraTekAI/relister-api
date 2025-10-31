@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Facebook Session Status Reminder</title>
+    <title>Account Approved</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -25,7 +25,7 @@
         }
 
         .header {
-            background-color: #ff9800;
+            background-color: #4CAF50;
             padding: 30px 20px;
             text-align: center;
             color: white;
@@ -46,14 +46,15 @@
         }
 
         .info-box {
-            background-color: #fff3cd;
-            border-left: 4px solid #ff9800;
+            background-color: #e8f5e9;
+            border-left: 4px solid #4CAF50;
             padding: 15px;
             margin: 20px 0;
             border-radius: 5px;
         }
 
-        .content ul {
+        .content ul,
+        .content ol {
             padding-left: 20px;
         }
 
@@ -75,32 +76,41 @@
 <body>
     <div class="email-wrapper">
         <div class="header">
-            <h1> Facebook Session Expired</h1>
+            <h1>🎉 Account Approved!</h1>
         </div>
-
         <div class="content">
             <h2>Hello {{ user_name }},</h2>
 
-            <p>Your Facebook login session has expired. To continue listing vehicles on Facebook Marketplace without
-                interruption, please update your session.</p>
+            <p>Great news! Your Relister account has been approved by our admin team.</p>
 
             <div class="info-box">
-                <strong> Action Required:</strong> Your Facebook session is no longer valid. Please log in again and
-                save your session on Relister.
+                <strong>Your Dealership:</strong> {{ dealership_name }}<br>
+                <strong>Email:</strong> {{ user_email }}
             </div>
 
-            <h3>What You Need to Do:</h3>
+            <p>You can now:</p>
             <ul>
-                <li>Log in to your Facebook account</li>
-                <li>Ensure your session is valid and active</li>
-                <li>Save your login session on Relister</li>
-                <li>This will resume automatic listing operations</li>
+                <li>✅ Import and manage vehicle listings</li>
+                <li>✅ Automatically post to Facebook Marketplace</li>
+                <li>✅ Set up 7-day automatic relisting</li>
+                <li>✅ Track your listing performance</li>
             </ul>
 
-            <p><strong>Note:</strong> Your listings are currently paused until your session is updated. To avoid any
-                disruptions to your vehicle listings, please take action as soon as possible.</p>
+            {% if has_profile_url %}
+            <p><strong>Note:</strong> We've automatically started importing your existing listings from your profile.
+                You'll receive them shortly.</p>
+            {% endif %}
 
-            <p>Thank you for your prompt attention to this matter.</p>
+            <h3>Next Steps:</h3>
+            <ol>
+                <li>Set up your Facebook credentials for marketplace posting</li>
+                <li>Review and confirm your dealership information</li>
+                <li>Start creating or importing your vehicle listings</li>
+            </ol>
+
+            <p>If you have any questions or need assistance, please don't hesitate to contact our support team.</p>
+
+            <p>Welcome aboard!</p>
 
             <p>Best regards,<br>
                 <strong>The Relister Team</strong>

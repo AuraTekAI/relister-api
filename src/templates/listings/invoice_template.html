@@ -1,31 +1,188 @@
-<h2>Invoice #: {{ invoice_id }}</h2>
-<p>Date: {{ invoice_date }}</p>
-<p>Bill To: {{ user_name }}</p>
-<h3>Total Amount Due: {{ total_due }}</h3>
+<!DOCTYPE html>
+<html lang="en">
 
-<table border="1" cellpadding="5" cellspacing="0">
-    <thead>
-        <tr>
-            <th>Car ID</th>
-            <th>Car Name</th>
-            <th>Number of Times Relisted</th>
-            <th>Relist Dates & Times</th>
-            <th>Total</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for row in invoice_rows %}
-        <tr>
-            <td>{{ row.car_id }}</td>
-            <td>{{ row.car_name }}</td>
-            <td>{{ row.relist_count }}</td>
-            <td>{{ row.relist_dates }}</td>
-            <td>{{ row.total }}</td>
-        </tr>
-        {% endfor %}
-        <tr>
-            <td colspan="4"><strong>Total</strong></td>
-            <td><strong>{{ total_due }}</strong></td>
-        </tr>
-    </tbody>
-</table>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monthly Invoice - {{ invoice_id }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+        }
+
+        .email-wrapper {
+            max-width: 700px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            background-color: #2196F3;
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .content {
+            padding: 30px 20px;
+        }
+
+        .invoice-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #2196F3;
+        }
+
+        .invoice-info {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        th {
+            background-color: #2196F3;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        .total-row {
+            background-color: #e3f2fd;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .total-row td {
+            border-top: 2px solid #2196F3;
+            border-bottom: 2px solid #2196F3;
+        }
+
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .invoice-number {
+            font-size: 20px;
+            font-weight: bold;
+            color: #2196F3;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1> Monthly Invoice</h1>
+        </div>
+
+        <div class="content">
+            <div class="invoice-header">
+                <div>
+                    <h2 style="margin: 0; color: #2196F3;">INVOICE</h2>
+                    <p class="invoice-number">#{{ invoice_id }}</p>
+                </div>
+                <div style="text-align: right;">
+                    <p><strong>Date:</strong> {{ invoice_date }}</p>
+                    <p><strong>Bill To:</strong> {{ user_name }}</p>
+                </div>
+            </div>
+
+            <div class="invoice-info">
+                <strong> Billing Period Summary</strong><br>
+                This invoice covers all vehicle listings and relistings for the billing period.
+            </div>
+
+            <h3>Listing Details</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Car ID</th>
+                        <th>Vehicle</th>
+                        <th>Times Listed</th>
+                        <th>Listing Dates & Times</th>
+                        <th style="text-align: right;">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in invoice_rows %}
+                    <tr>
+                        <td>{{ row.car_id }}</td>
+                        <td><strong>{{ row.car_name }}</strong></td>
+                        <td style="text-align: center;">{{ row.relist_count }}</td>
+                        <td><small>{{ row.relist_dates }}</small></td>
+                        <td style="text-align: right;">{{ row.total }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="total-row">
+                        <td colspan="4" style="text-align: right;">
+                            <strong>TOTAL AMOUNT DUE:</strong>
+                        </td>
+                        <td style="text-align: right;">
+                            <strong>{{ total_due }}</strong>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <strong> Note:</strong> This invoice includes all successful listings and relistings. Each listing is
+                charged at the agreed rate.
+            </div>
+
+            <p>If you have any questions regarding this invoice, please don't hesitate to contact our billing
+                department.</p>
+
+            <p>Thank you for your business!</p>
+
+            <p>Best regards,<br>
+                <strong>The Relister Team</strong>
+            </p>
+        </div>
+
+        <div class="footer">
+            <p><strong>Relister</strong> - Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+            <p>If you need assistance, please contact our support team.</p>
+        </div>
+    </div>
+</body>
+
+</html>

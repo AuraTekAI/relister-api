@@ -1,77 +1,228 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Activity Report - {{ report_date }}</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .header { background-color: #f4f4f4; padding: 15px; border-radius: 5px; }
-        .section { margin: 20px 0; }
-        .metric { background-color: #e8f4fd; padding: 10px; margin: 5px 0; border-radius: 3px; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
-        th { background-color: #f2f2f2; }
-        .warning { color: #ff6b35; }
-        .active { color: #28a745; }
-        .inactive { color: #dc3545; }
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+        }
+
+        .email-wrapper {
+            max-width: 900px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            background-color: #2196F3;
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .content {
+            padding: 30px 20px;
+        }
+
+        .info-box {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .metric-card {
+            background-color: #e8f4fd;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .metric-card .value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #2196F3;
+            display: block;
+            margin: 10px 0;
+        }
+
+        .metric-card .label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 12px;
+        }
+
+        th {
+            background-color: #2196F3;
+            color: white;
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+
+        td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        .status-active {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .status-inactive {
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            border-top: 1px solid #e9ecef;
+        }
     </style>
 </head>
+
 <body>
-    <div class="header">
-        <h2>Daily Listing Activity Report</h2>
-        <p><strong>Date:</strong> {{ report_date }}</p>
-        <p><strong>Generated:</strong> {{ generated_at }}</p>
-    </div>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1> Daily Activity Report</h1>
+        </div>
 
-    <div class="section">
-        <h3>Summary Metrics</h3>
-        <div class="metric">Total Active Listings: <strong>{{ total_active_listings }}</strong></div>
-        <div class="metric">Total Pending Listings: <strong>{{ total_pending_listings }}</strong></div>
-        <div class="metric">Total Failed Listings: <strong>{{ total_failed_listings }}</strong></div>
-        <div class="metric">Yesterday New Listings: <strong>{{ yesterday_total_listings }}</strong></div>
-        <div class="metric">Yesterday Relistings: <strong>{{ yesterday_total_relistings }}</strong></div>
-        <div class="metric">Yesterday Failed Relistings: <strong>{{ yesterday_total_failed_relistings }}</strong></div>
-        <div class="metric">Approved Users: <strong>{{ approved_users_count }}</strong></div>
-    </div>
+        <div class="content">
+            <div class="info-box">
+                <strong> Report Date:</strong> {{ report_date }}<br>
+                <strong> Generated At:</strong> {{ generated_at }}
+            </div>
 
-    {% if user_statistics %}
-    <div class="section">
-        <h3>User Statistics</h3>
-        <table>
-            <tr>
-                <th>Email</th>
-                <th>Dealership</th>
-                <th>Contact Person</th>
-                <th>Total Active</th>
-                <th>Pending</th>
-                <th>Failed</th>
-                <th>Yesterday Listings</th>
-                <th>Yesterday Relistings</th>
-                <th>Yesterday Failed Relistings</th>
-                <th>Total Failed Relistings</th>
-                <th>Total Relistings</th>
-                <th>Total Listing Count</th>
-                <th>Credential Status</th>
-            </tr>
-            {% for user in user_statistics %}
-            <tr>
-                <td>{{ user.email }}</td>
-                <td>{{ user.dealership_name }}</td>
-                <td>{{ user.contact_person_name }}</td>
-                <td>{{ user.total_active_listings }}</td>
-                <td>{{ user.pending_listings }}</td>
-                <td>{{ user.failed_listings }}</td>
-                <td>{{ user.yesterday_listings }}</td>
-                <td>{{ user.yesterday_relistings }}</td>
-                <td>{{ user.yesterday_failed_relistings }}</td>
-                <td>{{ user.total_failed_relistings }}</td>
-                <td>{{ user.total_relistings }}</td>
-                <td>{{ user.total_listing_count }}</td>
-                <td class="{% if user.credential_status == 'Active' %}active{% else %}inactive{% endif %}">
-                    {{ user.credential_status }}
-                </td>
-            </tr>
-            {% endfor %}
-        </table>
+            <h3>Summary Metrics</h3>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <span class="value">{{ total_active_listings }}</span>
+                    <span class="label">Total Active Listings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ total_pending_listings }}</span>
+                    <span class="label">Total Pending Listings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ total_failed_listings }}</span>
+                    <span class="label">Total Failed Listings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ yesterday_total_listings }}</span>
+                    <span class="label">Yesterday New Listings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ yesterday_total_relistings }}</span>
+                    <span class="label">Yesterday Relistings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ yesterday_total_failed_relistings }}</span>
+                    <span class="label">Yesterday Failed Relistings</span>
+                </div>
+                <div class="metric-card">
+                    <span class="value">{{ approved_users_count }}</span>
+                    <span class="label">Approved Users</span>
+                </div>
+            </div>
+
+            {% if user_statistics %}
+            <h3>User Statistics</h3>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Dealership</th>
+                            <th>Contact</th>
+                            <th>Active</th>
+                            <th>Pending</th>
+                            <th>Failed</th>
+                            <th>Yesterday Listings</th>
+                            <th>Yesterday Relistings</th>
+                            <th>Yesterday Failed</th>
+                            <th>Total Failed Relistings</th>
+                            <th>Total Relistings</th>
+                            <th>Total Count</th>
+                            <th>Credentials</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in user_statistics %}
+                        <tr>
+                            <td>{{ user.email }}</td>
+                            <td>{{ user.dealership_name }}</td>
+                            <td>{{ user.contact_person_name }}</td>
+                            <td>{{ user.total_active_listings }}</td>
+                            <td>{{ user.pending_listings }}</td>
+                            <td>{{ user.failed_listings }}</td>
+                            <td>{{ user.yesterday_listings }}</td>
+                            <td>{{ user.yesterday_relistings }}</td>
+                            <td>{{ user.yesterday_failed_relistings }}</td>
+                            <td>{{ user.total_failed_relistings }}</td>
+                            <td>{{ user.total_relistings }}</td>
+                            <td>{{ user.total_listing_count }}</td>
+                            <td
+                                class="{% if user.credential_status == 'Active' %}status-active{% else %}status-inactive{% endif %}">
+                                {{ user.credential_status }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <p style="margin-top: 30px;">This report provides a comprehensive overview of yesterday's listing activity
+                across all approved users.</p>
+        </div>
+
+        <div class="footer">
+            <p><strong>Relister</strong> - Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+            <p>If you need assistance, please contact our support team.</p>
+        </div>
     </div>
-    {% endif %}
 </body>
+
 </html>
