@@ -943,7 +943,7 @@ def cleanup_old_logs(self):
     """Remove log entries older than 30 days from log files, preserving newer entries"""
     logger.info("Starting log cleanup task")    
     log_directory = settings.LOG_DIR
-    cutoff_date = timezone.now() - timedelta(days=15)
+    cutoff_date = timezone.now() - timedelta(days=7)
     processed_files = 0
     total_lines_removed = 0
     
