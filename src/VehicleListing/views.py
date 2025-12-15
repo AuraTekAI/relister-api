@@ -1191,26 +1191,89 @@ def update_vehicle_listing_listed_on(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_old_vehicle_listings(request):
-    """Get vehicle listings that are older than specified days based on listed_on date"""
+    """
+    Get vehicle listings that are older than specified time based on listed_on date
+    
+    Query Parameters:
+    - days: Integer (default: 7, minimum: 0)
+    - hours: Integer (default: 0, range: 0-24)
+    - minutes: Integer (default: 0, range: 0-60)
+    
+    Example: /old-listings/?days=5&hours=12&minutes=30
+    """
     user = request.user
     
-    # Get days parameter with validation
     try:
-    
-        # Calculate the cutoff datetime (10 minutes ago)
-        cutoff_date = timezone.now().date() - timedelta(days=7)
+        # Get and validate days parameter
+        days_str = request.GET.get('days', '7')
+        try:
+            days = int(days_str)
+            if days < 0:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Days must be 0 or greater'
+                }, status=400)
+        except ValueError:
+            return JsonResponse({
+                'success': False,
+                'error': 'Days must be a valid integer'
+            }, status=400)
+        
+        # Get and validate hours parameter
+        hours_str = request.GET.get('hours', '0')
+        try:
+            hours = int(hours_str)
+            if hours < 0 or hours > 24:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Hours must be between 0 and 24'
+                }, status=400)
+        except ValueError:
+            return JsonResponse({
+                'success': False,
+                'error': 'Hours must be a valid integer'
+            }, status=400)
+        
+        # Get and validate minutes parameter
+        minutes_str = request.GET.get('minutes', '0')
+        try:
+            minutes = int(minutes_str)
+            if minutes < 0 or minutes > 60:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Minutes must be between 0 and 60'
+                }, status=400)
+        except ValueError:
+            return JsonResponse({
+                'success': False,
+                'error': 'Minutes must be a valid integer'
+            }, status=400)
+        
+        # Calculate the cumulative cutoff datetime
+        cutoff_datetime = timezone.now() - timedelta(days=days, hours=hours, minutes=minutes)
+        
         # Get user's vehicle listings older than the cutoff datetime
         vehicle_listings = VehicleListing.objects.filter(
-        status="completed", listed_on__date__lte=cutoff_date, is_relist=False,user=user
-    ).order_by("listed_on")
+            status="completed", 
+            listed_on__lte=cutoff_datetime, 
+            is_relist=False,
+            user=user
+        ).order_by("listed_on")
         
         # Serialize the listings using the existing serializer
         serializer = VehicleListingSerializer(vehicle_listings, many=True)
         
         return JsonResponse({
             'count': vehicle_listings.count(),
+            'cutoff_applied': {
+                'days': days,
+                'hours': hours,
+                'minutes': minutes,
+                'cutoff_datetime': cutoff_datetime.isoformat()
+            },
             'results': serializer.data
         }, status=200)
+        
     except Exception as e:
         logger.error(f"Error retrieving old vehicle listings: {str(e)}")
         return JsonResponse({
