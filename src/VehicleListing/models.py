@@ -51,6 +51,7 @@ class VehicleListing(models.Model):
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
     gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
+    
     list_id = models.CharField(max_length=255)
     year = models.CharField(max_length=255,null=True,blank=True)
     body_type = models.CharField(max_length=255,null=True,blank=True)
@@ -76,6 +77,7 @@ class VehicleListing(models.Model):
     retry_count = models.IntegerField(default=0)
     listed_on = models.DateTimeField(null=True,blank=True)
     has_images=models.BooleanField(default=False)
+    sales = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

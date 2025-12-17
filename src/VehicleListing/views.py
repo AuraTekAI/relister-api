@@ -123,7 +123,25 @@ def import_url_from_gumtree(request):
             import_url_instance = ListingUrl.objects.create(url=url, user=user , status='pending')
             response = extract_facebook_listing_details(current_listing,credentials.session_cookie)
             if response and response.get("year") and response.get("make") and response.get("model") and response["images"]:
-                enhanced_description=format_car_description(response.get("description"))
+                # Get description and mileage
+                description = response.get("description")
+                mileage = response["driven"] if response["driven"] else current_listing["mileage"]
+                
+                # Add mileage to description if not already present
+                if mileage:
+                    mileage=int(''.join(filter(str.isdigit, mileage)))
+                    description_lines = description.splitlines()
+                    mileage_text = "Mileage: " + str(mileage) + "km"
+                    
+                    # Check if mileage is already in description (case-insensitive)
+                    if mileage_text.lower() not in description.lower():
+                        # Insert mileage as the first line
+                        description_lines.insert(0, mileage_text)
+                        
+                        # Update the description
+                        description = "\n".join(description_lines)
+                
+                enhanced_description=format_car_description(description)
                 vehicle_listing = VehicleListing.objects.create(
                     user=user,
                     list_id=list_id,
@@ -134,7 +152,7 @@ def import_url_from_gumtree(request):
                     color=None,
                     variant="Other",
                     make=response["make"],
-                    mileage=response["driven"] if response["driven"] else current_listing["mileage"],
+                    mileage=mileage,
                     model=response["model"],
                     price=response.get("price"),
                     transmission=response["transmission"],
@@ -597,7 +615,26 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
             if vehicleListing:
                 logger.info(f"Vehicle listing found for the user {user.email} and listing title: {vehicleListing.get('year')} {vehicleListing.get('make')} {vehicleListing.get('model')} and profile id: {seller_id}")
                 count+=1
-                enhanced_description=format_car_description(vehicleListing.get("description"))
+                
+                # Get description and mileage
+                description = vehicleListing.get("description")
+                mileage = vehicleListing["driven"] if vehicleListing["driven"] else current_listing["mileage"]
+                
+                # Add mileage to description if not already present
+                if mileage:
+                    mileage=int(''.join(filter(str.isdigit, mileage)))
+                    description_lines = description.splitlines()
+                    mileage_text = "Mileage: " + str(mileage) + "km"
+                    
+                    # Check if mileage is already in description (case-insensitive)
+                    if mileage_text.lower() not in description.lower():
+                        # Insert mileage as the first line
+                        description_lines.insert(0, mileage_text)
+                        
+                        # Update the description
+                        description = "\n".join(description_lines)
+                
+                enhanced_description=format_car_description(description)
                 VehicleListing.objects.create(
                     user=user,
                     facebook_profile=facebook_profile_listing_instance,
@@ -608,7 +645,7 @@ def facebook_profile_listings_thread(listings, credentials,user,seller_id,facebo
                     color=None,
                     variant="Other",
                     make=vehicleListing["make"],
-                    mileage=vehicleListing["driven"] if vehicleListing["driven"] else current_listing["mileage"],
+                    mileage=mileage,
                     model=vehicleListing["model"],
                     price=vehicleListing.get("price"),
                     transmission=vehicleListing["transmission"],
