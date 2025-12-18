@@ -1044,8 +1044,7 @@ def get_user_gumtree_profile_vehicle_listings(request):
         return JsonResponse({'error': 'Gumtree profile not found or does not belong to user'}, status=404)
     
     vehicle_listings = VehicleListing.objects.filter(
-        user=user, 
-        status="pending",
+        user=user,
         gumtree_profile=gumtree_profile
     ).select_related('gumtree_profile').order_by('-updated_at')
     
