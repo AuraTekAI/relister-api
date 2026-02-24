@@ -19,21 +19,11 @@ class VehiclelistingConfig(AppConfig):
             try:
                 # Define all required crontab times
                 crontab_map = {
-                    "twice_daily_9am_9pm": [
-                        CrontabSchedule.objects.get_or_create(minute='0', hour='9')[0],
-                        CrontabSchedule.objects.get_or_create(minute='0', hour='21')[0],
-                    ],
-                    "daily_12pm": CrontabSchedule.objects.get_or_create(minute='0', hour='12')[0],
-                    "daily_4pm": CrontabSchedule.objects.get_or_create(minute='0', hour='16')[0],
                     "daily_6am": CrontabSchedule.objects.get_or_create(minute='0', hour='6')[0],
-                    "daily_5am": CrontabSchedule.objects.get_or_create(minute='0', hour='5')[0],
+                    "twice_daily_3am_8am_utc": CrontabSchedule.objects.get_or_create(minute='0', hour='3,8')[0],
                     "monthly_4am": CrontabSchedule.objects.get_or_create(minute='0', hour='4', day_of_month='last')[0],
-                    "daily_6pm": CrontabSchedule.objects.get_or_create(minute='0', hour='18')[0],
-                    "daily_3am": CrontabSchedule.objects.get_or_create(minute='0', hour='3')[0],
                     "daily_2am": CrontabSchedule.objects.get_or_create(minute='0', hour='2')[0],
                     "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
-                    "daily_12am": CrontabSchedule.objects.get_or_create(minute='0', hour='0')[0],
-                    "daily_10pm": CrontabSchedule.objects.get_or_create(minute='0', hour='22')[0],
                 }
 
                 tasks = [
@@ -67,7 +57,7 @@ class VehiclelistingConfig(AppConfig):
                     {
                         "name": "Check_Gumtree_Profile_Re-Listings",
                         "task": "VehicleListing.tasks.check_gumtree_profile_relisting_task",
-                        "crontab": crontab_map["daily_5am"],
+                        "crontab": crontab_map["twice_daily_3am_8am_utc"],
                     },
                     {
                         "name": "Send_invoices_to_user",
