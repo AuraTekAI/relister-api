@@ -79,7 +79,10 @@ class RegisterView(APIView):
                     'id': user.id,
                     'email': user.email,
                     'dealership_name': user.dealership_name,
+                    'dealership_license_number': user.dealership_license_number,
+                    'dealership_license_phone_number': user.dealership_license_phone_number,
                     'contact_person_name': user.contact_person_name,
+                    'phone_number': user.phone_number,
                 },
                 'tokens': {
                     'refresh': str(refresh),

@@ -16,7 +16,8 @@ class UserListSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'is_superuser', 'is_approved', 
-            'dealership_name', 'contact_person_name', 'phone_number', 
+            'dealership_name', 'dealership_license_number', 'dealership_license_phone_number',
+            'contact_person_name', 'phone_number', 
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'password', 'confirm_password'
         ]
@@ -96,10 +97,17 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('email', 'password', 'confirm_password', 'dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url')
+        fields = (
+            'email', 'password', 'confirm_password',
+            'dealership_name', 'dealership_license_number', 'dealership_license_phone_number',
+            'contact_person_name', 'phone_number',
+            'gumtree_dealarship_url', 'facebook_dealership_url'
+        )
         extra_kwargs = {
             'email': {'required': True},
             'dealership_name': {'required': True},
+            'dealership_license_number': {'required': True},
+            'dealership_license_phone_number': {'required': True},
             'contact_person_name': {'required': True},
             'phone_number': {'required': True},
         }
@@ -157,6 +165,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'id': user.id,
                 'email': user.email,
                 'dealership_name': user.dealership_name,
+                'dealership_license_number': user.dealership_license_number,
+                'dealership_license_phone_number': user.dealership_license_phone_number,
                 'contact_person_name': user.contact_person_name,
                 'phone_number': user.phone_number,
                 'gumtree_dealarship_url': user.gumtree_dealarship_url,
