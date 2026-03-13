@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Free Trial Has Ended</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f4f9; }
+        .email-wrapper { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background-color: #c0392b; padding: 30px 20px; text-align: center; color: white; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .header p { margin: 8px 0 0; font-size: 14px; opacity: 0.9; }
+        .content { padding: 30px 20px; }
+        .content h2 { color: #333; margin-top: 0; }
+        .expired-box { background-color: #fdedec; border-left: 4px solid #c0392b; padding: 15px 20px; margin: 20px 0; border-radius: 5px; }
+        .expired-box strong { color: #c0392b; }
+        .what-changed { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 15px 20px; margin: 20px 0; border-radius: 5px; }
+        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #666; border-top: 1px solid #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Your Free Trial Has Ended</h1>
+            <p>Subscribe now to restore full access</p>
+        </div>
+        <div class="content">
+            <h2>Hi {{ user_name }},</h2>
+
+            <p>Your 30-day free trial for <strong>{{ dealership_name }}</strong> has now ended.</p>
+
+            <div class="expired-box">
+                <strong>Your trial expired on: {{ trial_end_date }}</strong><br>
+                Your extension access has been paused and automatic relisting has stopped.
+            </div>
+
+            <div class="what-changed">
+                <strong>What's changed:</strong>
+                <ul style="margin: 8px 0; padding-left: 20px;">
+                    <li>Chrome extension access: <strong>Paused</strong></li>
+                    <li>Automatic relisting: <strong>Stopped</strong></li>
+                    <li>Dashboard access: <strong>Still active</strong> (you can log in and subscribe)</li>
+                </ul>
+            </div>
+
+            <p>To restore full access, log in to your dashboard and choose a subscription plan. Your listings and data are safe — they'll resume the moment you subscribe.</p>
+
+            <p>No charges are made automatically. You choose your plan and subscribe when you're ready.</p>
+
+            <p>If you have any questions, contact our support team.</p>
+
+            <p>The Relister Team</p>
+        </div>
+        <div class="footer">
+            <p><strong>Relister</strong> – Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

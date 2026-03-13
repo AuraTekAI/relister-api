@@ -107,12 +107,64 @@ class RelistingFacebooklisting(models.Model):
     
 
 class Invoice(models.Model):
-    invoice_id = models.CharField(max_length=100, unique=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    details = models.TextField()
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    STATUS_CHOICES = [
+        ('paid', 'Paid'),
+        ('unpaid', 'Unpaid'),
+        ('overdue', 'Overdue'),
+    ]
+
+    # Sequential invoice number, e.g. INV-2025-0001
+    invoice_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    # Legacy field kept for backward compatibility with old invoice records
+    invoice_id = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='invoices')
+    # FK to payments.Subscription — set via string reference to avoid circular imports
+    subscription = models.ForeignKey(
+        'payments.Subscription',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='billing_invoices',
+    )
+    billing_period_start = models.DateTimeField(null=True, blank=True)
+    billing_period_end = models.DateTimeField(null=True, blank=True)
+
+    # Snapshots at billing time (plan may change later)
+    plan_name = models.CharField(max_length=100, blank=True, default='')
+    base_plan_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    included_listings = models.IntegerField(default=0)
+    relist_cycles = models.IntegerField(default=4)
+
+    # Overage
+    overage_listings = models.IntegerField(default=0)
+    overage_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    overage_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # Discount
+    discount_code = models.ForeignKey(
+        'payments.DiscountCode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='billing_invoices',
+    )
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # Totals
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    gst_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Legacy details field kept for old invoice records
+    details = models.TextField(null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='unpaid')
+    stripe_invoice_id = models.CharField(max_length=255, blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
-        return f"{self.invoice_id}"
+        return f"{self.invoice_number or self.invoice_id}"

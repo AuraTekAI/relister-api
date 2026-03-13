@@ -19,87 +19,39 @@ class VehiclelistingConfig(AppConfig):
             try:
                 # Define all required crontab times
                 crontab_map = {
-                    "daily_6am": CrontabSchedule.objects.get_or_create(minute='0', hour='6')[0],
                     "twice_daily_3am_8am_utc": CrontabSchedule.objects.get_or_create(minute='0', hour='3,8')[0],
                     "monthly_4am": CrontabSchedule.objects.get_or_create(minute='0', hour='4', day_of_month='last')[0],
                     "daily_2am": CrontabSchedule.objects.get_or_create(minute='0', hour='2')[0],
                     "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
+                    "daily_5am": CrontabSchedule.objects.get_or_create(minute='0', hour='5')[0],
                 }
 
                 tasks = [
-                    # 9am
                     # {
-                    #     "name": "Create_Pending_Facebook_Listings_Morning",
-                    #     "task": "VehicleListing.tasks.create_pending_facebook_marketplace_listing_task",
-                    #     "crontab": crontab_map["twice_daily_9am_9pm"][0],
-                    # },
-                    # # 9pm
-                    # {
-                    #     "name": "Create_Pending_Facebook_Listings_Evening",
-                    #     "task": "VehicleListing.tasks.create_pending_facebook_marketplace_listing_task",
-                    #     "crontab": crontab_map["twice_daily_9am_9pm"][1],
-                    # },
-                    # {
-                    #     "name": "Relist_7_Days_Facebook_Listings",
-                    #     "task": "VehicleListing.tasks.relist_facebook_marketplace_listing_task",
-                    #     "crontab": crontab_map["daily_12pm"],
-                    # },
-                    # {
-                    #     "name": "Create_Failed_Facebook_Listings",
-                    #     "task": "VehicleListing.tasks.create_failed_facebook_marketplace_listing_task",
-                    #     "crontab": crontab_map["daily_4pm"],
+                    #     "name": "Send_Daily_Activity_Report",
+                    #     "task": "VehicleListing.tasks.send_daily_activity_report",
+                    #     "crontab": crontab_map["daily_2am"],
                     # },
                     {
-                        "name": "Check_Facebook_Profile_Re-Listings",
-                        "task": "VehicleListing.tasks.check_facebook_profile_relisting_task",
-                        "crontab": crontab_map["daily_6am"],
+                        "name": "Clean_30_days_Old_logs",
+                        "task": "VehicleListing.tasks.cleanup_old_logs",
+                        "crontab": crontab_map["daily_1am"],
                     },
                     {
                         "name": "Check_Gumtree_Profile_Re-Listings",
                         "task": "VehicleListing.tasks.check_gumtree_profile_relisting_task",
                         "crontab": crontab_map["twice_daily_3am_8am_utc"],
                     },
-                    {
-                        "name": "Send_invoices_to_user",
-                        "task": "VehicleListing.tasks.generate_and_send_monthly_invoices",
-                        "crontab": crontab_map["monthly_4am"],
-                    },
                     # {
-                    #     "name": "Check_Images_Upload_Status",
-                    #     "task": "VehicleListing.tasks.check_images_upload_status",
-                    #     "crontab": crontab_map["daily_6pm"],
-                    # },
-                    # {
-                    #     "name": "Reset_Listing_Count_for_Users",
-                    #     "task": "VehicleListing.tasks.reset_listing_count_for_users_task",
-                    #     "crontab": crontab_map["daily_3am"],
+                    #     "name": "Send_invoices_to_user",
+                    #     "task": "VehicleListing.tasks.generate_and_send_monthly_invoices",
+                    #     "crontab": crontab_map["monthly_4am"],
                     # },
                     {
-                        "name": "Send_Daily_Activity_Report",
-                        "task": "VehicleListing.tasks.send_daily_activity_report",
-                        "crontab": crontab_map["daily_2am"],
+                        "name": "Check_Trial_Expiry",
+                        "task": "VehicleListing.tasks.check_trial_expiry_task",
+                        "crontab": crontab_map["daily_5am"],
                     },
-                    {
-                        "name": "Clean_30_days_Old_logs",
-                        "task": "VehicleListing.tasks.cleanup_old_logs",
-                        "crontab": crontab_map["daily_1am"],
-                    },
-                    # {
-                    #     "name": "Delete_high_retry_listings",
-                    #     "task": "VehicleListing.tasks.cleanup_high_retry_listings",
-                    #     "crontab": crontab_map["daily_12am"],
-                    # },
-                    # {
-                    #     "name": "Remove_Duplicate_Listings",
-                    #     "task": "VehicleListing.tasks.remove_duplicate_listings_task",
-                    #     "crontab": crontab_map["daily_10pm"],
-                    # },
-                    # {
-                    #     "name": "Retry_Failed_Re_Listings",
-                    #     "task": "VehicleListing.tasks.retry_failed_relistings",
-                    #     "crontab": crontab_map["daily_3am"],
-                    # },
-                    
                 ]
 
                 for t in tasks:

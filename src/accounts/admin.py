@@ -11,6 +11,8 @@ class UserAdmin(UserAdmin):
         "email",
         "dealership_name",
         "contact_person_name",
+        "account_status",
+        "trial_end_date",
         "last_login",
         "is_superuser",
         "is_approved",
@@ -23,8 +25,9 @@ class UserAdmin(UserAdmin):
     search_fields = ("email", "dealership_name", "contact_person_name", "is_approved")
     # Define the fields that will be editable on the user change form in the admin
     fieldsets = (
-        (None, {'fields': ('email', 'password', 'is_approved', 'daily_listing_count', 'last_facebook_listing_time', 'last_delete_listing_time','last_images_check_status_time')}),
-        ('Personal Info', {'fields': ['dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url']}),
+        (None, {'fields': ('email', 'password', 'is_approved', 'daily_listing_count', 'last_facebook_listing_time', 'last_delete_listing_time', 'last_images_check_status_time')}),
+        ('Personal Info', {'fields': ['first_name', 'last_name', 'dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url']}),
+        ('Subscription', {'fields': ('account_status', 'trial_start_date', 'trial_end_date', 'trial_used')}),
         ('Permissions', {'fields': ('is_superuser', 'is_staff', 'is_active', 'groups', 'user_permissions')}),
         ('Important Dates', {'fields': ('last_login',)}),
     )
@@ -32,7 +35,7 @@ class UserAdmin(UserAdmin):
     list_filter = ("is_superuser", "groups")
 
     add_fieldsets = (
-        (None, {"classes": ("wide",), "fields": ("email", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved",)}),
+        (None, {"classes": ("wide",), "fields": ("email", "first_name", "last_name", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved", "account_status")}),
         ("Security", {"fields": ("password1", "password2")}),
         (
             "Permissions",

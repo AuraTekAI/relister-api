@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Free Trial Ends in 4 Days</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f4f9; }
+        .email-wrapper { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background-color: #e67e22; padding: 30px 20px; text-align: center; color: white; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .header p { margin: 8px 0 0; font-size: 14px; opacity: 0.9; }
+        .content { padding: 30px 20px; }
+        .content h2 { color: #333; margin-top: 0; }
+        .urgent-box { background-color: #fef0e6; border-left: 4px solid #e67e22; padding: 15px 20px; margin: 20px 0; border-radius: 5px; }
+        .urgent-box strong { color: #e67e22; }
+        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #666; border-top: 1px solid #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Only 4 Days Left on Your Trial</h1>
+            <p>Don't lose access to Relister</p>
+        </div>
+        <div class="content">
+            <h2>Hi {{ user_name }},</h2>
+
+            <p>Time is running out! Your free trial for <strong>{{ dealership_name }}</strong> ends very soon.</p>
+
+            <div class="urgent-box">
+                <strong>Trial expires on: {{ trial_end_date }}</strong><br>
+                After this date, automatic relisting will stop and your Chrome extension access will be revoked.
+            </div>
+
+            <p>Subscribe to a plan now to ensure your listings keep relisting without any interruption.</p>
+
+            <p>Remember — no automatic charge is made. You choose your plan and subscribe when ready.</p>
+
+            <p>Need help deciding which plan suits your dealership? Contact our support team.</p>
+
+            <p>The Relister Team</p>
+        </div>
+        <div class="footer">
+            <p><strong>Relister</strong> – Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
