@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     # User defined apps
     'accounts',
     'VehicleListing',
+    'payments',
 
     # Third party apps
     "django_celery_beat",
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "drf_yasg",
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'django_filters',
     
 ]
@@ -63,12 +65,12 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "relister.urls"
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(weeks=2),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(weeks=2),
     "ROTATE_REFRESH_TOKENS": True,
 }
 REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.AllowAny",),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "UNAUTHENTICATED_USER": None,
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -81,6 +83,17 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
         "rest_framework.filters.SearchFilter",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "20/minute",
+        "user": "200/minute",
+        "login": "5/minute",
+        "register": "10/hour",
+        "password_reset": "5/hour",
+    },
 }
 TEMPLATES = [
     {
@@ -161,6 +174,13 @@ USE_TZ = True
 
 ZENROWS_API_KEY = env('ZENROWS_API_KEY')
 
+STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
+STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY')
+STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
+STRIPE_SUCCESS_URL = env('STRIPE_SUCCESS_URL')
+STRIPE_CANCEL_URL = env('STRIPE_CANCEL_URL')
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
@@ -218,12 +238,12 @@ REDIS_PASSWORD = env('REDIS_PASSWORD')
 REDIS_URL = env('REDIS_URL')
 
 # CORS Settings
-CORS_ALLOW_ALL_ORIGINS = True  # Only use this for development
+CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React default port
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
-]
+])
 
 # Optional: If you need to allow specific HTTP methods
 CORS_ALLOW_METHODS = [
@@ -346,4 +366,14 @@ SIMPLE_DELAY_START_TIME = int(env('SIMPLE_DELAY_START_TIME'))
 SIMPLE_DELAY_END_TIME = int(env('SIMPLE_DELAY_END_TIME'))
 DELAY_START_TIME_FOR_LOADING_PAGE = int(env('DELAY_START_TIME_FOR_LOADING_PAGE'))
 DELAY_END_TIME_FOR_LOADING_PAGE = int(env('DELAY_END_TIME_FOR_LOADING_PAGE'))
+
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'check-trial-expiry-daily': {
+        'task': 'VehicleListing.tasks.check_trial_expiry_task',
+        # Runs every day at 00:05 UTC (just after midnight)
+        'schedule': crontab(hour=0, minute=5),
+    },
+}
 

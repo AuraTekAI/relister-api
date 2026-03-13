@@ -267,6 +267,72 @@ def _clean_log_file(file_path, cutoff_date):
     return lines_removed
 
 
+def send_welcome_email(user):
+    """
+    Send welcome email to a newly registered trial user.
+    """
+    logger.info(f"Sending welcome email to {user.email}")
+    try:
+        trial_end = user.trial_end_date.strftime('%d %B %Y') if user.trial_end_date else 'N/A'
+        trial_start = user.trial_start_date.strftime('%d %B %Y') if user.trial_start_date else 'N/A'
+        html_content = render_to_string('listings/welcome_trial.html', {
+            'user_name': user.first_name or user.contact_person_name or user.email,
+            'dealership_name': user.dealership_name or 'N/A',
+            'user_email': user.email,
+            'trial_start_date': trial_start,
+            'trial_end_date': trial_end,
+        })
+        email = EmailMessage(
+            subject='Welcome to Relister – Your Free Trial Has Started',
+            body=html_content,
+            from_email=EMAIL_HOST_USER,
+            to=[user.email],
+        )
+        email.content_subtype = 'html'
+        email.send()
+        logger.info(f"Welcome email sent to {user.email}")
+    except Exception as e:
+        logger.error(f"Error sending welcome email to {user.email}: {e}")
+
+
+def send_trial_expiry_notification(user, days_remaining):
+    """
+    Send trial expiry warning email.
+    days_remaining: 14, 4, or 0 (expired)
+    """
+    logger.info(f"Sending trial expiry ({days_remaining}d) email to {user.email}")
+    try:
+        trial_end = user.trial_end_date.strftime('%d %B %Y') if user.trial_end_date else 'N/A'
+        context = {
+            'user_name': user.first_name or user.contact_person_name or user.email,
+            'dealership_name': user.dealership_name or 'N/A',
+            'trial_end_date': trial_end,
+        }
+
+        if days_remaining == 14:
+            template = 'listings/trial_expiry_14days.html'
+            subject = 'Your Relister free trial ends in 14 days – Choose a plan to continue'
+        elif days_remaining == 4:
+            template = 'listings/trial_expiry_4days.html'
+            subject = "Your Relister free trial ends in 4 days – Don't lose access"
+        else:
+            template = 'listings/trial_expired.html'
+            subject = 'Your Relister free trial has ended – Subscribe now to keep relisting'
+
+        html_content = render_to_string(template, context)
+        email = EmailMessage(
+            subject=subject,
+            body=html_content,
+            from_email=EMAIL_HOST_USER,
+            to=[user.email],
+        )
+        email.content_subtype = 'html'
+        email.send()
+        logger.info(f"Trial expiry ({days_remaining}d) email sent to {user.email}")
+    except Exception as e:
+        logger.error(f"Error sending trial expiry email to {user.email}: {e}")
+
+
 def send_missing_listing_notification(listing_id, year, make, model, listed_on, price, user_email):
     """Send email notification when listing not found on Facebook"""
     logger.info(f"Sending missing listing notification for {year} {make} {model}")

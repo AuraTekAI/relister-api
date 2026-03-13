@@ -9,10 +9,10 @@ from django.conf import settings
 from bs4 import BeautifulSoup
 import re
 from .utils import get_full_state_name
-from .models import RelistingFacebooklisting
+# from .models import RelistingFacebooklisting
 from django.utils import timezone
 from datetime import timedelta
-from .facebook_listing import perform_search_and_delete
+# from .facebook_listing import perform_search_and_delete
 from .models import FacebookUserCredentials
 from relister.settings import MAX_RETRIES_ATTEMPTS
 
@@ -44,108 +44,108 @@ def format_car_description(description):
     return cleaned_text.strip()
 
 
-def get_listings(url,user,import_url_instance):
-    """Get listings from Gumtree"""
-    logging.info(f"url: {url}")
-    if not settings.ZENROWS_API_KEY:
-        raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
-    list_id = extract_seller_id(url)  # Extract the last part of the URL
-    if list_id.isdigit():
-        client = ZenRowsClient(settings.ZENROWS_API_KEY)
-        base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
+# def get_listings(url,user,import_url_instance):
+#     """Get listings from Gumtree"""
+#     logging.info(f"url: {url}")
+#     if not settings.ZENROWS_API_KEY:
+#         raise HTTPException(status_code=500, detail="ZENROWS_API_KEY is not configured in the environment variables")
+#     list_id = extract_seller_id(url)  # Extract the last part of the URL
+#     if list_id.isdigit():
+#         client = ZenRowsClient(settings.ZENROWS_API_KEY)
+#         base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
 
-        try:
-            dict_data = {}
-            response = client.get(base_url)
-            if response.status_code == 402:
-                logging.error(f"402 response code received: Check your Zenrows API key{response.status_code}")
-                return None
-            if response.status_code != 200:
-                logging.info(f"Response status code is not 200: {response}")
-                return None
-            response_data = response.json()
-            if not response_data:
-                logging.error(f"Response data is empty: {response}")
-                return None
+#         try:
+#             dict_data = {}
+#             response = client.get(base_url)
+#             if response.status_code == 402:
+#                 logging.error(f"402 response code received: Check your Zenrows API key{response.status_code}")
+#                 return None
+#             if response.status_code != 200:
+#                 logging.info(f"Response status code is not 200: {response}")
+#                 return None
+#             response_data = response.json()
+#             if not response_data:
+#                 logging.error(f"Response data is empty: {response}")
+#                 return None
 
-            for current_data in response_data["categoryInfo"]:
-                logging.info(f"current_data: {current_data}")
-                dict_data[current_data['name']] = current_data['value']
-            title=response_data["adHeadingData"]["title"]
-            price=int(response_data["adPriceData"]["amount"])
-            seller_id=response_data["adPosterData"]["randomUserId"] 
-            description=response_data["description"]
-            location=response_data["adLocationData"]["suburb"]
-            state=response_data["adLocationData"]["state"]
-            full_state_name=get_full_state_name(state)
-            location=f"{location}, {full_state_name}"
-            body_type=dict_data["Body Type"]
-            fuel_type=dict_data["Fuel Type"]
-            color=dict_data["Colour"]
-            variant=dict_data["Variant"]
-            year=dict_data["Year"]
-            if dict_data["Make, Model"]:
-                parts = dict_data["Make, Model"].split(" ", 1)  # Split into two parts at the first space
-                make = parts[0]  # First part
-                model = ' '.join(title.split(' ')[2:])
-            else:
-                model=' '.join(title.split(' ')[2:])
-                make=dict_data["Make"]
-            odo_meter=dict_data["Odometer"]
-            mileage=int(''.join(filter(str.isdigit, odo_meter)))
+#             for current_data in response_data["categoryInfo"]:
+#                 logging.info(f"current_data: {current_data}")
+#                 dict_data[current_data['name']] = current_data['value']
+#             title=response_data["adHeadingData"]["title"]
+#             price=int(response_data["adPriceData"]["amount"])
+#             seller_id=response_data["adPosterData"]["randomUserId"] 
+#             description=response_data["description"]
+#             location=response_data["adLocationData"]["suburb"]
+#             state=response_data["adLocationData"]["state"]
+#             full_state_name=get_full_state_name(state)
+#             location=f"{location}, {full_state_name}"
+#             body_type=dict_data["Body Type"]
+#             fuel_type=dict_data["Fuel Type"]
+#             color=dict_data["Colour"]
+#             variant=dict_data["Variant"]
+#             year=dict_data["Year"]
+#             if dict_data["Make, Model"]:
+#                 parts = dict_data["Make, Model"].split(" ", 1)  # Split into two parts at the first space
+#                 make = parts[0]  # First part
+#                 model = ' '.join(title.split(' ')[2:])
+#             else:
+#                 model=' '.join(title.split(' ')[2:])
+#                 make=dict_data["Make"]
+#             odo_meter=dict_data["Odometer"]
+#             mileage=int(''.join(filter(str.isdigit, odo_meter)))
             
-            # Split description into lines
-            description_lines = description.splitlines()
-            mileage_text = "Mileage: " + str(mileage) + "km"
+#             # Split description into lines
+#             description_lines = description.splitlines()
+#             mileage_text = "Mileage: " + str(mileage) + "km"
             
-            # Check if mileage is already in description (case-insensitive)
-            if mileage_text.lower() not in description.lower():
-                # Insert mileage as the first line
-                description_lines.insert(0, mileage_text)
+#             # Check if mileage is already in description (case-insensitive)
+#             if mileage_text.lower() not in description.lower():
+#                 # Insert mileage as the first line
+#                 description_lines.insert(0, mileage_text)
                 
-                # Update the description
-                description = "\n".join(description_lines)
+#                 # Update the description
+#                 description = "\n".join(description_lines)
             
-            enhanced_description=format_car_description(description)                
-            transmission=dict_data["Transmission"]
+#             enhanced_description=format_car_description(description)                
+#             transmission=dict_data["Transmission"]
             
-            # Create a new VehicleListing instance
-            vehicle_listing=VehicleListing.objects.create(
-                user=user,
-                gumtree_url=import_url_instance,
-                list_id=list_id,
-                year=year,
-                body_type=body_type,
-                fuel_type=fuel_type,
-                color=color,
-                variant=variant,
-                make=make,
-                mileage=mileage,
-                model=model,
-                price=str(price),
-                transmission=transmission,
-                exterior_colour=color,
-                interior_colour="Other",
-                description=enhanced_description,
-                images=[image.get("xlarge") for image in response_data.get("images", [])],
-                condition="Excellent",
-                url=url,
-                location=location,
-                seller_profile_id=seller_id,
-                status="pending"
-            )
-            logging.info(f"vehicle_listing: {vehicle_listing}")
-            import_url_instance.status="Completed"
-            import_url_instance.save()
-            return vehicle_listing
+#             # Create a new VehicleListing instance
+#             vehicle_listing=VehicleListing.objects.create(
+#                 user=user,
+#                 gumtree_url=import_url_instance,
+#                 list_id=list_id,
+#                 year=year,
+#                 body_type=body_type,
+#                 fuel_type=fuel_type,
+#                 color=color,
+#                 variant=variant,
+#                 make=make,
+#                 mileage=mileage,
+#                 model=model,
+#                 price=str(price),
+#                 transmission=transmission,
+#                 exterior_colour=color,
+#                 interior_colour="Other",
+#                 description=enhanced_description,
+#                 images=[image.get("xlarge") for image in response_data.get("images", [])],
+#                 condition="Excellent",
+#                 url=url,
+#                 location=location,
+#                 seller_profile_id=seller_id,
+#                 status="pending"
+#             )
+#             logging.info(f"vehicle_listing: {vehicle_listing}")
+#             import_url_instance.status="Completed"
+#             import_url_instance.save()
+#             return vehicle_listing
 
-        except Exception as e:
-            error_detail = getattr(e, "response", {}).get("data", str(e))
-            logging.error(f"Error in get_listings: {error_detail}")
-            return None
-    else:
-        logging.error(f"Invalid URL: {url}")
-        return None
+#         except Exception as e:
+#             error_detail = getattr(e, "response", {}).get("data", str(e))
+#             logging.error(f"Error in get_listings: {error_detail}")
+#             return None
+#     else:
+#         logging.error(f"Invalid URL: {url}")
+#         return None
 
 
 def get_gumtree_listing_details(listing_id):
@@ -305,98 +305,98 @@ def get_gumtree_listings(profile_url,user):
         logging.error(f"Error fetching listings for seller ID {seller_id}: {e}")
         return False,"Error fetching listings for seller ID"
 
-def update_facebook_listing(already_exists_listing,Updating_listing_data):
-    """Update the Facebook listing"""
-    if already_exists_listing.is_relist:
-        relisting=RelistingFacebooklisting.objects.filter(listing= already_exists_listing,user=already_exists_listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
-        if relisting and relisting.status == "failed":
-            logging.info(f"Updating the failed Relisting  {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model},  and updating the new relisting details")
-            already_exists_listing.year=Updating_listing_data.get("year")
-            already_exists_listing.make=Updating_listing_data.get("make")
-            already_exists_listing.model=Updating_listing_data.get("model")
-            already_exists_listing.body_type=Updating_listing_data.get("body_type")
-            already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
-            already_exists_listing.color=Updating_listing_data.get("color")
-            already_exists_listing.variant=Updating_listing_data.get("variant")
-            already_exists_listing.price=str(Updating_listing_data.get("price"))
-            already_exists_listing.mileage=Updating_listing_data.get("mileage")
-            already_exists_listing.transmission=Updating_listing_data.get("transmission")
-            already_exists_listing.description=Updating_listing_data.get("description")
-            already_exists_listing.images=Updating_listing_data.get("image")
-            already_exists_listing.location=Updating_listing_data.get("location")
-            already_exists_listing.status="completed"
-            already_exists_listing.is_relist=True
-            already_exists_listing.save()
-            logging.info(f"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details")
-            return True,"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details"
-        elif relisting and relisting.status == "completed":
-            search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
-            credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
-            if credentials:
-                response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(relisting.relisting_date),credentials.session_cookie)
-                if response[0] == 1:
-                    already_exists_listing.year=Updating_listing_data.get("year")
-                    already_exists_listing.make=Updating_listing_data.get("make")
-                    already_exists_listing.model=Updating_listing_data.get("model")
-                    already_exists_listing.body_type=Updating_listing_data.get("body_type")
-                    already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
-                    already_exists_listing.color=Updating_listing_data.get("color")
-                    already_exists_listing.variant=Updating_listing_data.get("variant")
-                    already_exists_listing.price=str(Updating_listing_data.get("price"))
-                    already_exists_listing.mileage=Updating_listing_data.get("mileage")
-                    already_exists_listing.transmission=Updating_listing_data.get("transmission")
-                    already_exists_listing.description=Updating_listing_data.get("description")
-                    already_exists_listing.images=Updating_listing_data.get("image")
-                    already_exists_listing.location=Updating_listing_data.get("location")
-                    already_exists_listing.status="completed"
-                    already_exists_listing.is_relist=True
-                    already_exists_listing.save()
-                    relisting.status="failed"
-                    relisting.last_relisting_status=False
-                    relisting.save()
-                    logging.info(f"Relisting {search_query}  who have old listing details deleted successfully")
-                    return True,"Relisting {search_query}  who have old listing details deleted successfully"
-                else:
-                    logging.info(f"Trying to delete the old relisting and relist again using updated details")
-                    logging.info(f"Failed to delete the relisting {search_query} and the response is {response[1]}")
-                    return False,"Failed to delete the relisting and relist again using updated details"
-            else:
-                logging.error(f"No credentials found for user {already_exists_listing.user.email}")
-                return False,"No credentials found for user"
+# def update_facebook_listing(already_exists_listing,Updating_listing_data):
+#     """Update the Facebook listing"""
+#     if already_exists_listing.is_relist:
+#         relisting=RelistingFacebooklisting.objects.filter(listing= already_exists_listing,user=already_exists_listing.user,status__in=["completed","failed"],last_relisting_status=False).first()
+#         if relisting and relisting.status == "failed":
+#             logging.info(f"Updating the failed Relisting  {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model},  and updating the new relisting details")
+#             already_exists_listing.year=Updating_listing_data.get("year")
+#             already_exists_listing.make=Updating_listing_data.get("make")
+#             already_exists_listing.model=Updating_listing_data.get("model")
+#             already_exists_listing.body_type=Updating_listing_data.get("body_type")
+#             already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+#             already_exists_listing.color=Updating_listing_data.get("color")
+#             already_exists_listing.variant=Updating_listing_data.get("variant")
+#             already_exists_listing.price=str(Updating_listing_data.get("price"))
+#             already_exists_listing.mileage=Updating_listing_data.get("mileage")
+#             already_exists_listing.transmission=Updating_listing_data.get("transmission")
+#             already_exists_listing.description=Updating_listing_data.get("description")
+#             already_exists_listing.images=Updating_listing_data.get("image")
+#             already_exists_listing.location=Updating_listing_data.get("location")
+#             already_exists_listing.status="completed"
+#             already_exists_listing.is_relist=True
+#             already_exists_listing.save()
+#             logging.info(f"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details")
+#             return True,"updated the relisting {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model} details who have old listing details"
+#         elif relisting and relisting.status == "completed":
+#             search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
+#             credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
+#             if credentials:
+#                 response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(relisting.relisting_date),credentials.session_cookie)
+#                 if response[0] == 1:
+#                     already_exists_listing.year=Updating_listing_data.get("year")
+#                     already_exists_listing.make=Updating_listing_data.get("make")
+#                     already_exists_listing.model=Updating_listing_data.get("model")
+#                     already_exists_listing.body_type=Updating_listing_data.get("body_type")
+#                     already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+#                     already_exists_listing.color=Updating_listing_data.get("color")
+#                     already_exists_listing.variant=Updating_listing_data.get("variant")
+#                     already_exists_listing.price=str(Updating_listing_data.get("price"))
+#                     already_exists_listing.mileage=Updating_listing_data.get("mileage")
+#                     already_exists_listing.transmission=Updating_listing_data.get("transmission")
+#                     already_exists_listing.description=Updating_listing_data.get("description")
+#                     already_exists_listing.images=Updating_listing_data.get("image")
+#                     already_exists_listing.location=Updating_listing_data.get("location")
+#                     already_exists_listing.status="completed"
+#                     already_exists_listing.is_relist=True
+#                     already_exists_listing.save()
+#                     relisting.status="failed"
+#                     relisting.last_relisting_status=False
+#                     relisting.save()
+#                     logging.info(f"Relisting {search_query}  who have old listing details deleted successfully")
+#                     return True,"Relisting {search_query}  who have old listing details deleted successfully"
+#                 else:
+#                     logging.info(f"Trying to delete the old relisting and relist again using updated details")
+#                     logging.info(f"Failed to delete the relisting {search_query} and the response is {response[1]}")
+#                     return False,"Failed to delete the relisting and relist again using updated details"
+#             else:
+#                 logging.error(f"No credentials found for user {already_exists_listing.user.email}")
+#                 return False,"No credentials found for user"
 
-        else:
-            logging.info(f"unknown relsting status {relisting.status} for user {already_exists_listing.user.email} and listing {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}")
-            return False,"unknown relsting status"
-    else:
-        search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
-        credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
-        if credentials:
-            response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(already_exists_listing.listed_on),credentials.session_cookie)
-            if response[0] == 1:
-                already_exists_listing.year=Updating_listing_data.get("year")
-                already_exists_listing.make=Updating_listing_data.get("make")
-                already_exists_listing.model=Updating_listing_data.get("model")
-                already_exists_listing.body_type=Updating_listing_data.get("body_type")
-                already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
-                already_exists_listing.color=Updating_listing_data.get("color")
-                already_exists_listing.variant=Updating_listing_data.get("variant")
-                already_exists_listing.price=str(Updating_listing_data.get("price"))
-                already_exists_listing.mileage=Updating_listing_data.get("mileage")
-                already_exists_listing.transmission=Updating_listing_data.get("transmission")
-                already_exists_listing.description=Updating_listing_data.get("description")
-                already_exists_listing.images=Updating_listing_data.get("image")
-                already_exists_listing.location=Updating_listing_data.get("location")
-                already_exists_listing.status="pending"
-                already_exists_listing.is_relist=False
-                already_exists_listing.save()
-                logging.info(f"Listing {search_query}  who have old listing details deleted successfully")
-                return True,"Listing {search_query}  who have old listing details deleted successfully"
-            else:
-                logging.info(f"Failed to delete the listing {search_query} and the response is {response[1]}")
-                return False,"Failed to delete the listing and relist again using updated details"
-        else:
-            logging.error(f"No credentials found for user {already_exists_listing.user.email}")
-            return False,"No credentials found for user"
+#         else:
+#             logging.info(f"unknown relsting status {relisting.status} for user {already_exists_listing.user.email} and listing {already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}")
+#             return False,"unknown relsting status"
+#     else:
+#         search_query=f"{already_exists_listing.year} {already_exists_listing.make} {already_exists_listing.model}"
+#         credentials=FacebookUserCredentials.objects.filter(user=already_exists_listing.user).first()
+#         if credentials:
+#             response=perform_search_and_delete(search_query,already_exists_listing.price,timezone.localtime(already_exists_listing.listed_on),credentials.session_cookie)
+#             if response[0] == 1:
+#                 already_exists_listing.year=Updating_listing_data.get("year")
+#                 already_exists_listing.make=Updating_listing_data.get("make")
+#                 already_exists_listing.model=Updating_listing_data.get("model")
+#                 already_exists_listing.body_type=Updating_listing_data.get("body_type")
+#                 already_exists_listing.fuel_type=Updating_listing_data.get("fuel_type")
+#                 already_exists_listing.color=Updating_listing_data.get("color")
+#                 already_exists_listing.variant=Updating_listing_data.get("variant")
+#                 already_exists_listing.price=str(Updating_listing_data.get("price"))
+#                 already_exists_listing.mileage=Updating_listing_data.get("mileage")
+#                 already_exists_listing.transmission=Updating_listing_data.get("transmission")
+#                 already_exists_listing.description=Updating_listing_data.get("description")
+#                 already_exists_listing.images=Updating_listing_data.get("image")
+#                 already_exists_listing.location=Updating_listing_data.get("location")
+#                 already_exists_listing.status="pending"
+#                 already_exists_listing.is_relist=False
+#                 already_exists_listing.save()
+#                 logging.info(f"Listing {search_query}  who have old listing details deleted successfully")
+#                 return True,"Listing {search_query}  who have old listing details deleted successfully"
+#             else:
+#                 logging.info(f"Failed to delete the listing {search_query} and the response is {response[1]}")
+#                 return False,"Failed to delete the listing and relist again using updated details"
+#         else:
+#             logging.error(f"No credentials found for user {already_exists_listing.user.email}")
+#             return False,"No credentials found for user"
         
 
 def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, user, seller_id):

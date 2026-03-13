@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Relister – Your Free Trial Has Started</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+        }
+        .email-wrapper {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #1a73e8;
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header p {
+            margin: 8px 0 0;
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .content {
+            padding: 30px 20px;
+        }
+        .content h2 {
+            color: #333;
+            margin-top: 0;
+        }
+        .trial-box {
+            background-color: #e8f0fe;
+            border-left: 4px solid #1a73e8;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .trial-box strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 4px;
+            color: #1a73e8;
+        }
+        .credentials-box {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .credentials-box p {
+            margin: 4px 0;
+        }
+        .content ul {
+            padding-left: 20px;
+        }
+        .content li {
+            margin: 8px 0;
+        }
+        .cta-button {
+            display: inline-block;
+            background-color: #1a73e8;
+            color: #ffffff;
+            padding: 12px 28px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            border-top: 1px solid #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Welcome to Relister!</h1>
+            <p>Your 30-day free trial has started</p>
+        </div>
+        <div class="content">
+            <h2>Hi {{ user_name }},</h2>
+
+            <p>Thanks for signing up! Your account for <strong>{{ dealership_name }}</strong> is ready and your free trial is now active — no credit card required.</p>
+
+            <div class="trial-box">
+                <strong>Your Free Trial</strong>
+                Trial period: <strong>{{ trial_start_date }}</strong> &rarr; <strong>{{ trial_end_date }}</strong><br>
+                During your trial you have <strong>unlimited relisting</strong> access.
+            </div>
+
+            <div class="credentials-box">
+                <p><strong>Your Login Credentials</strong></p>
+                <p>Email: <strong>{{ user_email }}</strong></p>
+                <p>Use these same credentials to log into the Auto Relister Chrome Extension.</p>
+            </div>
+
+            <p>Here's what you can do right now:</p>
+            <ul>
+                <li>Import vehicle listings from Gumtree or Facebook Marketplace</li>
+                <li>Automatically post listings to Facebook Marketplace</li>
+                <li>Set up 7-day automatic relisting</li>
+                <li>Track your listing performance from the dashboard</li>
+            </ul>
+
+            <p>If you have any questions, reach out to our support team at any time.</p>
+
+            <p>Welcome aboard,<br>
+            <strong>The Relister Team</strong></p>
+        </div>
+        <div class="footer">
+            <p><strong>Relister</strong> – Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

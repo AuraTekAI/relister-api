@@ -40,11 +40,11 @@ class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_filter = ('user',"listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):
-    list_display = ("invoice_id", "user", "total_amount", "created_at", "updated_at")
-    search_fields = ("invoice_id", "user__email")
-    list_filter = ("created_at", "updated_at")
-    readonly_fields = ("invoice_id", "created_at", "updated_at")
-    ordering = ("-created_at",)
+    list_display = ('invoice_number', 'invoice_id', 'user', 'plan_name', 'total_amount', 'status', 'created_at')
+    search_fields = ('invoice_number', 'invoice_id', 'user__email', 'stripe_invoice_id')
+    list_filter = ('status', 'created_at')
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('-created_at',)
 
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(VehicleListing, VehicleListingAdmin)
