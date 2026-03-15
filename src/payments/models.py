@@ -80,6 +80,9 @@ class Subscription(models.Model):
         blank=True,
         related_name='subscriptions',
     )
+    # True when user has requested cancellation but period hasn't ended yet.
+    # Stripe: cancel_at_period_end=True. Access continues until current_period_end.
+    cancel_at_period_end = models.BooleanField(default=False)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

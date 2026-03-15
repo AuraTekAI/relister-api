@@ -33,6 +33,9 @@ class UserListSerializer(serializers.ModelSerializer):
             sub = obj.subscription
             if sub and sub.plan:
                 return sub.plan.name
+            if sub and sub.status == 'active':
+                # Subscription exists but plan was deleted — flag it
+                return 'Unknown'
         except Exception:
             pass
         return 'Trial'

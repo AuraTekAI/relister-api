@@ -25,6 +25,7 @@ from accounts.models import User, NotificationPreference, EmailVerificationToken
 from accounts.throttles import LoginRateThrottle, RegisterRateThrottle, PasswordResetRateThrottle
 from VehicleListing.utils import send_welcome_email
 from django_filters.rest_framework import DjangoFilterBackend
+import django_filters
 from VehicleListing.tasks import profile_listings_for_approved_users
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -244,6 +245,17 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             response.data['status'] = 200
         return response
     
+class UserFilterSet(django_filters.FilterSet):
+    is_approved = django_filters.BooleanFilter(field_name='is_approved')
+    is_superuser = django_filters.BooleanFilter(field_name='is_superuser')
+    is_active = django_filters.BooleanFilter(field_name='is_active')
+    account_status = django_filters.CharFilter(field_name='account_status', lookup_expr='exact')
+
+    class Meta:
+        model = User
+        fields = ['is_approved', 'is_superuser', 'is_active', 'account_status']
+
+
 class UserListview(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserListSerializer
@@ -252,7 +264,7 @@ class UserListview(ModelViewSet):
     search_fields = ['dealership_name', 'email', 'contact_person_name', 'phone_number']
     ordering_fields = ['dealership_name', 'email']
     ordering = ['dealership_name', 'email']
-    filterset_fields = ['is_approved', 'is_superuser', 'is_active', 'account_status']
+    filterset_class = UserFilterSet
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)

@@ -24,6 +24,7 @@ class VehiclelistingConfig(AppConfig):
                     "daily_2am": CrontabSchedule.objects.get_or_create(minute='0', hour='2')[0],
                     "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
                     "daily_5am": CrontabSchedule.objects.get_or_create(minute='0', hour='5')[0],
+                    "daily_midnight_5": CrontabSchedule.objects.get_or_create(minute='5', hour='0')[0],
                 }
 
                 tasks = [
@@ -50,7 +51,14 @@ class VehiclelistingConfig(AppConfig):
                     {
                         "name": "Check_Trial_Expiry",
                         "task": "VehicleListing.tasks.check_trial_expiry_task",
-                        "crontab": crontab_map["daily_5am"],
+                        # Runs every day at 00:05 UTC (just after midnight)
+                        "crontab": crontab_map["daily_midnight_5"],
+                    },
+                    {
+                        "name": "Mark_Overdue_Invoices",
+                        "task": "payments.tasks.mark_overdue_invoices",
+                        # Runs every day at 02:00 UTC
+                        "crontab": crontab_map["daily_2am"],
                     },
                 ]
 
