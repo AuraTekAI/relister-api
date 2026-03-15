@@ -406,7 +406,16 @@ class WebhookView(APIView):
 
     def _handle_invoice_payment_succeeded(self, invoice):
         stripe_subscription_id = invoice.get('subscription')
+        stripe_customer_id = invoice.get('customer')
+        logger.info(
+            f"invoice.payment_succeeded: processing invoice {invoice.get('id')} — "
+            f"subscription={stripe_subscription_id}, customer={stripe_customer_id}, "
+            f"amount={invoice.get('amount_paid')}, status={invoice.get('status')}"
+        )
         if not stripe_subscription_id:
+            logger.warning(
+                f"invoice.payment_succeeded: invoice {invoice.get('id')} has no subscription ID — skipping."
+            )
             return
 
         subscription = None
@@ -420,7 +429,6 @@ class WebhookView(APIView):
             # Race condition: checkout.session.completed may not have written the
             # Subscription row yet (all three webhooks arrive at the same second on
             # first checkout). Fall back to customer lookup and retry via Celery.
-            stripe_customer_id = invoice.get('customer')
             if stripe_customer_id:
                 try:
                     subscription = Subscription.objects.get(
