@@ -279,7 +279,14 @@ class WebhookView(APIView):
                 logger.warning(f"checkout.session.completed: Plan {plan_id} not found.")
 
         # Retrieve full subscription from Stripe to get billing period dates
-        stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
+        try:
+            stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
+        except stripe.error.StripeError as exc:
+            logger.error(f"checkout.session.completed: Failed to retrieve Stripe subscription {stripe_subscription_id}: {exc}", exc_info=True)
+            raise  # re-raise so the outer handler logs it and Stripe retries
+
+        logger.info(f"checkout.session.completed: Retrieved stripe_sub {stripe_subscription_id}, status={stripe_sub.get('status')}, items={stripe_sub.get('items')}")
+
         # Stripe API 2026-02-25.clover moved billing period to items.data[0]
         sub_item = stripe_sub['items']['data'][0] if stripe_sub.get('items') and stripe_sub['items']['data'] else None
         if sub_item and sub_item.get('current_period_start'):
@@ -290,7 +297,7 @@ class WebhookView(APIView):
             period_start = datetime.fromtimestamp(stripe_sub['current_period_start'], tz=dt_timezone.utc)
             period_end = datetime.fromtimestamp(stripe_sub['current_period_end'], tz=dt_timezone.utc)
 
-        Subscription.objects.update_or_create(
+        sub_obj, created = Subscription.objects.update_or_create(
             user=user,
             defaults={
                 'plan': plan,
@@ -301,6 +308,11 @@ class WebhookView(APIView):
                 'current_period_end': period_end,
                 'listing_count': 0,
             },
+        )
+
+        logger.info(
+            f"checkout.session.completed: Subscription {'created' if created else 'updated'} "
+            f"(id={sub_obj.id}, stripe_sub={stripe_subscription_id}) for user {user.email}."
         )
 
         user.account_status = 'active'
