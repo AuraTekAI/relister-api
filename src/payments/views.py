@@ -396,12 +396,46 @@ class WebhookView(APIView):
         stripe_subscription_id = invoice.get('subscription')
         if not stripe_subscription_id:
             return
+
+        subscription = None
+
+        # Primary lookup by stripe_subscription_id
         try:
             subscription = Subscription.objects.get(
                 stripe_subscription_id=stripe_subscription_id
             )
         except Subscription.DoesNotExist:
-            logger.warning(f"invoice.payment_succeeded: {stripe_subscription_id} not found.")
+            # Race condition: checkout.session.completed may not have written the
+            # Subscription row yet (all three webhooks arrive at the same second on
+            # first checkout). Fall back to customer lookup and retry via Celery.
+            stripe_customer_id = invoice.get('customer')
+            if stripe_customer_id:
+                try:
+                    subscription = Subscription.objects.get(
+                        stripe_customer_id=stripe_customer_id
+                    )
+                    # Patch the stripe_subscription_id now that we have it
+                    if not subscription.stripe_subscription_id:
+                        subscription.stripe_subscription_id = stripe_subscription_id
+                        subscription.save(update_fields=['stripe_subscription_id', 'updated_at'])
+                except Subscription.DoesNotExist:
+                    pass
+
+        if not subscription:
+            # Still not found — schedule a delayed retry so checkout.session.completed
+            # has time to complete before we try again.
+            logger.warning(
+                f"invoice.payment_succeeded: subscription {stripe_subscription_id} not in DB yet — "
+                f"scheduling delayed retry."
+            )
+            from .tasks import generate_invoice_delayed
+            generate_invoice_delayed.apply_async(
+                kwargs={
+                    'stripe_subscription_id': stripe_subscription_id,
+                    'stripe_invoice_id': invoice.get('id'),
+                },
+                countdown=15,  # retry after 15 seconds
+            )
             return
 
         logger.info(f"invoice.payment_succeeded: {stripe_subscription_id}.")

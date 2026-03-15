@@ -29,7 +29,7 @@ def _next_invoice_number():
     return f"{prefix}{seq:04d}"
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, queue='scheduling_queue')
 def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
     """
     Generate an Invoice record for a completed billing period.
@@ -173,7 +173,29 @@ def _send_payment_failed_email(user, invoice):
         logger.error(f"_send_payment_failed_email: Failed to send payment failed email to {user.email}: {exc}")
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, queue='scheduling_queue', max_retries=3, default_retry_delay=15)
+def generate_invoice_delayed(self, stripe_subscription_id, stripe_invoice_id=None):
+    """
+    Delayed retry for generate_invoice when invoice.payment_succeeded arrives before
+    checkout.session.completed has written the Subscription row (race condition on first checkout).
+    Retries up to 3 times with a 15-second delay between attempts.
+    """
+    from .models import Subscription
+
+    try:
+        subscription = Subscription.objects.get(stripe_subscription_id=stripe_subscription_id)
+    except Subscription.DoesNotExist:
+        logger.warning(
+            f"generate_invoice_delayed: Subscription {stripe_subscription_id} still not found "
+            f"(attempt {self.request.retries + 1}/3) — retrying."
+        )
+        raise self.retry()
+
+    logger.info(f"generate_invoice_delayed: Subscription {stripe_subscription_id} found — generating invoice.")
+    generate_invoice.delay(subscription.id, stripe_invoice_id=stripe_invoice_id, paid=True)
+
+
+@shared_task(bind=True, queue='scheduling_queue')
 def mark_overdue_invoices(self):
     """
     Periodic task — runs daily.
