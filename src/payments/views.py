@@ -412,53 +412,54 @@ class WebhookView(APIView):
             f"subscription={stripe_subscription_id}, customer={stripe_customer_id}, "
             f"amount={invoice.get('amount_paid')}, status={invoice.get('status')}"
         )
-        if not stripe_subscription_id:
-            logger.warning(
-                f"invoice.payment_succeeded: invoice {invoice.get('id')} has no subscription ID — skipping."
-            )
-            return
-
         subscription = None
 
         # Primary lookup by stripe_subscription_id
-        try:
-            subscription = Subscription.objects.get(
-                stripe_subscription_id=stripe_subscription_id
-            )
-        except Subscription.DoesNotExist:
-            # Race condition: checkout.session.completed may not have written the
-            # Subscription row yet (all three webhooks arrive at the same second on
-            # first checkout). Fall back to customer lookup and retry via Celery.
-            if stripe_customer_id:
-                try:
-                    subscription = Subscription.objects.get(
-                        stripe_customer_id=stripe_customer_id
-                    )
-                    # Patch the stripe_subscription_id now that we have it
-                    if not subscription.stripe_subscription_id:
-                        subscription.stripe_subscription_id = stripe_subscription_id
-                        subscription.save(update_fields=['stripe_subscription_id', 'updated_at'])
-                except Subscription.DoesNotExist:
-                    pass
+        if stripe_subscription_id:
+            try:
+                subscription = Subscription.objects.get(
+                    stripe_subscription_id=stripe_subscription_id
+                )
+            except Subscription.DoesNotExist:
+                pass
+
+        # Fallback: Stripe sometimes sends subscription=None on the initial checkout invoice.
+        # Look up via stripe_customer_id instead.
+        if not subscription and stripe_customer_id:
+            try:
+                subscription = Subscription.objects.get(
+                    stripe_customer_id=stripe_customer_id
+                )
+                logger.info(
+                    f"invoice.payment_succeeded: found subscription via customer {stripe_customer_id} "
+                    f"(stripe returned subscription=None on invoice {invoice.get('id')})."
+                )
+                # Patch stripe_subscription_id if missing
+                if stripe_subscription_id and not subscription.stripe_subscription_id:
+                    subscription.stripe_subscription_id = stripe_subscription_id
+                    subscription.save(update_fields=['stripe_subscription_id', 'updated_at'])
+            except Subscription.DoesNotExist:
+                pass
 
         if not subscription:
-            # Still not found — schedule a delayed retry so checkout.session.completed
-            # has time to complete before we try again.
+            # Still not found — schedule a delayed retry
             logger.warning(
-                f"invoice.payment_succeeded: subscription {stripe_subscription_id} not in DB yet — "
+                f"invoice.payment_succeeded: no subscription found for "
+                f"stripe_subscription_id={stripe_subscription_id}, customer={stripe_customer_id} — "
                 f"scheduling delayed retry."
             )
             from .tasks import generate_invoice_delayed
             generate_invoice_delayed.apply_async(
                 kwargs={
                     'stripe_subscription_id': stripe_subscription_id,
+                    'stripe_customer_id': stripe_customer_id,
                     'stripe_invoice_id': invoice.get('id'),
                 },
-                countdown=15,  # retry after 15 seconds
+                countdown=15,
             )
             return
 
-        logger.info(f"invoice.payment_succeeded: {stripe_subscription_id}.")
+        logger.info(f"invoice.payment_succeeded: dispatching generate_invoice for subscription id={subscription.id}.")
         from .tasks import generate_invoice
         generate_invoice.delay(subscription.id, stripe_invoice_id=invoice.get('id'), paid=True)
 

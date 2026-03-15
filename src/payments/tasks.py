@@ -174,7 +174,7 @@ def _send_payment_failed_email(user, invoice):
 
 
 @shared_task(bind=True, queue='scheduling_queue', max_retries=3, default_retry_delay=15)
-def generate_invoice_delayed(self, stripe_subscription_id, stripe_invoice_id=None):
+def generate_invoice_delayed(self, stripe_subscription_id=None, stripe_customer_id=None, stripe_invoice_id=None):
     """
     Delayed retry for generate_invoice when invoice.payment_succeeded arrives before
     checkout.session.completed has written the Subscription row (race condition on first checkout).
@@ -182,16 +182,29 @@ def generate_invoice_delayed(self, stripe_subscription_id, stripe_invoice_id=Non
     """
     from .models import Subscription
 
-    try:
-        subscription = Subscription.objects.get(stripe_subscription_id=stripe_subscription_id)
-    except Subscription.DoesNotExist:
+    subscription = None
+
+    if stripe_subscription_id:
+        try:
+            subscription = Subscription.objects.get(stripe_subscription_id=stripe_subscription_id)
+        except Subscription.DoesNotExist:
+            pass
+
+    if not subscription and stripe_customer_id:
+        try:
+            subscription = Subscription.objects.get(stripe_customer_id=stripe_customer_id)
+        except Subscription.DoesNotExist:
+            pass
+
+    if not subscription:
         logger.warning(
-            f"generate_invoice_delayed: Subscription {stripe_subscription_id} still not found "
-            f"(attempt {self.request.retries + 1}/3) — retrying."
+            f"generate_invoice_delayed: Subscription still not found "
+            f"(stripe_sub={stripe_subscription_id}, customer={stripe_customer_id}, "
+            f"attempt {self.request.retries + 1}/3) — retrying."
         )
         raise self.retry()
 
-    logger.info(f"generate_invoice_delayed: Subscription {stripe_subscription_id} found — generating invoice.")
+    logger.info(f"generate_invoice_delayed: Subscription id={subscription.id} found — generating invoice.")
     generate_invoice.delay(subscription.id, stripe_invoice_id=stripe_invoice_id, paid=True)
 
 
