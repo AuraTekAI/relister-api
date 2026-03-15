@@ -367,13 +367,4 @@ SIMPLE_DELAY_END_TIME = int(env('SIMPLE_DELAY_END_TIME'))
 DELAY_START_TIME_FOR_LOADING_PAGE = int(env('DELAY_START_TIME_FOR_LOADING_PAGE'))
 DELAY_END_TIME_FOR_LOADING_PAGE = int(env('DELAY_END_TIME_FOR_LOADING_PAGE'))
 
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    'check-trial-expiry-daily': {
-        'task': 'VehicleListing.tasks.check_trial_expiry_task',
-        # Runs every day at 00:05 UTC (just after midnight)
-        'schedule': crontab(hour=0, minute=5),
-    },
-}
 

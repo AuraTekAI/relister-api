@@ -26,6 +26,7 @@ from .serializers import (
     InvoiceDetailSerializer,
     DiscountCodeSerializer,
     AdminInvoiceListSerializer,
+    AdminDiscountCodeSerializer,
 )
 
 logger = logging.getLogger('relister_views')
@@ -150,6 +151,7 @@ class CheckoutView(APIView):
 
         # Retrieve existing Stripe customer ID if present
         stripe_customer_id = None
+        existing_sub = None
         try:
             existing_sub = Subscription.objects.get(user=user)
             stripe_customer_id = existing_sub.stripe_customer_id
@@ -164,6 +166,10 @@ class CheckoutView(APIView):
                     metadata={'user_id': user.id},
                 )
                 stripe_customer_id = customer.id
+                # Persist the new customer ID so future checkouts reuse it
+                if existing_sub:
+                    existing_sub.stripe_customer_id = stripe_customer_id
+                    existing_sub.save(update_fields=['stripe_customer_id', 'updated_at'])
             except stripe.error.StripeError as exc:
                 logger.error(f"Stripe customer creation failed for user {user.id}: {exc}")
                 return Response(
@@ -331,10 +337,21 @@ class WebhookView(APIView):
         if period_rolled_over:
             subscription.listing_count = 0
 
+        # Sync cancel_at_period_end from Stripe — this is authoritative.
+        # When the period finally ends, Stripe fires customer.subscription.deleted
+        # which sets status=cancelled. Until then, cancel_at_period_end=True means
+        # "scheduled to cancel — access still active".
+        stripe_cancel_at_period_end = stripe_sub.get('cancel_at_period_end', False)
+        subscription.cancel_at_period_end = stripe_cancel_at_period_end
+        # If Stripe has cleared the flag (e.g. admin reactivated), clear cancelled_at too
+        if not stripe_cancel_at_period_end:
+            subscription.cancelled_at = None
+
         subscription.save(update_fields=[
-            'current_period_start', 'current_period_end', 'status', 'listing_count', 'updated_at'
+            'current_period_start', 'current_period_end', 'status', 'listing_count',
+            'cancel_at_period_end', 'cancelled_at', 'updated_at',
         ])
-        logger.info(f"customer.subscription.updated: {stripe_subscription_id} — status={subscription.status}.")
+        logger.info(f"customer.subscription.updated: {stripe_subscription_id} — status={subscription.status}, cancel_at_period_end={stripe_cancel_at_period_end}.")
 
     def _handle_subscription_deleted(self, stripe_sub):
         stripe_subscription_id = stripe_sub.get('id')
@@ -480,7 +497,7 @@ class CancelSubscriptionView(APIView):
         user = request.user
 
         try:
-            subscription = Subscription.objects.get(user=user)
+            subscription = Subscription.objects.select_related('plan').get(user=user)
         except Subscription.DoesNotExist:
             return Response(
                 {'detail': 'No subscription found.'},
@@ -499,6 +516,12 @@ class CancelSubscriptionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if subscription.cancel_at_period_end:
+            return Response(
+                {'detail': 'Subscription is already scheduled for cancellation at period end.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             stripe.Subscription.modify(
                 subscription.stripe_subscription_id,
@@ -511,10 +534,14 @@ class CancelSubscriptionView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        return Response(
-            {'detail': 'Subscription will be cancelled at the end of the current billing period.'},
-            status=status.HTTP_200_OK,
-        )
+        subscription.cancel_at_period_end = True
+        subscription.cancelled_at = timezone.now()
+        subscription.save(update_fields=['cancel_at_period_end', 'cancelled_at', 'updated_at'])
+
+        logger.info(f"CancelSubscription: User {user.email} scheduled cancellation at period end ({subscription.current_period_end}).")
+
+        serializer = SubscriptionStatusSerializer(subscription)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +725,10 @@ class ApplyDiscountView(APIView):
             )
 
         try:
-            subscription = Subscription.objects.get(user=request.user, status__in=['active', 'past_due'])
+            subscription = Subscription.objects.get(
+                user=request.user,
+                status__in=['active', 'past_due', 'trial'],
+            )
         except Subscription.DoesNotExist:
             return Response(
                 {'detail': 'No active subscription found. Subscribe to a plan first.'},
@@ -827,3 +857,177 @@ class AdminMarkInvoicePaidView(APIView):
         logger.info(f"AdminMarkInvoicePaid: Invoice {invoice.invoice_number} marked paid by admin {request.user.email}.")
         serializer = InvoiceDetailSerializer(invoice)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Admin – Invoice Stats (dashboard cards)
+# ---------------------------------------------------------------------------
+
+class AdminInvoiceStatsView(APIView):
+    """GET /api/payments/admin/invoices/stats/ — summary counts and amounts for the invoice dashboard cards."""
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Invoice dashboard stats",
+        operation_description=(
+            "Returns aggregated invoice statistics for the admin dashboard cards: "
+            "total invoices, total revenue collected, outstanding amount, overdue count, and current month revenue."
+        ),
+        responses={
+            200: openapi.Response(
+                description="Invoice stats",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'total_invoices': openapi.Schema(type=openapi.TYPE_INTEGER, description='All invoices count'),
+                        'paid_invoices': openapi.Schema(type=openapi.TYPE_INTEGER, description='Paid invoices count'),
+                        'unpaid_invoices': openapi.Schema(type=openapi.TYPE_INTEGER, description='Unpaid invoices count'),
+                        'overdue_invoices': openapi.Schema(type=openapi.TYPE_INTEGER, description='Overdue invoices count'),
+                        'total_revenue': openapi.Schema(type=openapi.TYPE_STRING, description='Sum of all paid invoice totals (AUD)'),
+                        'outstanding_amount': openapi.Schema(type=openapi.TYPE_STRING, description='Sum of unpaid + overdue invoice totals (AUD)'),
+                        'overdue_amount': openapi.Schema(type=openapi.TYPE_STRING, description='Sum of overdue invoice totals (AUD)'),
+                        'current_month_revenue': openapi.Schema(type=openapi.TYPE_STRING, description='Paid invoice totals for the current calendar month (AUD)'),
+                    },
+                ),
+            )
+        },
+    )
+    def get(self, request):
+        from VehicleListing.models import Invoice
+        from django.db.models import Count, Sum, Q
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        agg = Invoice.objects.aggregate(
+            total_invoices=Count('id'),
+            paid_invoices=Count('id', filter=Q(status='paid')),
+            unpaid_invoices=Count('id', filter=Q(status='unpaid')),
+            overdue_invoices=Count('id', filter=Q(status='overdue')),
+            total_revenue=Sum('total_amount', filter=Q(status='paid')),
+            outstanding_amount=Sum('total_amount', filter=Q(status__in=['unpaid', 'overdue'])),
+            overdue_amount=Sum('total_amount', filter=Q(status='overdue')),
+            current_month_revenue=Sum(
+                'total_amount',
+                filter=Q(status='paid', created_at__year=now.year, created_at__month=now.month),
+            ),
+        )
+
+        return Response({
+            'total_invoices': agg['total_invoices'] or 0,
+            'paid_invoices': agg['paid_invoices'] or 0,
+            'unpaid_invoices': agg['unpaid_invoices'] or 0,
+            'overdue_invoices': agg['overdue_invoices'] or 0,
+            'total_revenue': str(agg['total_revenue'] or '0.00'),
+            'outstanding_amount': str(agg['outstanding_amount'] or '0.00'),
+            'overdue_amount': str(agg['overdue_amount'] or '0.00'),
+            'current_month_revenue': str(agg['current_month_revenue'] or '0.00'),
+        }, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# TICKET-018: Admin – Discount Code Management
+# ---------------------------------------------------------------------------
+
+class AdminDiscountCodeListCreateView(APIView):
+    """
+    GET  /api/payments/admin/discount-codes/       — list all discount codes.
+    POST /api/payments/admin/discount-codes/       — create a new discount code.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] List discount codes",
+        operation_description="Returns all discount codes. Supports filtering by is_active (true/false) and discount_type (percentage/fixed).",
+        manual_parameters=[
+            openapi.Parameter('is_active', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, description='Filter by active status'),
+            openapi.Parameter('discount_type', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='percentage | fixed'),
+        ],
+        responses={200: AdminDiscountCodeSerializer(many=True)},
+    )
+    def get(self, request):
+        from .models import DiscountCode
+        qs = DiscountCode.objects.all().order_by('-created_at')
+
+        is_active = request.query_params.get('is_active')
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+
+        discount_type = request.query_params.get('discount_type')
+        if discount_type:
+            qs = qs.filter(discount_type=discount_type)
+
+        serializer = AdminDiscountCodeSerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Create discount code",
+        operation_description="Creates a new discount code.",
+        request_body=AdminDiscountCodeSerializer,
+        responses={
+            201: AdminDiscountCodeSerializer(),
+            400: "Validation error.",
+        },
+    )
+    def post(self, request):
+        serializer = AdminDiscountCodeSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        discount = serializer.save()
+        logger.info(f"AdminDiscountCode: Created code '{discount.code}' by admin {request.user.email}.")
+        return Response(AdminDiscountCodeSerializer(discount).data, status=status.HTTP_201_CREATED)
+
+
+class AdminDiscountCodeDetailView(APIView):
+    """
+    GET    /api/payments/admin/discount-codes/<pk>/ — retrieve a discount code.
+    PATCH  /api/payments/admin/discount-codes/<pk>/ — update a discount code.
+    DELETE /api/payments/admin/discount-codes/<pk>/ — delete a discount code.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def _get_object(self, pk):
+        from .models import DiscountCode
+        try:
+            return DiscountCode.objects.get(pk=pk)
+        except DiscountCode.DoesNotExist:
+            return None
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Get discount code detail",
+        responses={200: AdminDiscountCodeSerializer(), 404: "Not found."},
+    )
+    def get(self, request, pk):
+        discount = self._get_object(pk)
+        if not discount:
+            return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(AdminDiscountCodeSerializer(discount).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Update discount code",
+        request_body=AdminDiscountCodeSerializer,
+        responses={200: AdminDiscountCodeSerializer(), 400: "Validation error.", 404: "Not found."},
+    )
+    def patch(self, request, pk):
+        discount = self._get_object(pk)
+        if not discount:
+            return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = AdminDiscountCodeSerializer(discount, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        logger.info(f"AdminDiscountCode: Updated code '{discount.code}' by admin {request.user.email}.")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Delete discount code",
+        responses={204: "Deleted.", 404: "Not found."},
+    )
+    def delete(self, request, pk):
+        discount = self._get_object(pk)
+        if not discount:
+            return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
+        code = discount.code
+        discount.delete()
+        logger.info(f"AdminDiscountCode: Deleted code '{code}' by admin {request.user.email}.")
+        return Response(status=status.HTTP_204_NO_CONTENT)

@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from celery import shared_task
 from django.utils import timezone
@@ -28,7 +29,7 @@ def _next_invoice_number():
     return f"{prefix}{seq:04d}"
 
 
-@shared_task(bind=True, queue='scheduling_queue')
+@shared_task(bind=True)
 def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
     """
     Generate an Invoice record for a completed billing period.
@@ -118,8 +119,11 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
         f"— total={total_amount} status={invoice_status}."
     )
 
-    # Send email notification respecting user preferences
-    _send_invoice_email(user, invoice)
+    # Send email notification
+    if paid:
+        _send_invoice_email(user, invoice)
+    else:
+        _send_payment_failed_email(user, invoice)
 
     return invoice.invoice_number
 
@@ -138,7 +142,7 @@ def _send_invoice_email(user, invoice):
         from django.template.loader import render_to_string
         from relister.settings import EMAIL_HOST_USER
 
-        subject = f"Invoice {invoice.invoice_number} — {'Payment Confirmed' if invoice.status == 'paid' else 'Payment Required'}"
+        subject = f"Invoice {invoice.invoice_number} — Payment Confirmed"
         body = render_to_string('payments/invoice_email.html', {
             'user': user,
             'invoice': invoice,
@@ -148,3 +152,40 @@ def _send_invoice_email(user, invoice):
         email.send(fail_silently=True)
     except Exception as exc:
         logger.error(f"_send_invoice_email: Failed to send invoice email to {user.email}: {exc}")
+
+
+def _send_payment_failed_email(user, invoice):
+    """Send a payment failed alert — always sent regardless of notification preferences."""
+    try:
+        from django.core.mail import EmailMessage
+        from django.template.loader import render_to_string
+        from relister.settings import EMAIL_HOST_USER
+
+        subject = f"Action Required: Payment Failed for Invoice {invoice.invoice_number}"
+        body = render_to_string('payments/payment_failed_email.html', {
+            'user': user,
+            'invoice': invoice,
+        })
+        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email.content_subtype = 'html'
+        email.send(fail_silently=True)
+    except Exception as exc:
+        logger.error(f"_send_payment_failed_email: Failed to send payment failed email to {user.email}: {exc}")
+
+
+@shared_task(bind=True)
+def mark_overdue_invoices(self):
+    """
+    Periodic task — runs daily.
+    Marks unpaid invoices as 'overdue' if they are more than 7 days past their billing_period_end.
+    Scheduled via django-celery-beat.
+    """
+    from VehicleListing.models import Invoice
+
+    cutoff = timezone.now() - timedelta(days=7)
+    updated = Invoice.objects.filter(
+        status='unpaid',
+        billing_period_end__lt=cutoff,
+    ).update(status='overdue')
+
+    logger.info(f"mark_overdue_invoices: Marked {updated} invoice(s) as overdue (cutoff={cutoff.date()}).")

@@ -45,6 +45,12 @@ class SubscriptionStatusSerializer(serializers.ModelSerializer):
             'listing_count',
             'listing_quota',
             'overage_rate_aud',
+            'cancel_at_period_end',
+            'cancelled_at',
+        ]
+        read_only_fields = [
+            'id', 'status', 'current_period_start', 'current_period_end',
+            'listing_count', 'cancel_at_period_end', 'cancelled_at',
         ]
 
     def get_days_remaining(self, obj):
@@ -158,6 +164,34 @@ class DiscountCodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = DiscountCode
         fields = ['id', 'code', 'discount_type', 'discount_value']
+
+
+# ---------------------------------------------------------------------------
+# TICKET-018: Admin discount code management serializer
+# ---------------------------------------------------------------------------
+
+class AdminDiscountCodeSerializer(serializers.ModelSerializer):
+    is_valid_now = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DiscountCode
+        fields = [
+            'id',
+            'code',
+            'discount_type',
+            'discount_value',
+            'max_uses',
+            'used_count',
+            'valid_from',
+            'valid_until',
+            'is_active',
+            'is_valid_now',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'used_count', 'is_valid_now', 'created_at']
+
+    def get_is_valid_now(self, obj):
+        return obj.is_valid()
 
 
 # ---------------------------------------------------------------------------

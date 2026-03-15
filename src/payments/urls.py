@@ -13,6 +13,9 @@ from .views import (
     AdminInvoiceListView,
     AdminInvoiceDetailView,
     AdminMarkInvoicePaidView,
+    AdminDiscountCodeListCreateView,
+    AdminDiscountCodeDetailView,
+    AdminInvoiceStatsView,
 )
 
 urlpatterns = [
@@ -29,7 +32,11 @@ urlpatterns = [
     path('invoices/<int:pk>/', InvoiceDetailView.as_view(), name='payment-invoice-detail'),
     path('apply-discount/', ApplyDiscountView.as_view(), name='payment-apply-discount'),
     # TICKET-016: Admin invoice management
+    path('admin/invoices/stats/', AdminInvoiceStatsView.as_view(), name='admin-invoice-stats'),
     path('admin/invoices/', AdminInvoiceListView.as_view(), name='admin-invoice-list'),
     path('admin/invoices/<int:pk>/', AdminInvoiceDetailView.as_view(), name='admin-invoice-detail'),
     path('admin/invoices/<int:pk>/mark-paid/', AdminMarkInvoicePaidView.as_view(), name='admin-invoice-mark-paid'),
+    # TICKET-018: Admin discount code management
+    path('admin/discount-codes/', AdminDiscountCodeListCreateView.as_view(), name='admin-discount-code-list'),
+    path('admin/discount-codes/<int:pk>/', AdminDiscountCodeDetailView.as_view(), name='admin-discount-code-detail'),
 ]
