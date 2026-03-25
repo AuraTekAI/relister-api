@@ -14,7 +14,7 @@ class VehiclelistingConfig(AppConfig):
         from django_celery_beat.models import PeriodicTask, CrontabSchedule
         import logging
 
-        @receiver(post_migrate)
+        @receiver(post_migrate, sender=VehiclelistingConfig)
         def setup_periodic_tasks(sender, **kwargs):
             try:
                 # Define all required crontab times
