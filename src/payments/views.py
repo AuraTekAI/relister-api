@@ -943,7 +943,7 @@ class ApplyDiscountView(APIView):
                 stripe.api_key = settings.STRIPE_SECRET_KEY
                 stripe.Subscription.modify(
                     subscription.stripe_subscription_id,
-                    coupon=discount.stripe_coupon_id,
+                    discounts=[{'coupon': discount.stripe_coupon_id}],
                 )
                 stripe_applied = True
                 logger.info(
