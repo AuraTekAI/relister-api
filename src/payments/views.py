@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from utils.custom_pagination import CustomPageNumberPagination
 from .models import Plan, Subscription, DiscountCode
 from VehicleListing.models import Invoice
 from .serializers import (
@@ -700,12 +701,29 @@ class InvoiceListView(APIView):
     @swagger_auto_schema(
         operation_summary="List invoices",
         operation_description="Returns a paginated list of all invoices for the authenticated user.",
-        responses={200: InvoiceListSerializer(many=True)},
+        manual_parameters=[
+            openapi.Parameter('page', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Page number'),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Items per page (default: 10, max: 100)'),
+        ],
+        responses={200: openapi.Response(
+            description="Paginated invoice list",
+            schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'count': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'next': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'previous': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'results': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+                },
+            ),
+        )},
     )
     def get(self, request):
         invoices = Invoice.objects.filter(user=request.user).order_by('-created_at')
-        serializer = InvoiceListSerializer(invoices, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = CustomPageNumberPagination()
+        page = paginator.paginate_queryset(invoices, request)
+        serializer = InvoiceListSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class InvoiceDetailView(APIView):
@@ -828,8 +846,21 @@ class AdminInvoiceListView(APIView):
             openapi.Parameter('plan_name', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='Filter by plan name (case-insensitive)'),
             openapi.Parameter('date_from', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='Invoice created_at >= date (YYYY-MM-DD)'),
             openapi.Parameter('date_to', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='Invoice created_at <= date (YYYY-MM-DD)'),
+            openapi.Parameter('page', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Page number'),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Items per page (default: 10, max: 100)'),
         ],
-        responses={200: AdminInvoiceListSerializer(many=True)},
+        responses={200: openapi.Response(
+            description="Paginated invoice list",
+            schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'count': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'next': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'previous': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'results': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+                },
+            ),
+        )},
     )
     def get(self, request):
         from VehicleListing.models import Invoice
@@ -857,8 +888,10 @@ class AdminInvoiceListView(APIView):
             if parsed:
                 qs = qs.filter(created_at__date__lte=parsed)
 
-        serializer = AdminInvoiceListSerializer(qs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = CustomPageNumberPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = AdminInvoiceListSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class AdminInvoiceDetailView(APIView):
@@ -997,8 +1030,21 @@ class AdminDiscountCodeListCreateView(APIView):
         manual_parameters=[
             openapi.Parameter('is_active', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, description='Filter by active status'),
             openapi.Parameter('discount_type', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='percentage | fixed'),
+            openapi.Parameter('page', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Page number'),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description='Items per page (default: 10, max: 100)'),
         ],
-        responses={200: AdminDiscountCodeSerializer(many=True)},
+        responses={200: openapi.Response(
+            description="Paginated discount code list",
+            schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'count': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'next': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'previous': openapi.Schema(type=openapi.TYPE_STRING, x_nullable=True),
+                    'results': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
+                },
+            ),
+        )},
     )
     def get(self, request):
         from .models import DiscountCode
@@ -1012,8 +1058,10 @@ class AdminDiscountCodeListCreateView(APIView):
         if discount_type:
             qs = qs.filter(discount_type=discount_type)
 
-        serializer = AdminDiscountCodeSerializer(qs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = CustomPageNumberPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = AdminDiscountCodeSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @swagger_auto_schema(
         operation_summary="[Admin] Create discount code",
