@@ -184,6 +184,8 @@ class RegisterView(APIView):
                 'phone_number': openapi.Schema(type=openapi.TYPE_STRING, description='Phone number.'),
                 'gumtree_dealarship_url': openapi.Schema(type=openapi.TYPE_STRING, description='Gumtree dealership profile URL (must start with https://www.gumtree.com.au/web/s-user).'),
                 'facebook_dealership_url': openapi.Schema(type=openapi.TYPE_STRING, description='Facebook Marketplace profile URL (must start with https://www.facebook.com/marketplace/profile/).'),
+                'dealership_license_number': openapi.Schema(type=openapi.TYPE_STRING, description='Dealership license number (optional).'),
+                'dealership_license_phone': openapi.Schema(type=openapi.TYPE_STRING, description='Dealership license phone number (optional).'),
             },
         ),
         responses={

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Subscription Renews Tomorrow</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f4f9; }
+        .email-wrapper { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background-color: #e74c3c; padding: 30px 20px; text-align: center; color: white; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .header p { margin: 8px 0 0; font-size: 14px; opacity: 0.9; }
+        .content { padding: 30px 20px; }
+        .content h2 { color: #333; margin-top: 0; }
+        .notice-box { background-color: #fdf0ee; border-left: 4px solid #e74c3c; padding: 15px 20px; margin: 20px 0; border-radius: 5px; }
+        .notice-box strong { color: #e74c3c; }
+        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #666; border-top: 1px solid #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Your Subscription Renews Tomorrow</h1>
+            <p>Last chance to update your payment details</p>
+        </div>
+        <div class="content">
+            <h2>Hi {{ user_name }},</h2>
+
+            <p>Your <strong>{{ plan_name }}</strong> subscription for <strong>{{ dealership_name }}</strong> renews <strong>tomorrow</strong>.</p>
+
+            <div class="notice-box">
+                <strong>Renewal date: {{ renewal_date }}</strong><br>
+                Your payment method on file will be charged automatically. If the payment fails, your subscription will be placed on hold.
+            </div>
+
+            <p>If you need to update your payment method, please do so now from your dashboard to avoid any disruption.</p>
+
+            <p>After a successful renewal you will receive a payment confirmation email with your invoice.</p>
+
+            <p>If you have any questions, reply to this email or contact our support team.</p>
+
+            <p>The Relister Team</p>
+        </div>
+        <div class="footer">
+            <p><strong>Relister</strong> – Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>

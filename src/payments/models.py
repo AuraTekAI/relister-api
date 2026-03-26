@@ -32,6 +32,7 @@ class DiscountCode(models.Model):
     valid_until = models.DateTimeField()
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    stripe_coupon_id = models.CharField(max_length=255, blank=True, null=True)
 
     def is_valid(self):
         now = timezone.now()

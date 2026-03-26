@@ -25,6 +25,7 @@ class VehiclelistingConfig(AppConfig):
                     "daily_1am": CrontabSchedule.objects.get_or_create(minute='0', hour='1')[0],
                     "daily_5am": CrontabSchedule.objects.get_or_create(minute='0', hour='5')[0],
                     "daily_midnight_5": CrontabSchedule.objects.get_or_create(minute='5', hour='0')[0],
+                    "daily_midnight_10": CrontabSchedule.objects.get_or_create(minute='10', hour='0')[0],
                 }
 
                 tasks = [
@@ -59,6 +60,12 @@ class VehiclelistingConfig(AppConfig):
                         "task": "payments.tasks.mark_overdue_invoices",
                         # Runs every day at 02:00 UTC
                         "crontab": crontab_map["daily_2am"],
+                    },
+                    {
+                        "name": "Check_Subscription_Renewal_Warnings",
+                        "task": "payments.tasks.check_subscription_renewal_task",
+                        # Runs every day at 00:10 UTC (just after trial check at 00:05)
+                        "crontab": crontab_map["daily_midnight_10"],
                     },
                 ]
 

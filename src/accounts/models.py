@@ -68,6 +68,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=15, null=True, blank=True)
     gumtree_dealarship_url = models.URLField(max_length=200, null=True, blank=True)
     facebook_dealership_url = models.URLField(max_length=200, null=True, blank=True)
+    dealership_license_number = models.CharField(max_length=100, null=True, blank=True)
+    dealership_license_phone = models.CharField(max_length=20, null=True, blank=True)
     is_approved = models.BooleanField(default=False)
 
     # Trial / subscription status

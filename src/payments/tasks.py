@@ -2,6 +2,7 @@ import logging
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from celery import shared_task
+from django.db.models import F
 from django.utils import timezone
 
 logger = logging.getLogger('relister_views')
@@ -71,20 +72,31 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
     # --- Discount ---
     discount_obj = subscription.active_discount_code
     discount_amount = Decimal('0.00')
-    if discount_obj and discount_obj.is_valid():
-        pre_discount = base_charge + overage_charge
-        if discount_obj.discount_type == 'percentage':
-            discount_amount = (pre_discount * discount_obj.discount_value / Decimal('100')).quantize(
-                Decimal('0.01'), rounding=ROUND_HALF_UP
+    if discount_obj:
+        if not discount_obj.is_valid():
+            # Code expired/exhausted since it was applied — clear it without applying
+            logger.warning(
+                f"generate_invoice: DiscountCode '{discount_obj.code}' is no longer valid "
+                f"(expired, inactive, or exhausted) — skipping discount for subscription {subscription_id}."
             )
+            subscription.active_discount_code = None
+            subscription.save(update_fields=['active_discount_code', 'updated_at'])
+            discount_obj = None
         else:
-            discount_amount = min(discount_obj.discount_value, pre_discount)
-        # Increment usage count
-        discount_obj.used_count += 1
-        discount_obj.save(update_fields=['used_count'])
-        # Clear applied discount so it's not double-applied next cycle
-        subscription.active_discount_code = None
-        subscription.save(update_fields=['active_discount_code', 'updated_at'])
+            pre_discount = base_charge + overage_charge
+            if discount_obj.discount_type == 'percentage':
+                pct = min(discount_obj.discount_value, Decimal('100'))  # cap at 100%
+                discount_amount = (pre_discount * pct / Decimal('100')).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP
+                )
+            else:
+                discount_amount = min(discount_obj.discount_value, pre_discount)
+            # Increment usage count atomically to prevent race conditions
+            from .models import DiscountCode as _DiscountCode
+            _DiscountCode.objects.filter(pk=discount_obj.pk).update(used_count=F('used_count') + 1)
+            # Clear applied discount so it's not double-applied next cycle
+            subscription.active_discount_code = None
+            subscription.save(update_fields=['active_discount_code', 'updated_at'])
 
     subtotal = (base_charge + overage_charge - discount_amount).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     gst_amount = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -106,6 +118,7 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
         overage_rate=overage_rate,
         overage_charge=overage_charge,
         discount_code=discount_obj if discount_obj else None,
+        discount_code_str=discount_obj.code if discount_obj else '',
         discount_amount=discount_amount,
         subtotal=subtotal,
         gst_amount=gst_amount,
@@ -206,6 +219,82 @@ def generate_invoice_delayed(self, stripe_subscription_id=None, stripe_customer_
 
     logger.info(f"generate_invoice_delayed: Subscription id={subscription.id} found — generating invoice.")
     generate_invoice.delay(subscription.id, stripe_invoice_id=stripe_invoice_id, paid=True)
+
+
+def _send_subscription_renewal_notification(user, subscription, days_remaining):
+    """
+    Send subscription renewal warning email.
+    days_remaining: 14, 7, or 1
+    """
+    logger.info(f"Sending subscription renewal ({days_remaining}d) warning email to {user.email}")
+    try:
+        from django.core.mail import EmailMessage
+        from django.template.loader import render_to_string
+        from relister.settings import EMAIL_HOST_USER
+
+        period_end = subscription.current_period_end.strftime('%d %B %Y') if subscription.current_period_end else 'N/A'
+        plan_name = subscription.plan.name if subscription.plan else 'N/A'
+        context = {
+            'user_name': user.first_name or getattr(user, 'contact_person_name', None) or user.email,
+            'dealership_name': getattr(user, 'dealership_name', None) or 'N/A',
+            'plan_name': plan_name,
+            'renewal_date': period_end,
+            'days_remaining': days_remaining,
+        }
+
+        if days_remaining == 14:
+            template = 'payments/subscription_renewal_14days.html'
+            subject = 'Your Relister subscription renews in 14 days'
+        elif days_remaining == 7:
+            template = 'payments/subscription_renewal_7days.html'
+            subject = 'Your Relister subscription renews in 7 days'
+        else:
+            template = 'payments/subscription_renewal_1day.html'
+            subject = 'Your Relister subscription renews tomorrow'
+
+        body = render_to_string(template, context)
+        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email.content_subtype = 'html'
+        email.send(fail_silently=True)
+        logger.info(f"Subscription renewal ({days_remaining}d) email sent to {user.email}")
+    except Exception as exc:
+        logger.error(f"_send_subscription_renewal_notification: Failed to send to {user.email}: {exc}")
+
+
+@shared_task(queue='scheduling_queue')
+def check_subscription_renewal_task():
+    """
+    Daily task that sends renewal warning emails to active subscribers at 14, 7, and 1 day
+    before their current_period_end.
+    Runs every day at 00:10 UTC via Celery Beat.
+    """
+    from .models import Subscription
+
+    now = timezone.now()
+    today = now.date()
+
+    logger.info("Starting daily subscription renewal check")
+
+    warning_days = [14, 7, 1]
+    total_sent = 0
+
+    for days in warning_days:
+        target_date = today + timedelta(days=days)
+        subs = Subscription.objects.select_related('user', 'plan').filter(
+            status='active',
+            current_period_end__date=target_date,
+        )
+        for sub in subs:
+            try:
+                prefs = sub.user.notification_preferences
+                if not prefs.email_billing_reminder:
+                    continue
+            except Exception:
+                pass  # NotificationPreference may not exist — send anyway
+            _send_subscription_renewal_notification(sub.user, sub, days)
+            total_sent += 1
+
+    logger.info(f"Subscription renewal check complete. Emails sent: {total_sent}")
 
 
 @shared_task(bind=True, queue='scheduling_queue')

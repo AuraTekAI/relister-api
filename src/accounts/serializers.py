@@ -22,6 +22,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
             'password', 'confirm_password',
@@ -124,6 +125,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dealership_license_number', 'dealership_license_phone',
         )
         extra_kwargs = {
             'email': {'required': True},
@@ -191,6 +193,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
         read_only_fields = ['id', 'email', 'account_status', 'trial_start_date', 'trial_end_date']
@@ -270,6 +273,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': user.phone_number,
                 'gumtree_dealarship_url': user.gumtree_dealarship_url,
                 'facebook_dealership_url': user.facebook_dealership_url,
+                'dealership_license_number': user.dealership_license_number,
+                'dealership_license_phone': user.dealership_license_phone,
                 'is_superuser': user.is_superuser,
                 'is_approved': user.is_approved,
                 'account_status': user.account_status,

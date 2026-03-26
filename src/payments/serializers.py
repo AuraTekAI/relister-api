@@ -130,8 +130,6 @@ class InvoiceListSerializer(serializers.ModelSerializer):
 
 
 class InvoiceDetailSerializer(serializers.ModelSerializer):
-    discount_code_str = serializers.SerializerMethodField()
-
     class Meta:
         model = Invoice
         fields = [
@@ -155,9 +153,6 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             'stripe_invoice_id',
             'created_at',
         ]
-
-    def get_discount_code_str(self, obj):
-        return obj.discount_code.code if obj.discount_code else None
 
 
 class DiscountCodeSerializer(serializers.ModelSerializer):
@@ -186,12 +181,33 @@ class AdminDiscountCodeSerializer(serializers.ModelSerializer):
             'valid_until',
             'is_active',
             'is_valid_now',
+            'stripe_coupon_id',
             'created_at',
         ]
-        read_only_fields = ['id', 'used_count', 'is_valid_now', 'created_at']
+        read_only_fields = ['id', 'used_count', 'is_valid_now', 'stripe_coupon_id', 'created_at']
 
     def get_is_valid_now(self, obj):
         return obj.is_valid()
+
+    def validate_discount_value(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("discount_value must be greater than 0.")
+        return value
+
+    def validate(self, attrs):
+        discount_type = attrs.get('discount_type', getattr(self.instance, 'discount_type', None))
+        discount_value = attrs.get('discount_value', getattr(self.instance, 'discount_value', None))
+        if discount_type == 'percentage' and discount_value is not None and discount_value > 100:
+            raise serializers.ValidationError({'discount_value': "Percentage discount cannot exceed 100."})
+
+        max_uses = attrs.get('max_uses')
+        if max_uses is not None and self.instance is not None:
+            if max_uses < self.instance.used_count:
+                raise serializers.ValidationError(
+                    {'max_uses': f"max_uses ({max_uses}) cannot be less than current used_count ({self.instance.used_count})."}
+                )
+
+        return attrs
 
 
 # ---------------------------------------------------------------------------

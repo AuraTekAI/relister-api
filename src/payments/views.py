@@ -33,6 +33,79 @@ from .serializers import (
 logger = logging.getLogger('relister_views')
 
 
+# ---------------------------------------------------------------------------
+# Stripe Coupon sync helpers
+# ---------------------------------------------------------------------------
+
+def _sync_discount_to_stripe(discount):
+    """
+    Create a Stripe Coupon matching the given DiscountCode and store its id.
+    Uses discount.code as the Stripe coupon id for a stable, predictable mapping.
+    Graceful: logs errors without raising so the caller always succeeds locally.
+    """
+    import math
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    coupon_id = discount.code
+
+    kwargs = {
+        'id': coupon_id,
+        'name': discount.code,
+        'duration': 'once',
+    }
+    if discount.max_uses is not None:
+        kwargs['max_redemptions'] = discount.max_uses
+    kwargs['redeem_by'] = math.floor(discount.valid_until.timestamp())
+
+    if discount.discount_type == 'percentage':
+        kwargs['percent_off'] = float(discount.discount_value)
+    else:
+        kwargs['amount_off'] = int(discount.discount_value * 100)
+        kwargs['currency'] = 'aud'
+
+    try:
+        coupon = stripe.Coupon.create(**kwargs)
+        discount.stripe_coupon_id = coupon.id
+        discount.save(update_fields=['stripe_coupon_id'])
+        logger.info(f"_sync_discount_to_stripe: Created Stripe coupon '{coupon.id}' for DiscountCode '{discount.code}'.")
+        return coupon.id
+    except stripe.error.InvalidRequestError as exc:
+        if 'already exists' in str(exc).lower() or 'resource_already_exists' in str(exc).lower():
+            try:
+                existing = stripe.Coupon.retrieve(coupon_id)
+                discount.stripe_coupon_id = existing.id
+                discount.save(update_fields=['stripe_coupon_id'])
+                logger.info(f"_sync_discount_to_stripe: Coupon '{coupon_id}' already exists in Stripe — linked.")
+                return existing.id
+            except stripe.error.StripeError as inner_exc:
+                logger.error(f"_sync_discount_to_stripe: Failed to retrieve existing coupon '{coupon_id}': {inner_exc}")
+                return None
+        logger.error(f"_sync_discount_to_stripe: Stripe InvalidRequestError for '{discount.code}': {exc}")
+        return None
+    except stripe.error.StripeError as exc:
+        logger.error(f"_sync_discount_to_stripe: Stripe error for '{discount.code}': {exc}")
+        return None
+
+
+def _archive_stripe_coupon(stripe_coupon_id):
+    """
+    Delete (archive) a Stripe coupon so it can no longer be redeemed.
+    Graceful: ignores 'no such coupon' errors, logs others.
+    """
+    if not stripe_coupon_id:
+        return
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    try:
+        stripe.Coupon.delete(stripe_coupon_id)
+        logger.info(f"_archive_stripe_coupon: Deleted Stripe coupon '{stripe_coupon_id}'.")
+    except stripe.error.InvalidRequestError as exc:
+        if 'no such coupon' in str(exc).lower():
+            logger.info(f"_archive_stripe_coupon: Coupon '{stripe_coupon_id}' already gone from Stripe.")
+        else:
+            logger.error(f"_archive_stripe_coupon: Failed to delete coupon '{stripe_coupon_id}': {exc}")
+    except stripe.error.StripeError as exc:
+        logger.error(f"_archive_stripe_coupon: Stripe error deleting '{stripe_coupon_id}': {exc}")
+
+
 class PlanListView(APIView):
     """GET /api/payments/plans/ — list all active plans."""
     permission_classes = [IsAuthenticated]
@@ -183,8 +256,33 @@ class CheckoutView(APIView):
         # Overage is billed separately via invoice line items when quota is exceeded.
         line_items = [{'price': plan.stripe_price_id, 'quantity': 1}]
 
+        # Pass pending discount coupon to checkout if user has one applied.
+        # If stripe_coupon_id is missing (e.g. Stripe was down at admin create time),
+        # attempt a re-sync now so the user gets their discount at checkout.
+        checkout_discounts = []
+        if existing_sub and existing_sub.active_discount_code and existing_sub.active_discount_code.is_valid():
+            discount = existing_sub.active_discount_code
+            if not discount.stripe_coupon_id:
+                logger.warning(
+                    f"CheckoutView: DiscountCode '{discount.code}' has no stripe_coupon_id — "
+                    f"attempting re-sync before checkout for user {user.id}."
+                )
+                _sync_discount_to_stripe(discount)
+                discount.refresh_from_db(fields=['stripe_coupon_id'])
+            if discount.stripe_coupon_id:
+                checkout_discounts = [{'coupon': discount.stripe_coupon_id}]
+                logger.info(
+                    f"CheckoutView: Attaching coupon '{discount.stripe_coupon_id}' "
+                    f"to checkout session for user {user.id}."
+                )
+            else:
+                logger.warning(
+                    f"CheckoutView: Re-sync of DiscountCode '{discount.code}' failed — "
+                    f"proceeding without discount for user {user.id}."
+                )
+
         try:
-            session = stripe.checkout.Session.create(
+            session_kwargs = dict(
                 customer=stripe_customer_id,
                 mode='subscription',
                 line_items=line_items,
@@ -195,6 +293,9 @@ class CheckoutView(APIView):
                     'plan_id': str(plan.id),
                 },
             )
+            if checkout_discounts:
+                session_kwargs['discounts'] = checkout_discounts
+            session = stripe.checkout.Session.create(**session_kwargs)
         except stripe.error.StripeError as exc:
             logger.error(f"Stripe checkout session creation failed for user {user.id}: {exc}")
             return Response(
@@ -315,6 +416,20 @@ class WebhookView(APIView):
             f"checkout.session.completed: Subscription {'created' if created else 'updated'} "
             f"(id={sub_obj.id}, stripe_sub={stripe_subscription_id}) for user {user.email}."
         )
+        if sub_obj.active_discount_code:
+            if sub_obj.active_discount_code.is_valid():
+                logger.info(
+                    f"checkout.session.completed: active_discount_code='{sub_obj.active_discount_code.code}' "
+                    f"preserved on subscription {sub_obj.id} for user {user.email}."
+                )
+            else:
+                # Discount expired/exhausted since it was applied — clear it so it's not misapplied
+                logger.warning(
+                    f"checkout.session.completed: active_discount_code='{sub_obj.active_discount_code.code}' "
+                    f"is no longer valid — clearing from subscription {sub_obj.id} for user {user.email}."
+                )
+                sub_obj.active_discount_code = None
+                sub_obj.save(update_fields=['active_discount_code', 'updated_at'])
 
         user.account_status = 'active'
         user.save(update_fields=['account_status'])
@@ -774,10 +889,14 @@ class ApplyDiscountView(APIView):
                         'discount_type': openapi.Schema(type=openapi.TYPE_STRING),
                         'discount_value': openapi.Schema(type=openapi.TYPE_STRING),
                         'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'stripe_applied': openapi.Schema(
+                            type=openapi.TYPE_BOOLEAN,
+                            description='True if the coupon was also applied to the Stripe subscription immediately. False for trial users (applied at checkout) or if Stripe was unreachable.',
+                        ),
                     },
                 ),
             ),
-            400: "Missing code, invalid, expired, or exhausted.",
+            400: "Missing code, invalid, expired, exhausted, or already applied.",
             404: "No active subscription found.",
         },
     )
@@ -798,7 +917,7 @@ class ApplyDiscountView(APIView):
             )
 
         try:
-            subscription = Subscription.objects.get(
+            subscription = Subscription.objects.select_related('active_discount_code').get(
                 user=request.user,
                 status__in=['active', 'past_due', 'trial'],
             )
@@ -808,8 +927,39 @@ class ApplyDiscountView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Idempotency: prevent applying the same code twice
+        if subscription.active_discount_code_id == discount.pk:
+            return Response(
+                {'detail': f"Discount code '{discount.code}' is already applied to your subscription."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         subscription.active_discount_code = discount
         subscription.save(update_fields=['active_discount_code', 'updated_at'])
+
+        stripe_applied = False
+        if subscription.stripe_subscription_id and discount.stripe_coupon_id:
+            try:
+                stripe.api_key = settings.STRIPE_SECRET_KEY
+                stripe.Subscription.modify(
+                    subscription.stripe_subscription_id,
+                    coupon=discount.stripe_coupon_id,
+                )
+                stripe_applied = True
+                logger.info(
+                    f"ApplyDiscount: Applied Stripe coupon '{discount.stripe_coupon_id}' "
+                    f"to subscription '{subscription.stripe_subscription_id}' for user {request.user.email}."
+                )
+            except stripe.error.StripeError as exc:
+                logger.error(
+                    f"ApplyDiscount: Failed to apply Stripe coupon '{discount.stripe_coupon_id}' "
+                    f"to subscription '{subscription.stripe_subscription_id}': {exc}"
+                )
+        elif subscription.stripe_subscription_id and not discount.stripe_coupon_id:
+            logger.warning(
+                f"ApplyDiscount: DiscountCode '{discount.code}' has no stripe_coupon_id — "
+                f"Stripe subscription not updated. Local discount recorded only."
+            )
 
         if discount.discount_type == 'percentage':
             message = f"Discount applied: {discount.discount_value}% off your next invoice."
@@ -822,6 +972,7 @@ class ApplyDiscountView(APIView):
                 'discount_type': discount.discount_type,
                 'discount_value': str(discount.discount_value),
                 'message': message,
+                'stripe_applied': stripe_applied,
             },
             status=status.HTTP_200_OK,
         )
@@ -1078,6 +1229,7 @@ class AdminDiscountCodeListCreateView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         discount = serializer.save()
         logger.info(f"AdminDiscountCode: Created code '{discount.code}' by admin {request.user.email}.")
+        _sync_discount_to_stripe(discount)
         return Response(AdminDiscountCodeSerializer(discount).data, status=status.HTTP_201_CREATED)
 
 
@@ -1115,12 +1267,39 @@ class AdminDiscountCodeDetailView(APIView):
         discount = self._get_object(pk)
         if not discount:
             return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        old_stripe_coupon_id = discount.stripe_coupon_id
+        old_discount_type = discount.discount_type
+        old_discount_value = discount.discount_value
+        old_is_active = discount.is_active
+
         serializer = AdminDiscountCodeSerializer(discount, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        serializer.save()
+        discount = serializer.save()
         logger.info(f"AdminDiscountCode: Updated code '{discount.code}' by admin {request.user.email}.")
-        return Response(serializer.data, status=status.HTTP_200_OK)
+
+        structural_change = (
+            discount.discount_type != old_discount_type
+            or discount.discount_value != old_discount_value
+        )
+
+        if not discount.is_active and old_is_active:
+            # Deactivated — archive the Stripe coupon
+            _archive_stripe_coupon(old_stripe_coupon_id)
+            discount.stripe_coupon_id = None
+            discount.save(update_fields=['stripe_coupon_id'])
+        elif discount.is_active and structural_change:
+            # Stripe coupons are immutable — delete old and recreate
+            _archive_stripe_coupon(old_stripe_coupon_id)
+            discount.stripe_coupon_id = None
+            discount.save(update_fields=['stripe_coupon_id'])
+            _sync_discount_to_stripe(discount)
+        elif discount.is_active and not discount.stripe_coupon_id:
+            # Missing coupon (e.g. previous Stripe failure) — create now
+            _sync_discount_to_stripe(discount)
+
+        return Response(AdminDiscountCodeSerializer(discount).data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary="[Admin] Delete discount code",
@@ -1131,6 +1310,8 @@ class AdminDiscountCodeDetailView(APIView):
         if not discount:
             return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
         code = discount.code
+        stripe_coupon_id = discount.stripe_coupon_id
         discount.delete()
         logger.info(f"AdminDiscountCode: Deleted code '{code}' by admin {request.user.email}.")
+        _archive_stripe_coupon(stripe_coupon_id)
         return Response(status=status.HTTP_204_NO_CONTENT)

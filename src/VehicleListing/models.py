@@ -148,6 +148,8 @@ class Invoice(models.Model):
         blank=True,
         related_name='billing_invoices',
     )
+    # Snapshot of the discount code string at billing time — preserved even if DiscountCode is deleted
+    discount_code_str = models.CharField(max_length=50, blank=True, default='')
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     # Totals
