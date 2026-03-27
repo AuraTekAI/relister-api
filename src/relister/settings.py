@@ -345,12 +345,13 @@ LOGGING = {
 }
 
 
-EMAIL_BACKEND = env('EMAIL_BACKEND')
-EMAIL_HOST = env('EMAIL_HOST')
-EMAIL_PORT = env('EMAIL_PORT')
-EMAIL_USE_TLS = env('EMAIL_USE_TLS')
-EMAIL_HOST_USER = env('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
+EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='hello@autorelister.com.au')
+FLASHPOST_API_URL = env('FLASHPOST_API_URL')
+FLASHPOST_API_KEY = env('FLASHPOST_API_KEY')
+# Compatibility alias — accounts/views.py, payments/tasks.py, VehicleListing/utils.py
+# all import EMAIL_HOST_USER by name; this alias keeps them working without any changes.
+EMAIL_HOST_USER = DEFAULT_FROM_EMAIL
 MAX_RETRIES_ATTEMPTS = int(env('MAX_RETRIES_ATTEMPTS'))
 ADMIN_EMAIL = env('ADMIN_EMAIL')
 TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
