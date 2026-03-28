@@ -1110,11 +1110,12 @@ class AdminInvoiceStatsView(APIView):
         operation_summary="[Admin] Invoice dashboard stats",
         operation_description=(
             "Returns aggregated invoice statistics for the admin dashboard cards: "
-            "total invoices, total revenue collected, outstanding amount, overdue count, and current month revenue."
+            "total invoices, total revenue collected, outstanding amount, overdue count, current month revenue, "
+            "and user counts (total, active, approved, unapproved)."
         ),
         responses={
             200: openapi.Response(
-                description="Invoice stats",
+                description="Invoice and user stats",
                 schema=openapi.Schema(
                     type=openapi.TYPE_OBJECT,
                     properties={
@@ -1126,6 +1127,10 @@ class AdminInvoiceStatsView(APIView):
                         'outstanding_amount': openapi.Schema(type=openapi.TYPE_STRING, description='Sum of unpaid + overdue invoice totals (AUD)'),
                         'overdue_amount': openapi.Schema(type=openapi.TYPE_STRING, description='Sum of overdue invoice totals (AUD)'),
                         'current_month_revenue': openapi.Schema(type=openapi.TYPE_STRING, description='Paid invoice totals for the current calendar month (AUD)'),
+                        'total_users': openapi.Schema(type=openapi.TYPE_INTEGER, description='Total registered users (excluding admins)'),
+                        'total_active_users': openapi.Schema(type=openapi.TYPE_INTEGER, description='Users with is_active=True (excluding admins)'),
+                        'total_approved_users': openapi.Schema(type=openapi.TYPE_INTEGER, description='Users with is_approved=True (excluding admins)'),
+                        'total_unapproved_users': openapi.Schema(type=openapi.TYPE_INTEGER, description='Users with is_approved=False (excluding admins)'),
                     },
                 ),
             )
@@ -1133,6 +1138,7 @@ class AdminInvoiceStatsView(APIView):
     )
     def get(self, request):
         from VehicleListing.models import Invoice
+        from accounts.models import User
         from django.db.models import Count, Sum, Q
         from django.utils import timezone
 
@@ -1152,6 +1158,14 @@ class AdminInvoiceStatsView(APIView):
             ),
         )
 
+        non_admin_users = User.objects.filter(is_staff=False, is_superuser=False)
+        user_agg = non_admin_users.aggregate(
+            total_users=Count('id'),
+            total_active_users=Count('id', filter=Q(is_active=True)),
+            total_approved_users=Count('id', filter=Q(is_approved=True)),
+            total_unapproved_users=Count('id', filter=Q(is_approved=False)),
+        )
+
         return Response({
             'total_invoices': agg['total_invoices'] or 0,
             'paid_invoices': agg['paid_invoices'] or 0,
@@ -1161,6 +1175,10 @@ class AdminInvoiceStatsView(APIView):
             'outstanding_amount': str(agg['outstanding_amount'] or '0.00'),
             'overdue_amount': str(agg['overdue_amount'] or '0.00'),
             'current_month_revenue': str(agg['current_month_revenue'] or '0.00'),
+            'total_users': user_agg['total_users'] or 0,
+            'total_active_users': user_agg['total_active_users'] or 0,
+            'total_approved_users': user_agg['total_approved_users'] or 0,
+            'total_unapproved_users': user_agg['total_unapproved_users'] or 0,
         }, status=status.HTTP_200_OK)
 
 

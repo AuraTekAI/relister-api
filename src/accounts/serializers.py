@@ -262,6 +262,20 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     code='account_suspended',
                 )
 
+        try:
+            sub = user.subscription
+            subscription_data = {
+                'status': sub.status,
+                'cancel_at_period_end': sub.cancel_at_period_end,
+                'current_period_end': sub.current_period_end.isoformat() if sub.current_period_end else None,
+            }
+        except Exception:
+            subscription_data = {
+                'status': None,
+                'cancel_at_period_end': False,
+                'current_period_end': None,
+            }
+
         data.update({
             'user': {
                 'id': user.id,
@@ -280,6 +294,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'account_status': user.account_status,
                 'trial_end_date': user.trial_end_date.isoformat() if user.trial_end_date else None,
             },
+            'subscription': subscription_data,
             'status': 200,
         })
         return data
