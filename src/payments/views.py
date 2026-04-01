@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from utils.custom_pagination import CustomPageNumberPagination
+from .stripe_utils import sync_overage_subscription_item
 from .models import Plan, Subscription, DiscountCode
 from VehicleListing.models import Invoice
 from .serializers import (
@@ -251,10 +252,10 @@ class CheckoutView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-        # Build line items — base subscription + optional metered overage item
-        # Only include the base subscription price in checkout.
-        # Overage is billed separately via invoice line items when quota is exceeded.
+        # Base subscription + metered overage price (usage reported when listing exceeds quota).
         line_items = [{'price': plan.stripe_price_id, 'quantity': 1}]
+        if plan.stripe_overage_price_id:
+            line_items.append({'price': plan.stripe_overage_price_id})
 
         # Pass pending discount coupon to checkout if user has one applied.
         # If stripe_coupon_id is missing (e.g. Stripe was down at admin create time),
@@ -432,8 +433,14 @@ class WebhookView(APIView):
                 sub_obj.save(update_fields=['active_discount_code', 'updated_at'])
 
         user.account_status = 'active'
-        user.save(update_fields=['account_status'])
+        user.listing_count = 0
+        user.relist_cycles = 0
+        user.overage_count = 0
+        user.save(update_fields=['account_status', 'listing_count', 'relist_cycles', 'overage_count', 'updated_at'])
         logger.info(f"checkout.session.completed: User {user.email} activated on plan '{plan}'.")
+
+        if plan:
+            sync_overage_subscription_item(sub_obj, stripe_sub, plan)
 
     def _handle_subscription_updated(self, stripe_sub):
         stripe_subscription_id = stripe_sub.get('id')
@@ -464,6 +471,12 @@ class WebhookView(APIView):
         subscription.status = self._map_stripe_status(stripe_sub['status'])
         if period_rolled_over:
             subscription.listing_count = 0
+            # Reset user counters for the new billing period
+            period_user = subscription.user
+            period_user.listing_count = 0
+            period_user.relist_cycles = 0
+            period_user.overage_count = 0
+            period_user.save(update_fields=['listing_count', 'relist_cycles', 'overage_count', 'updated_at'])
 
         # Sync cancel_at_period_end from Stripe — this is authoritative.
         # When the period finally ends, Stripe fires customer.subscription.deleted
@@ -480,6 +493,16 @@ class WebhookView(APIView):
             'cancel_at_period_end', 'cancelled_at', 'updated_at',
         ])
         logger.info(f"customer.subscription.updated: {stripe_subscription_id} — status={subscription.status}, cancel_at_period_end={stripe_cancel_at_period_end}.")
+
+        try:
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            stripe_sub_full = stripe.Subscription.retrieve(
+                stripe_subscription_id,
+                expand=['items.data.price'],
+            )
+            sync_overage_subscription_item(subscription, stripe_sub_full, subscription.plan)
+        except stripe.error.StripeError as exc:
+            logger.warning(f"customer.subscription.updated: overage item sync failed: {exc}")
 
     def _handle_subscription_deleted(self, stripe_sub):
         stripe_subscription_id = stripe_sub.get('id')
@@ -515,6 +538,17 @@ class WebhookView(APIView):
         subscription.status = 'past_due'
         subscription.save(update_fields=['status', 'updated_at'])
         logger.info(f"invoice.payment_failed: {stripe_subscription_id} marked past_due.")
+
+        inv_meta = invoice.get('metadata') or {}
+        if inv_meta.get('source') == 'listing_overage':
+            from .tasks import generate_listing_overage_invoice_from_webhook
+            generate_listing_overage_invoice_from_webhook.delay(
+                subscription.id,
+                invoice.get('id'),
+                inv_meta.get('vehicle_listing_id'),
+                paid=False,
+            )
+            return
 
         # Trigger async invoice generation (unpaid)
         from .tasks import generate_invoice
@@ -572,6 +606,17 @@ class WebhookView(APIView):
                     'stripe_invoice_id': invoice.get('id'),
                 },
                 countdown=15,
+            )
+            return
+
+        inv_meta = invoice.get('metadata') or {}
+        if inv_meta.get('source') == 'listing_overage':
+            from .tasks import generate_listing_overage_invoice_from_webhook
+            generate_listing_overage_invoice_from_webhook.delay(
+                subscription.id,
+                invoice.get('id'),
+                inv_meta.get('vehicle_listing_id'),
+                paid=True,
             )
             return
 
@@ -732,56 +777,36 @@ class UsageTrackerView(APIView):
         responses={200: UsageSerializer()},
     )
     def get(self, request):
-        from django.utils import timezone as tz
+        from VehicleListing.models import VehicleListing as VL
 
         user = request.user
 
-        # TODO: Replace with real count when listing publish mechanism is implemented.
-        # active_listing_count = VehicleListing.objects.filter(
-        #     user=user,
-        #     status__in=['active', 'live', 'pending'],
-        # ).count()
-        active_listing_count = 0
+        active_listing_count = VL.objects.filter(user=user, status='completed').count()
 
         try:
             subscription = Subscription.objects.select_related('plan').get(user=user)
             period_start = subscription.current_period_start
             period_end = subscription.current_period_end
-            listings_used = subscription.listing_count
+            listings_used = user.listing_count
+            relist_cycles_this_month = user.relist_cycles
             listing_quota = subscription.plan.listing_quota if subscription.plan else None
             overage_rate = subscription.plan.overage_rate_aud if subscription.plan else None
-
-            # TODO: Replace with real relist cycle count when relisting mechanism is implemented.
-            # relist_cycles_this_month = RelistingFacebooklisting.objects.filter(
-            #     user=user,
-            #     relisting_date__gte=period_start,
-            #     relisting_date__lte=period_end,
-            # ).count() if period_start and period_end else 0
-            relist_cycles_this_month = 0
+            overage_count = user.overage_count
 
         except Subscription.DoesNotExist:
-            # Trial user — derive from User model
+            # Trial user
             period_start = user.trial_start_date
             period_end = user.trial_end_date
-            listings_used = user.daily_listing_count
+            listings_used = user.listing_count
+            relist_cycles_this_month = user.relist_cycles
             listing_quota = None
             overage_rate = None
+            overage_count = 0
 
-            # TODO: Replace with real relist cycle count when relisting mechanism is implemented.
-            # relist_cycles_this_month = RelistingFacebooklisting.objects.filter(
-            #     user=user,
-            #     relisting_date__year=now.year,
-            #     relisting_date__month=now.month,
-            # ).count()
-            relist_cycles_this_month = 0
-
-        # Calculated fields
         if listing_quota and listing_quota > 0:
             usage_percentage = round(min((listings_used / listing_quota) * 100, 100), 1)
-            overage_count = max(0, listings_used - listing_quota)
         else:
             usage_percentage = None
-            overage_count = 0
 
         overage_amount = (
             round(overage_count * float(overage_rate), 2)

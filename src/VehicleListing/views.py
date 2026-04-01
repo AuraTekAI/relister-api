@@ -15,6 +15,8 @@ from rest_framework.decorators import api_view, permission_classes
 import time
 import random   
 from datetime import datetime, timedelta
+from django.db import transaction
+from django.db.models import F
 from queue import Queue
 from django.conf import settings
 from django.utils import timezone
@@ -1183,12 +1185,70 @@ def update_vehicle_listing_listed_on(request):
                 'success': False,
                 'error': 'Vehicle listing not found or you do not have permission to update it'
             }, status=404)
-        
-        # Update the listed_on field
-        vehicle_listing.listed_on = listed_on_datetime
-        vehicle_listing.status = "completed"
-        vehicle_listing.save()
-        
+
+        was_first_listing = not vehicle_listing.is_listed
+
+        # Update the listed_on field and track listing/relist counts atomically
+        with transaction.atomic():
+            vehicle_listing = VehicleListing.objects.select_for_update().get(
+                id=vehicle_listing_id, user=request.user
+            )
+            if not vehicle_listing.is_listed:
+                # First time this listing is being marked live — count it
+                vehicle_listing.is_listed = True
+                vehicle_listing.relist_count = 0
+
+                # Increment user listing_count
+                user = request.user
+                user.listing_count = F('listing_count') + 1
+                user.save(update_fields=['listing_count', 'updated_at'])
+
+                # Sync Subscription.listing_count for invoice overage billing
+                try:
+                    sub = user.subscription
+                    sub.listing_count = F('listing_count') + 1
+                    sub.save(update_fields=['listing_count', 'updated_at'])
+
+                    # Refresh to get real value then check overage
+                    user.refresh_from_db(fields=['listing_count'])
+                    quota = sub.plan.listing_quota if sub.plan else None
+                    if quota and user.listing_count > quota:
+                        user.overage_count = F('overage_count') + 1
+                        user.save(update_fields=['overage_count', 'updated_at'])
+                except Exception:
+                    pass  # trial users have no subscription — no overage
+
+            else:
+                # Listing already counted — this is a relist
+                vehicle_listing.is_relist = True
+                vehicle_listing.relist_count = F('relist_count') + 1
+
+                # Increment user relist_cycles
+                user = request.user
+                user.relist_cycles = F('relist_cycles') + 1
+                user.save(update_fields=['relist_cycles', 'updated_at'])
+
+            vehicle_listing.listed_on = listed_on_datetime
+            vehicle_listing.status = "completed"
+            vehicle_listing.save()
+
+        # Metered overage: first-time listing that exceeds plan quota → Stripe usage + invoice (async).
+        if was_first_listing:
+            try:
+                request.user.refresh_from_db()
+                from payments.models import Subscription
+                sub = Subscription.objects.select_related('plan').filter(user=request.user).first()
+                if (
+                    sub
+                    and sub.plan
+                    and sub.plan.listing_quota is not None
+                    and request.user.listing_count > sub.plan.listing_quota
+                ):
+                    from payments.tasks import report_listing_overage_metered
+                    report_listing_overage_metered.delay(sub.id, vehicle_listing_id)
+            except Exception as exc:
+                logger.warning(f"update_vehicle_listing_listed_on: could not queue overage billing: {exc}")
+
         # Return success response
         return JsonResponse({
             'success': True,

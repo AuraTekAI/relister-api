@@ -154,6 +154,19 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             'created_at',
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        try:
+            overage_listings = int(data.get('overage_listings') or 0)
+            overage_charge = str(data.get('overage_charge') or '0')
+            if overage_listings <= 0 and overage_charge in ('0', '0.0', '0.00'):
+                data.pop('overage_listings', None)
+                data.pop('overage_rate', None)
+                data.pop('overage_charge', None)
+        except Exception:
+            pass
+        return data
+
 
 class DiscountCodeSerializer(serializers.ModelSerializer):
     class Meta:

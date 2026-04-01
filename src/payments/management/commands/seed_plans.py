@@ -10,13 +10,13 @@ class Command(BaseCommand):
     PLANS = [
         {
             'name': 'Starter',
-            'price_aud': '799.00',
+            'price_aud': '599.00',
             'listing_quota': 50,
             'overage_rate_aud': '3.50',
         },
         {
             'name': 'Professional',
-            'price_aud': '1499.00',
+            'price_aud': '999.00',
             'listing_quota': 100,
             'overage_rate_aud': '3.25',
         },
@@ -59,14 +59,28 @@ class Command(BaseCommand):
                 stripe_price_id = base_price.id
                 self.stdout.write(f"Created base price: {stripe_price_id}")
 
-                # Overage price — a per-unit price used to create invoice line items
-                # when a user exceeds their quota. Charged via invoice item, not metered billing.
+                # Stripe API >= 2025-03-31.basil: metered prices must be backed by a Meter.
+                # Create (or reuse) a meter for this plan's overage events.
+                meter_name = f"relister_{name.lower()}_overage"
+                meter = self._get_or_create_meter(meter_name)
+                self.stdout.write(f"Using meter: {meter.id} ({meter_name})")
+
+                # Overage — metered per-unit price backed by the meter above.
                 overage_cents = int(float(plan_data['overage_rate_aud']) * 100)
                 overage_price = stripe.Price.create(
                     product=product.id,
                     unit_amount=overage_cents,
                     currency='aud',
-                    metadata={'type': 'overage_per_listing'},
+                    recurring={
+                        'interval': 'month',
+                        'meter': meter.id,
+                        'usage_type': 'metered',
+                    },
+                    billing_scheme='per_unit',
+                    metadata={
+                        'type': 'overage_per_listing',
+                        'meter_event_name': meter_name,
+                    },
                 )
                 stripe_overage_price_id = overage_price.id
                 self.stdout.write(f"Created overage price: {stripe_overage_price_id}")
@@ -83,6 +97,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"Plan '{name}' created successfully."))
 
         self.stdout.write(self.style.SUCCESS("seed_plans complete."))
+
+    def _get_or_create_meter(self, event_name):
+        """
+        Return an existing active Stripe Meter with the given event_name, or create one.
+        Meters are reusable across runs — idempotent by event_name.
+        """
+        # List existing meters and find a match
+        meters = stripe.billing.Meter.list(limit=100)
+        for m in meters.auto_paging_iter():
+            if m.event_name == event_name and m.status == 'active':
+                return m
+
+        # None found — create a new one
+        return stripe.billing.Meter.create(
+            display_name=f"Relister overage meter ({event_name})",
+            event_name=event_name,
+            default_aggregation={'formula': 'sum'},
+            value_settings={'event_payload_key': 'value'},
+        )
 
     def _cleanup_orphaned_stripe_products(self):
         """

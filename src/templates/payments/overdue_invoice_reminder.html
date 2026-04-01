@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; color: #333;">
+  <h2 style="color: #c0392b;">Invoice overdue</h2>
+  <p>Hi {{ user.first_name|default:user.email }},</p>
+
+  <p>Invoice <strong>{{ invoice.invoice_number }}</strong> is now <strong>overdue</strong>. It remains unpaid more than 7 days after the billing period end date.</p>
+
+  <table style="width:100%; border-collapse: collapse;">
+    <tr><td><strong>Billing period</strong></td><td>{{ invoice.billing_period_start|date:"d M Y" }} – {{ invoice.billing_period_end|date:"d M Y" }}</td></tr>
+    <tr><td><strong>Plan</strong></td><td>{{ invoice.plan_name }}</td></tr>
+    <tr><td><strong>Total (incl. GST)</strong></td><td><strong>${{ invoice.total_amount }} AUD</strong></td></tr>
+  </table>
+
+  <p style="margin-top:24px;">
+    Please log in to your dashboard and complete payment, or update your payment method if needed.
+  </p>
+</body>
+</html>

@@ -86,6 +86,9 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     last_images_check_status_time = models.DateTimeField(null=True, blank=True)
     daily_listing_count = models.IntegerField(default=0)
+    listing_count = models.IntegerField(default=0)      # total listings posted in current subscription period
+    relist_cycles = models.IntegerField(default=0)      # total relist cycles in current subscription period
+    overage_count = models.IntegerField(default=0)      # listings beyond plan quota in current period
 
     # Extra information
     last_delete_listing_time = models.DateTimeField(null=True, blank=True)
