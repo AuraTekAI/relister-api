@@ -519,13 +519,13 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
         )
         raise self.retry(exc=exc)
 
-    if finalized.get('status') == 'paid':
+    if getattr(finalized, 'status', None) == 'paid':
         # Stripe auto-charged on finalize — no need to call .pay()
         payment_succeeded = True
     else:
         try:
             paid_invoice = stripe.Invoice.pay(stripe_invoice_id)
-            payment_succeeded = paid_invoice.get('status') == 'paid'
+            payment_succeeded = getattr(paid_invoice, 'status', None) == 'paid'
         except stripe.error.InvalidRequestError as exc:
             if 'already paid' in str(exc).lower():
                 # Race condition: Stripe paid it between finalize and our .pay() call
