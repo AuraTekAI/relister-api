@@ -17,6 +17,13 @@ from rest_framework.views import APIView
 
 from utils.custom_pagination import CustomPageNumberPagination
 from .stripe_utils import sync_overage_subscription_item
+
+
+def _sget(obj, key, default=None):
+    """Get a value from a Stripe object or plain dict safely."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 from .models import Plan, Subscription, DiscountCode
 from VehicleListing.models import Invoice
 from .serializers import (
@@ -359,13 +366,14 @@ class WebhookView(APIView):
     def _handle_checkout_completed(self, session):
         from accounts.models import User
 
-        user_id = session.get('metadata', {}).get('user_id')
-        plan_id = session.get('metadata', {}).get('plan_id')
-        stripe_customer_id = session.get('customer')
-        stripe_subscription_id = session.get('subscription')
+        metadata = _sget(session, 'metadata') or {}
+        user_id = _sget(metadata, 'user_id')
+        plan_id = _sget(metadata, 'plan_id')
+        stripe_customer_id = _sget(session, 'customer')
+        stripe_subscription_id = _sget(session, 'subscription')
 
         if not user_id or not stripe_subscription_id:
-            logger.warning(f"checkout.session.completed missing metadata: session={session.get('id')}")
+            logger.warning(f"checkout.session.completed missing metadata: session={_sget(session, 'id')}")
             return
 
         try:
@@ -388,17 +396,19 @@ class WebhookView(APIView):
             logger.error(f"checkout.session.completed: Failed to retrieve Stripe subscription {stripe_subscription_id}: {exc}", exc_info=True)
             raise  # re-raise so the outer handler logs it and Stripe retries
 
-        logger.info(f"checkout.session.completed: Retrieved stripe_sub {stripe_subscription_id}, status={stripe_sub.get('status')}, items={stripe_sub.get('items')}")
+        logger.info(f"checkout.session.completed: Retrieved stripe_sub {stripe_subscription_id}, status={_sget(stripe_sub, 'status')}, items={_sget(stripe_sub, 'items')}")
 
         # Stripe API 2026-02-25.clover moved billing period to items.data[0]
-        sub_item = stripe_sub['items']['data'][0] if stripe_sub.get('items') and stripe_sub['items']['data'] else None
-        if sub_item and sub_item.get('current_period_start'):
-            period_start = datetime.fromtimestamp(sub_item['current_period_start'], tz=dt_timezone.utc)
-            period_end = datetime.fromtimestamp(sub_item['current_period_end'], tz=dt_timezone.utc)
+        _items = _sget(stripe_sub, 'items')
+        _items_data = getattr(_items, 'data', None) if not isinstance(_items, dict) else _items.get('data')
+        sub_item = _items_data[0] if _items_data else None
+        if sub_item and _sget(sub_item, 'current_period_start'):
+            period_start = datetime.fromtimestamp(_sget(sub_item, 'current_period_start'), tz=dt_timezone.utc)
+            period_end = datetime.fromtimestamp(_sget(sub_item, 'current_period_end'), tz=dt_timezone.utc)
         else:
             # Fallback for older API versions
-            period_start = datetime.fromtimestamp(stripe_sub['current_period_start'], tz=dt_timezone.utc)
-            period_end = datetime.fromtimestamp(stripe_sub['current_period_end'], tz=dt_timezone.utc)
+            period_start = datetime.fromtimestamp(_sget(stripe_sub, 'current_period_start'), tz=dt_timezone.utc)
+            period_end = datetime.fromtimestamp(_sget(stripe_sub, 'current_period_end'), tz=dt_timezone.utc)
 
         sub_obj, created = Subscription.objects.update_or_create(
             user=user,
@@ -443,7 +453,7 @@ class WebhookView(APIView):
             sync_overage_subscription_item(sub_obj, stripe_sub, plan)
 
     def _handle_subscription_updated(self, stripe_sub):
-        stripe_subscription_id = stripe_sub.get('id')
+        stripe_subscription_id = _sget(stripe_sub, 'id')
         try:
             subscription = Subscription.objects.select_related('user').get(
                 stripe_subscription_id=stripe_subscription_id
@@ -452,13 +462,15 @@ class WebhookView(APIView):
             logger.warning(f"customer.subscription.updated: {stripe_subscription_id} not in DB.")
             return
 
-        sub_item = stripe_sub['items']['data'][0] if stripe_sub.get('items') and stripe_sub['items']['data'] else None
-        if sub_item and sub_item.get('current_period_start'):
-            new_period_start = datetime.fromtimestamp(sub_item['current_period_start'], tz=dt_timezone.utc)
-            new_period_end = datetime.fromtimestamp(sub_item['current_period_end'], tz=dt_timezone.utc)
+        _items = _sget(stripe_sub, 'items')
+        _items_data = getattr(_items, 'data', None) if not isinstance(_items, dict) else _items.get('data')
+        sub_item = _items_data[0] if _items_data else None
+        if sub_item and _sget(sub_item, 'current_period_start'):
+            new_period_start = datetime.fromtimestamp(_sget(sub_item, 'current_period_start'), tz=dt_timezone.utc)
+            new_period_end = datetime.fromtimestamp(_sget(sub_item, 'current_period_end'), tz=dt_timezone.utc)
         else:
-            new_period_start = datetime.fromtimestamp(stripe_sub['current_period_start'], tz=dt_timezone.utc)
-            new_period_end = datetime.fromtimestamp(stripe_sub['current_period_end'], tz=dt_timezone.utc)
+            new_period_start = datetime.fromtimestamp(_sget(stripe_sub, 'current_period_start'), tz=dt_timezone.utc)
+            new_period_end = datetime.fromtimestamp(_sget(stripe_sub, 'current_period_end'), tz=dt_timezone.utc)
 
         # Reset listing_count when a new billing period starts
         period_rolled_over = (
@@ -468,7 +480,7 @@ class WebhookView(APIView):
 
         subscription.current_period_start = new_period_start
         subscription.current_period_end = new_period_end
-        subscription.status = self._map_stripe_status(stripe_sub['status'])
+        subscription.status = self._map_stripe_status(_sget(stripe_sub, 'status'))
         if period_rolled_over:
             subscription.listing_count = 0
             # Reset user counters for the new billing period
@@ -482,7 +494,7 @@ class WebhookView(APIView):
         # When the period finally ends, Stripe fires customer.subscription.deleted
         # which sets status=cancelled. Until then, cancel_at_period_end=True means
         # "scheduled to cancel — access still active".
-        stripe_cancel_at_period_end = stripe_sub.get('cancel_at_period_end', False)
+        stripe_cancel_at_period_end = _sget(stripe_sub, 'cancel_at_period_end') or False
         subscription.cancel_at_period_end = stripe_cancel_at_period_end
         # If Stripe has cleared the flag (e.g. admin reactivated), clear cancelled_at too
         if not stripe_cancel_at_period_end:
@@ -505,7 +517,7 @@ class WebhookView(APIView):
             logger.warning(f"customer.subscription.updated: overage item sync failed: {exc}")
 
     def _handle_subscription_deleted(self, stripe_sub):
-        stripe_subscription_id = stripe_sub.get('id')
+        stripe_subscription_id = _sget(stripe_sub, 'id')
         try:
             subscription = Subscription.objects.select_related('user').get(
                 stripe_subscription_id=stripe_subscription_id
@@ -524,7 +536,7 @@ class WebhookView(APIView):
         logger.info(f"customer.subscription.deleted: User {user.email} subscription cancelled.")
 
     def _handle_invoice_payment_failed(self, invoice):
-        stripe_subscription_id = invoice.get('subscription')
+        stripe_subscription_id = _sget(invoice, 'subscription')
         if not stripe_subscription_id:
             return
         try:
@@ -539,28 +551,28 @@ class WebhookView(APIView):
         subscription.save(update_fields=['status', 'updated_at'])
         logger.info(f"invoice.payment_failed: {stripe_subscription_id} marked past_due.")
 
-        inv_meta = invoice.get('metadata') or {}
-        if inv_meta.get('source') == 'listing_overage':
+        inv_meta = _sget(invoice, 'metadata') or {}
+        if _sget(inv_meta, 'source') == 'listing_overage':
             from .tasks import generate_listing_overage_invoice_from_webhook
             generate_listing_overage_invoice_from_webhook.delay(
                 subscription.id,
-                invoice.get('id'),
-                inv_meta.get('vehicle_listing_id'),
+                _sget(invoice, 'id'),
+                _sget(inv_meta, 'vehicle_listing_id'),
                 paid=False,
             )
             return
 
         # Trigger async invoice generation (unpaid)
         from .tasks import generate_invoice
-        generate_invoice.delay(subscription.id, stripe_invoice_id=invoice.get('id'), paid=False)
+        generate_invoice.delay(subscription.id, stripe_invoice_id=_sget(invoice, 'id'), paid=False)
 
     def _handle_invoice_payment_succeeded(self, invoice):
-        stripe_subscription_id = invoice.get('subscription')
-        stripe_customer_id = invoice.get('customer')
+        stripe_subscription_id = _sget(invoice, 'subscription')
+        stripe_customer_id = _sget(invoice, 'customer')
         logger.info(
-            f"invoice.payment_succeeded: processing invoice {invoice.get('id')} — "
+            f"invoice.payment_succeeded: processing invoice {_sget(invoice, 'id')} — "
             f"subscription={stripe_subscription_id}, customer={stripe_customer_id}, "
-            f"amount={invoice.get('amount_paid')}, status={invoice.get('status')}"
+            f"amount={_sget(invoice, 'amount_paid')}, status={_sget(invoice, 'status')}"
         )
         subscription = None
 
@@ -582,7 +594,7 @@ class WebhookView(APIView):
                 )
                 logger.info(
                     f"invoice.payment_succeeded: found subscription via customer {stripe_customer_id} "
-                    f"(stripe returned subscription=None on invoice {invoice.get('id')})."
+                    f"(stripe returned subscription=None on invoice {_sget(invoice, 'id')})."
                 )
                 # Patch stripe_subscription_id if missing
                 if stripe_subscription_id and not subscription.stripe_subscription_id:
@@ -603,26 +615,26 @@ class WebhookView(APIView):
                 kwargs={
                     'stripe_subscription_id': stripe_subscription_id,
                     'stripe_customer_id': stripe_customer_id,
-                    'stripe_invoice_id': invoice.get('id'),
+                    'stripe_invoice_id': _sget(invoice, 'id'),
                 },
                 countdown=15,
             )
             return
 
-        inv_meta = invoice.get('metadata') or {}
-        if inv_meta.get('source') == 'listing_overage':
+        inv_meta = _sget(invoice, 'metadata') or {}
+        if _sget(inv_meta, 'source') == 'listing_overage':
             from .tasks import generate_listing_overage_invoice_from_webhook
             generate_listing_overage_invoice_from_webhook.delay(
                 subscription.id,
-                invoice.get('id'),
-                inv_meta.get('vehicle_listing_id'),
+                _sget(invoice, 'id'),
+                _sget(inv_meta, 'vehicle_listing_id'),
                 paid=True,
             )
             return
 
         logger.info(f"invoice.payment_succeeded: dispatching generate_invoice for subscription id={subscription.id}.")
         from .tasks import generate_invoice
-        generate_invoice.delay(subscription.id, stripe_invoice_id=invoice.get('id'), paid=True)
+        generate_invoice.delay(subscription.id, stripe_invoice_id=_sget(invoice, 'id'), paid=True)
 
     @staticmethod
     def _map_stripe_status(stripe_status):

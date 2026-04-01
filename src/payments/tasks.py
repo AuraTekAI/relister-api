@@ -475,7 +475,8 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
     meter_event_name = None
     try:
         stripe_price = stripe.Price.retrieve(plan.stripe_overage_price_id)
-        meter_event_name = (stripe_price.get('metadata') or {}).get('meter_event_name')
+        meta = getattr(stripe_price, 'metadata', None)
+        meter_event_name = getattr(meta, 'meter_event_name', None)
     except stripe.error.StripeError as exc:
         logger.exception(f"report_listing_overage_metered: could not retrieve overage price metadata: {exc}")
         raise self.retry(exc=exc)
