@@ -134,8 +134,9 @@ class Command(BaseCommand):
             stripe_name = f"Relister {plan_name}"
             products = stripe.Product.search(query=f'name:"{stripe_name}"')
             for product in products.data:
-                metadata = product.metadata if hasattr(product, 'metadata') else {}
-                is_active = product.active if hasattr(product, 'active') else False
-                if metadata.get('plan_name') == plan_name and is_active:
+                meta = getattr(product, 'metadata', None)
+                meta_plan = getattr(meta, 'plan_name', None) if meta is not None else None
+                is_active = getattr(product, 'active', False)
+                if meta_plan == plan_name and is_active:
                     stripe.Product.modify(product.id, active=False)
                     self.stdout.write(f"Archived orphaned Stripe product: {product.id} ({stripe_name})")
