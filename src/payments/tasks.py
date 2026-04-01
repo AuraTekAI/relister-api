@@ -461,7 +461,7 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     idem_item = f"overage-item-vl{vehicle_listing_id}"
-    idem_inv = f"overage-inv-vl{vehicle_listing_id}"
+    idem_inv = f"overage-inv-vl{vehicle_listing_id}-r{self.request.retries}"
 
     # Step 1: Add an explicit invoice item (one-off, not metered) so Stripe bills it immediately.
     try:
