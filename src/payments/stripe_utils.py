@@ -15,21 +15,23 @@ def sync_overage_subscription_item(subscription, stripe_sub, plan):
 
     target_price = plan.stripe_overage_price_id
     sid = None
-    items = stripe_sub.get('items', {}) or {}
-    for item in items.get('data', []) or []:
-        price_obj = item.get('price')
+    items_obj = stripe_sub['items'] if not isinstance(stripe_sub, dict) else stripe_sub.get('items', {})
+    items_data = items_obj.data if hasattr(items_obj, 'data') else (items_obj.get('data', []) if isinstance(items_obj, dict) else [])
+    for item in items_data or []:
+        price_obj = item['price'] if not isinstance(item, dict) else item.get('price')
         if isinstance(price_obj, dict):
             price_id = price_obj.get('id')
         else:
-            price_id = price_obj
+            price_id = getattr(price_obj, 'id', price_obj)
         if price_id == target_price:
-            sid = item.get('id')
+            sid = item['id'] if not isinstance(item, dict) else item.get('id')
             break
 
+    sub_id = stripe_sub['id'] if not isinstance(stripe_sub, dict) else stripe_sub.get('id')
     if not sid:
         logger.warning(
             f"sync_overage_subscription_item: No subscription item for overage price "
-            f"{target_price} on subscription {stripe_sub.get('id')}."
+            f"{target_price} on subscription {sub_id}."
         )
         return False
 
