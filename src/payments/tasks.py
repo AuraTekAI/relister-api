@@ -501,15 +501,14 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
 
     stripe_invoice_id = stripe_invoice['id']
 
-    # Step 3: Finalize (locks the invoice) then pay it immediately.
+    # Step 3: Finalize (locks the invoice) — Stripe may auto-pay it immediately
+    # when collection_method='charge_automatically', so check status before calling .pay().
     try:
-        stripe.Invoice.finalize_invoice(stripe_invoice_id)
-        paid_invoice = stripe.Invoice.pay(stripe_invoice_id)
+        finalized = stripe.Invoice.finalize_invoice(stripe_invoice_id)
     except stripe.error.StripeError as exc:
         logger.exception(
-            f"report_listing_overage_metered: finalize/pay failed for invoice {stripe_invoice_id}: {exc}"
+            f"report_listing_overage_metered: finalize failed for invoice {stripe_invoice_id}: {exc}"
         )
-        # Invoice exists on Stripe — create a local unpaid record so we can reconcile later.
         _create_overage_invoice_record(
             sub=sub,
             plan=plan,
@@ -520,7 +519,43 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
         )
         raise self.retry(exc=exc)
 
-    payment_succeeded = paid_invoice.get('status') == 'paid'
+    if finalized.get('status') == 'paid':
+        # Stripe auto-charged on finalize — no need to call .pay()
+        payment_succeeded = True
+    else:
+        try:
+            paid_invoice = stripe.Invoice.pay(stripe_invoice_id)
+            payment_succeeded = paid_invoice.get('status') == 'paid'
+        except stripe.error.InvalidRequestError as exc:
+            if 'already paid' in str(exc).lower():
+                # Race condition: Stripe paid it between finalize and our .pay() call
+                payment_succeeded = True
+            else:
+                logger.exception(
+                    f"report_listing_overage_metered: pay failed for invoice {stripe_invoice_id}: {exc}"
+                )
+                _create_overage_invoice_record(
+                    sub=sub,
+                    plan=plan,
+                    stripe_invoice_id=stripe_invoice_id,
+                    overage_rate=overage_rate,
+                    vehicle_listing_id=vehicle_listing_id,
+                    paid=False,
+                )
+                raise self.retry(exc=exc)
+        except stripe.error.StripeError as exc:
+            logger.exception(
+                f"report_listing_overage_metered: pay failed for invoice {stripe_invoice_id}: {exc}"
+            )
+            _create_overage_invoice_record(
+                sub=sub,
+                plan=plan,
+                stripe_invoice_id=stripe_invoice_id,
+                overage_rate=overage_rate,
+                vehicle_listing_id=vehicle_listing_id,
+                paid=False,
+            )
+            raise self.retry(exc=exc)
 
     # Step 4: Create local Invoice record and mark the listing.
     _create_overage_invoice_record(
@@ -593,9 +628,16 @@ def _create_overage_invoice_record(*, sub, plan, stripe_invoice_id, overage_rate
         )
     else:
         _send_payment_failed_email(user, invoice)
+        # Payment failed — roll back overage_count so the dashboard stays accurate
+        from django.db.models import F as _F
+        from django.contrib.auth import get_user_model as _get_user_model
+        _User = _get_user_model()
+        _User.objects.filter(pk=user.pk, overage_count__gt=0).update(
+            overage_count=_F('overage_count') - 1
+        )
         logger.warning(
             f"_create_overage_invoice_record: created {invoice.invoice_number} for listing {vehicle_listing_id} "
-            f"— status=unpaid (payment failed)."
+            f"— status=unpaid (payment failed). overage_count decremented."
         )
 
 

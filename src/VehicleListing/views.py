@@ -1205,16 +1205,18 @@ def update_vehicle_listing_listed_on(request):
 
                 # Sync Subscription.listing_count for invoice overage billing
                 try:
-                    sub = user.subscription
-                    sub.listing_count = F('listing_count') + 1
-                    sub.save(update_fields=['listing_count', 'updated_at'])
+                    from payments.models import Subscription as _Subscription
+                    sub = _Subscription.objects.select_related('plan').filter(user=user).first()
+                    if sub:
+                        sub.listing_count = F('listing_count') + 1
+                        sub.save(update_fields=['listing_count', 'updated_at'])
 
-                    # Refresh to get real value then check overage
-                    user.refresh_from_db(fields=['listing_count'])
-                    quota = sub.plan.listing_quota if sub.plan else None
-                    if quota and user.listing_count > quota:
-                        user.overage_count = F('overage_count') + 1
-                        user.save(update_fields=['overage_count', 'updated_at'])
+                        # Refresh to get real value then check overage
+                        user.refresh_from_db(fields=['listing_count'])
+                        quota = sub.plan.listing_quota if sub.plan else None
+                        if quota and user.listing_count > quota:
+                            user.overage_count = F('overage_count') + 1
+                            user.save(update_fields=['overage_count', 'updated_at'])
                 except Exception:
                     pass  # trial users have no subscription — no overage
 
@@ -1232,20 +1234,22 @@ def update_vehicle_listing_listed_on(request):
             vehicle_listing.status = "completed"
             vehicle_listing.save()
 
-        # Metered overage: first-time listing that exceeds plan quota → Stripe usage + invoice (async).
+        # Metered overage: first-time listing that exceeds plan quota → Stripe charge + invoice (async).
         if was_first_listing:
             try:
                 request.user.refresh_from_db()
-                from payments.models import Subscription
-                sub = Subscription.objects.select_related('plan').filter(user=request.user).first()
-                if (
-                    sub
-                    and sub.plan
-                    and sub.plan.listing_quota is not None
-                    and request.user.listing_count > sub.plan.listing_quota
-                ):
-                    from payments.tasks import report_listing_overage_metered
-                    report_listing_overage_metered.delay(sub.id, vehicle_listing_id)
+                listing_after = VehicleListing.objects.filter(pk=vehicle_listing_id).only('stripe_overage_reported').first()
+                if listing_after and not listing_after.stripe_overage_reported:
+                    from payments.models import Subscription
+                    sub = Subscription.objects.select_related('plan').filter(user=request.user).first()
+                    if (
+                        sub
+                        and sub.plan
+                        and sub.plan.listing_quota is not None
+                        and request.user.listing_count > sub.plan.listing_quota
+                    ):
+                        from payments.tasks import report_listing_overage_metered
+                        report_listing_overage_metered.delay(sub.id, vehicle_listing_id)
             except Exception as exc:
                 logger.warning(f"update_vehicle_listing_listed_on: could not queue overage billing: {exc}")
 
