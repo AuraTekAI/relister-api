@@ -255,7 +255,7 @@ class CheckoutView(APIView):
         # Base subscription + metered overage price (usage reported when listing exceeds quota).
         line_items = [{'price': plan.stripe_price_id, 'quantity': 1}]
         if plan.stripe_overage_price_id:
-            line_items.append({'price': plan.stripe_overage_price_id, 'quantity': 1})
+            line_items.append({'price': plan.stripe_overage_price_id})
 
         # Pass pending discount coupon to checkout if user has one applied.
         # If stripe_coupon_id is missing (e.g. Stripe was down at admin create time),
