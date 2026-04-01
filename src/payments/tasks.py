@@ -414,13 +414,21 @@ def _send_overdue_invoice_reminder(user, invoice):
 @shared_task(bind=True, max_retries=5, default_retry_delay=30, queue='scheduling_queue')
 def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
     """
-    Report one unit of metered usage to Stripe and create an invoice to charge immediately.
-    Idempotent per vehicle_listing_id via Stripe idempotency keys.
-    Webhook invoice.payment_succeeded creates the local Invoice and emails the user.
+    Charge one overage listing immediately via an explicit Stripe one-off invoice.
+
+    Flow (synchronous — no webhook dependency):
+      1. Create a Stripe InvoiceItem for the overage price.
+      2. Create + finalize the invoice → Stripe charges the customer immediately.
+      3. On successful payment, create the local Invoice record and mark
+         VehicleListing.stripe_overage_reported = True.
+      4. If the Stripe charge fails (payment_failed status), create a local Invoice
+         with status='unpaid' and email the user.
+
+    Idempotent: guarded by stripe_overage_reported on the listing and Stripe
+    idempotency keys (idem_item / idem_inv).
     """
     from payments.models import Subscription
-    from payments.stripe_utils import sync_overage_subscription_item
-    from VehicleListing.models import VehicleListing
+    from VehicleListing.models import Invoice, VehicleListing
 
     sub = Subscription.objects.select_related('plan', 'user').filter(pk=subscription_id).first()
     if not sub or not sub.plan or not sub.stripe_subscription_id:
@@ -446,65 +454,38 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
         logger.error(f"report_listing_overage_metered: plan {plan.id} has no stripe_overage_price_id.")
         return
 
+    overage_rate = (plan.overage_rate_aud or Decimal('0.00')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    # Convert AUD dollars to cents for Stripe
+    overage_cents = int(overage_rate * 100)
+
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
-    if not sub.stripe_overage_subscription_item_id:
-        try:
-            stripe_sub = stripe.Subscription.retrieve(
-                sub.stripe_subscription_id,
-                expand=['items.data.price'],
-            )
-            sync_overage_subscription_item(sub, stripe_sub, plan)
-            sub.refresh_from_db()
-        except stripe.error.StripeError as exc:
-            logger.exception(f"report_listing_overage_metered: could not sync overage subscription item: {exc}")
-            raise self.retry(exc=exc)
-
-    if not sub.stripe_overage_subscription_item_id:
-        logger.error(
-            f"report_listing_overage_metered: No metered subscription item on sub {subscription_id}. "
-            f"Re-subscribe with checkout that includes the metered overage price."
-        )
-        return
-
-    idem_usage = f"overage-usage-vl{vehicle_listing_id}"
+    idem_item = f"overage-item-vl{vehicle_listing_id}"
     idem_inv = f"overage-inv-vl{vehicle_listing_id}"
 
-    # Stripe API >= 2025-03-31.basil: report usage via Meter Events (not UsageRecord).
-    # The meter event_name is stored in the price metadata when the plan was seeded.
-    meter_event_name = None
+    # Step 1: Add an explicit invoice item (one-off, not metered) so Stripe bills it immediately.
     try:
-        stripe_price = stripe.Price.retrieve(plan.stripe_overage_price_id)
-        meta = getattr(stripe_price, 'metadata', None)
-        meter_event_name = getattr(meta, 'meter_event_name', None)
-    except stripe.error.StripeError as exc:
-        logger.exception(f"report_listing_overage_metered: could not retrieve overage price metadata: {exc}")
-        raise self.retry(exc=exc)
-
-    if not meter_event_name:
-        logger.error(
-            f"report_listing_overage_metered: no meter_event_name on price {plan.stripe_overage_price_id}."
-        )
-        return
-
-    try:
-        stripe.billing.MeterEvent.create(
-            event_name=meter_event_name,
-            payload={
-                'stripe_customer_id': sub.stripe_customer_id,
-                'value': '1',
-            },
-            identifier=idem_usage,
-        )
-    except stripe.error.StripeError as exc:
-        logger.exception(f"report_listing_overage_metered: MeterEvent.create failed: {exc}")
-        raise self.retry(exc=exc)
-
-    try:
-        stripe.Invoice.create(
+        stripe.InvoiceItem.create(
             customer=sub.stripe_customer_id,
-            subscription=sub.stripe_subscription_id,
-            auto_advance=True,
+            amount=overage_cents,
+            currency='aud',
+            description=f'Listing overage — vehicle listing #{vehicle_listing_id}',
+            metadata={
+                'source': 'listing_overage',
+                'vehicle_listing_id': str(vehicle_listing_id),
+                'django_subscription_id': str(subscription_id),
+            },
+            idempotency_key=idem_item,
+        )
+    except stripe.error.StripeError as exc:
+        logger.exception(f"report_listing_overage_metered: InvoiceItem.create failed: {exc}")
+        raise self.retry(exc=exc)
+
+    # Step 2: Create the invoice and finalize it so Stripe charges the customer immediately.
+    try:
+        stripe_invoice = stripe.Invoice.create(
+            customer=sub.stripe_customer_id,
+            auto_advance=False,          # we finalize manually below
             collection_method='charge_automatically',
             metadata={
                 'source': 'listing_overage',
@@ -518,60 +499,60 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
         logger.exception(f"report_listing_overage_metered: Invoice.create failed: {exc}")
         raise self.retry(exc=exc)
 
+    stripe_invoice_id = stripe_invoice['id']
+
+    # Step 3: Finalize (locks the invoice) then pay it immediately.
+    try:
+        stripe.Invoice.finalize_invoice(stripe_invoice_id)
+        paid_invoice = stripe.Invoice.pay(stripe_invoice_id)
+    except stripe.error.StripeError as exc:
+        logger.exception(
+            f"report_listing_overage_metered: finalize/pay failed for invoice {stripe_invoice_id}: {exc}"
+        )
+        # Invoice exists on Stripe — create a local unpaid record so we can reconcile later.
+        _create_overage_invoice_record(
+            sub=sub,
+            plan=plan,
+            stripe_invoice_id=stripe_invoice_id,
+            overage_rate=overage_rate,
+            vehicle_listing_id=vehicle_listing_id,
+            paid=False,
+        )
+        raise self.retry(exc=exc)
+
+    payment_succeeded = paid_invoice.get('status') == 'paid'
+
+    # Step 4: Create local Invoice record and mark the listing.
+    _create_overage_invoice_record(
+        sub=sub,
+        plan=plan,
+        stripe_invoice_id=stripe_invoice_id,
+        overage_rate=overage_rate,
+        vehicle_listing_id=vehicle_listing_id,
+        paid=payment_succeeded,
+    )
+
     logger.info(
-        f"report_listing_overage_metered: reported usage + invoice for listing {vehicle_listing_id} "
-        f"subscription {subscription_id}."
+        f"report_listing_overage_metered: charged overage for listing {vehicle_listing_id} "
+        f"subscription {subscription_id} — stripe_invoice={stripe_invoice_id} paid={payment_succeeded}."
     )
 
 
-@shared_task(queue='scheduling_queue')
-def generate_listing_overage_invoice_from_webhook(subscription_id, stripe_invoice_id, vehicle_listing_id, paid=True):
+def _create_overage_invoice_record(*, sub, plan, stripe_invoice_id, overage_rate, vehicle_listing_id, paid):
     """
-    Create a local Invoice row for a listing-overage Stripe invoice; email the user.
+    Create a local Invoice row for a listing overage charge and email the user.
     Marks VehicleListing.stripe_overage_reported when paid=True.
+    Idempotent: skips if a record for stripe_invoice_id already exists.
     """
-    from payments.models import Subscription
     from VehicleListing.models import Invoice, VehicleListing
 
-    try:
-        subscription_id = int(subscription_id)
-    except (TypeError, ValueError):
-        logger.error(f"generate_listing_overage_invoice_from_webhook: bad subscription_id={subscription_id}")
+    if Invoice.objects.filter(stripe_invoice_id=stripe_invoice_id).exists():
+        logger.info(f"_create_overage_invoice_record: invoice {stripe_invoice_id} already recorded — skip.")
         return
 
-    sub = Subscription.objects.select_related('plan', 'user').filter(pk=subscription_id).first()
-    if not sub or not sub.plan:
-        logger.error(f"generate_listing_overage_invoice_from_webhook: subscription {subscription_id} not found.")
-        return
-
-    if stripe_invoice_id and Invoice.objects.filter(stripe_invoice_id=stripe_invoice_id).exists():
-        logger.info(
-            f"generate_listing_overage_invoice_from_webhook: invoice {stripe_invoice_id} already recorded."
-        )
-        return
-
-    plan = sub.plan
     user = sub.user
-
-    stripe.api_key = settings.STRIPE_SECRET_KEY
-    try:
-        inv = stripe.Invoice.retrieve(stripe_invoice_id, expand=['lines.data.price'])
-    except stripe.error.StripeError as exc:
-        logger.error(f"generate_listing_overage_invoice_from_webhook: retrieve invoice failed: {exc}")
-        return
-
-    from payments.stripe_utils import extract_metered_overage_from_stripe_invoice
-
-    oc, och = extract_metered_overage_from_stripe_invoice(inv, plan)
-    if och is None:
-        och = (plan.overage_rate_aud or Decimal('0.00')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        oc = 1
-
-    overage_count = oc
-    overage_charge = och
-    base_charge = Decimal('0.00')
-    listing_quota = plan.listing_quota or 0
-    subtotal = overage_charge.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    overage_charge = overage_rate.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    subtotal = overage_charge
     gst_amount = (subtotal * Decimal('0.10')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     total_amount = subtotal + gst_amount
     invoice_status = 'paid' if paid else 'unpaid'
@@ -583,11 +564,11 @@ def generate_listing_overage_invoice_from_webhook(subscription_id, stripe_invoic
         billing_period_start=sub.current_period_start or timezone.now(),
         billing_period_end=sub.current_period_end or timezone.now(),
         plan_name=plan.name,
-        base_plan_charge=base_charge,
-        included_listings=listing_quota,
+        base_plan_charge=Decimal('0.00'),
+        included_listings=plan.listing_quota or 0,
         relist_cycles=0,
-        overage_listings=overage_count,
-        overage_rate=plan.overage_rate_aud or Decimal('0'),
+        overage_listings=1,
+        overage_rate=overage_rate,
         overage_charge=overage_charge,
         discount_code=None,
         discount_code_str='',
@@ -606,7 +587,46 @@ def generate_listing_overage_invoice_from_webhook(subscription_id, stripe_invoic
             VehicleListing.objects.filter(pk=vid, user_id=user.id).update(stripe_overage_reported=True)
         except (TypeError, ValueError):
             pass
+        logger.info(
+            f"_create_overage_invoice_record: created {invoice.invoice_number} for listing {vehicle_listing_id} "
+            f"— total={total_amount} status=paid."
+        )
     else:
         _send_payment_failed_email(user, invoice)
+        logger.warning(
+            f"_create_overage_invoice_record: created {invoice.invoice_number} for listing {vehicle_listing_id} "
+            f"— status=unpaid (payment failed)."
+        )
 
-    return invoice.invoice_number
+
+@shared_task(queue='scheduling_queue')
+def generate_listing_overage_invoice_from_webhook(subscription_id, stripe_invoice_id, vehicle_listing_id, paid=True):
+    """
+    Fallback: create a local Invoice for a listing-overage Stripe invoice received via webhook.
+    The primary path now creates the local record synchronously in report_listing_overage_metered,
+    so this task is idempotent and will be a no-op if the record already exists.
+    """
+    from payments.models import Subscription
+
+    try:
+        subscription_id = int(subscription_id)
+    except (TypeError, ValueError):
+        logger.error(f"generate_listing_overage_invoice_from_webhook: bad subscription_id={subscription_id}")
+        return
+
+    sub = Subscription.objects.select_related('plan', 'user').filter(pk=subscription_id).first()
+    if not sub or not sub.plan:
+        logger.error(f"generate_listing_overage_invoice_from_webhook: subscription {subscription_id} not found.")
+        return
+
+    plan = sub.plan
+    overage_rate = (plan.overage_rate_aud or Decimal('0.00')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    _create_overage_invoice_record(
+        sub=sub,
+        plan=plan,
+        stripe_invoice_id=stripe_invoice_id,
+        overage_rate=overage_rate,
+        vehicle_listing_id=vehicle_listing_id,
+        paid=paid,
+    )
