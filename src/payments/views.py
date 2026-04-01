@@ -396,7 +396,7 @@ class WebhookView(APIView):
             logger.error(f"checkout.session.completed: Failed to retrieve Stripe subscription {stripe_subscription_id}: {exc}", exc_info=True)
             raise  # re-raise so the outer handler logs it and Stripe retries
 
-        logger.info(f"checkout.session.completed: Retrieved stripe_sub {stripe_subscription_id}, status={_sget(stripe_sub, 'status')}, items={_sget(stripe_sub, 'items')}")
+        logger.info(f"checkout.session.completed: Retrieved stripe_sub {stripe_subscription_id}, status={_sget(stripe_sub, 'status')}")
 
         # Stripe API 2026-02-25.clover moved billing period to items.data[0]
         _items = _sget(stripe_sub, 'items')
