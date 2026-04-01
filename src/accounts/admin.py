@@ -11,31 +11,52 @@ class UserAdmin(UserAdmin):
         "email",
         "dealership_name",
         "contact_person_name",
+        "phone_number",
         "account_status",
-        "trial_end_date",
-        "last_login",
-        "is_superuser",
         "is_approved",
         "is_active",
+        "trial_end_date",
+        "listing_count",
+        "relist_cycles",
+        "overage_count",
         "daily_listing_count",
+        "last_login",
+        "is_superuser",
         "last_facebook_listing_time",
-        'last_delete_listing_time',
+        "last_delete_listing_time",
         "last_images_check_status_time",
     )
-    search_fields = ("email", "dealership_name", "contact_person_name", "is_approved")
+    search_fields = ("email", "dealership_name", "contact_person_name", "phone_number")
     # Define the fields that will be editable on the user change form in the admin
     fieldsets = (
-        (None, {'fields': ('email', 'password', 'is_approved', 'daily_listing_count', 'last_facebook_listing_time', 'last_delete_listing_time', 'last_images_check_status_time')}),
-        ('Personal Info', {'fields': ['first_name', 'last_name', 'dealership_name', 'contact_person_name', 'phone_number', 'gumtree_dealarship_url', 'facebook_dealership_url']}),
-        ('Subscription', {'fields': ('account_status', 'trial_start_date', 'trial_end_date', 'trial_used')}),
+        (None, {'fields': ('email', 'password', 'is_approved')}),
+        ('Personal Info', {'fields': (
+            'first_name', 'last_name',
+            'dealership_name', 'contact_person_name', 'phone_number',
+            'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dealership_license_number', 'dealership_license_phone',
+        )}),
+        ('Subscription & Usage', {'fields': (
+            'account_status', 'trial_start_date', 'trial_end_date', 'trial_used',
+            'listing_count', 'relist_cycles', 'overage_count', 'daily_listing_count',
+        )}),
+        ('Activity Timestamps', {'fields': (
+            'last_facebook_listing_time', 'last_delete_listing_time', 'last_images_check_status_time',
+        )}),
         ('Permissions', {'fields': ('is_superuser', 'is_staff', 'is_active', 'groups', 'user_permissions')}),
-        ('Important Dates', {'fields': ('last_login',)}),
+        ('Important Dates', {'fields': ('last_login', 'created_at', 'updated_at')}),
     )
-    readonly_fields = ("last_login",)
-    list_filter = ("is_superuser", "groups")
+    readonly_fields = ("last_login", "trial_start_date", "trial_end_date", "created_at", "updated_at")
+    list_filter = ("account_status", "is_approved", "is_active", "is_superuser", "groups")
 
     add_fieldsets = (
-        (None, {"classes": ("wide",), "fields": ("email", "first_name", "last_name", "dealership_name", "contact_person_name", "phone_number", "gumtree_dealarship_url", "facebook_dealership_url", "is_approved", "account_status")}),
+        (None, {"classes": ("wide",), "fields": (
+            "email", "first_name", "last_name",
+            "dealership_name", "contact_person_name", "phone_number",
+            "gumtree_dealarship_url", "facebook_dealership_url",
+            "dealership_license_number", "dealership_license_phone",
+            "is_approved", "account_status",
+        )}),
         ("Security", {"fields": ("password1", "password2")}),
         (
             "Permissions",
