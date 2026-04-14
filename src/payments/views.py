@@ -296,6 +296,8 @@ class CheckoutView(APIView):
                 customer=stripe_customer_id,
                 mode='subscription',
                 line_items=line_items,
+                automatic_tax={'enabled': True},
+                customer_update={'address': 'auto'},
                 success_url=settings.STRIPE_SUCCESS_URL,
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 metadata={
