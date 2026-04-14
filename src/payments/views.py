@@ -3,6 +3,8 @@ import stripe
 from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
+from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -943,17 +945,6 @@ class ApplyDiscountView(APIView):
             return Response({'detail': 'code is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            discount = DiscountCode.objects.get(code=code_str)
-        except DiscountCode.DoesNotExist:
-            return Response({'detail': 'Invalid discount code.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not discount.is_valid():
-            return Response(
-                {'detail': 'This discount code is expired, inactive, or has reached its usage limit.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
             subscription = Subscription.objects.select_related('active_discount_code').get(
                 user=request.user,
                 status__in=['active', 'past_due', 'trial'],
@@ -964,15 +955,32 @@ class ApplyDiscountView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Idempotency: prevent applying the same code twice
-        if subscription.active_discount_code_id == discount.pk:
-            return Response(
-                {'detail': f"Discount code '{discount.code}' is already applied to your subscription."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        with transaction.atomic():
+            # Lock the discount row to prevent concurrent applications racing past max_uses
+            try:
+                discount = DiscountCode.objects.select_for_update().get(code=code_str)
+            except DiscountCode.DoesNotExist:
+                return Response({'detail': 'Invalid discount code.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        subscription.active_discount_code = discount
-        subscription.save(update_fields=['active_discount_code', 'updated_at'])
+            if not discount.is_valid():
+                return Response(
+                    {'detail': 'This discount code is expired, inactive, or has reached its usage limit.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Idempotency: prevent applying the same code twice to the same subscription
+            if subscription.active_discount_code_id == discount.pk:
+                return Response(
+                    {'detail': f"Discount code '{discount.code}' is already applied to your subscription."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Increment used_count immediately so concurrent requests see the updated count.
+            # is_valid() already enforces used_count < max_uses — that is the sole gate for max_uses.
+            DiscountCode.objects.filter(pk=discount.pk).update(used_count=F('used_count') + 1)
+
+            subscription.active_discount_code = discount
+            subscription.save(update_fields=['active_discount_code', 'updated_at'])
 
         stripe_applied = False
         if subscription.stripe_subscription_id and discount.stripe_coupon_id:
@@ -1326,6 +1334,7 @@ class AdminDiscountCodeDetailView(APIView):
         old_stripe_coupon_id = discount.stripe_coupon_id
         old_discount_type = discount.discount_type
         old_discount_value = discount.discount_value
+        old_max_uses = discount.max_uses
         old_is_active = discount.is_active
 
         serializer = AdminDiscountCodeSerializer(discount, data=request.data, partial=True)
@@ -1334,13 +1343,18 @@ class AdminDiscountCodeDetailView(APIView):
         discount = serializer.save()
         logger.info(f"AdminDiscountCode: Updated code '{discount.code}' by admin {request.user.email}.")
 
+        # Stripe coupons are immutable — any change to value, type, or max_uses requires
+        # archiving the old coupon and creating a new one.
         structural_change = (
             discount.discount_type != old_discount_type
             or discount.discount_value != old_discount_value
+            or discount.max_uses != old_max_uses
         )
 
         if not discount.is_active and old_is_active:
-            # Deactivated — archive the Stripe coupon
+            # Deactivated — clear from all subscriptions that have it applied so billing
+            # does not skip it silently; archive the Stripe coupon to block new redemptions.
+            Subscription.objects.filter(active_discount_code=discount).update(active_discount_code=None)
             _archive_stripe_coupon(old_stripe_coupon_id)
             discount.stripe_coupon_id = None
             discount.save(update_fields=['stripe_coupon_id'])
@@ -1364,9 +1378,26 @@ class AdminDiscountCodeDetailView(APIView):
         discount = self._get_object(pk)
         if not discount:
             return Response({'detail': 'Discount code not found.'}, status=status.HTTP_404_NOT_FOUND)
+
         code = discount.code
         stripe_coupon_id = discount.stripe_coupon_id
-        discount.delete()
-        logger.info(f"AdminDiscountCode: Deleted code '{code}' by admin {request.user.email}.")
+
+        with transaction.atomic():
+            # Clear this discount from every subscription that has it applied so no
+            # future invoice — including for users who already applied it — will use it.
+            cleared_count = Subscription.objects.filter(
+                active_discount_code=discount,
+            ).update(active_discount_code=None)
+
+            discount.delete()
+
+        if cleared_count:
+            logger.info(
+                f"AdminDiscountCode: Deleted code '{code}' — cleared from {cleared_count} "
+                f"subscription(s) by admin {request.user.email}."
+            )
+        else:
+            logger.info(f"AdminDiscountCode: Deleted code '{code}' by admin {request.user.email}.")
+
         _archive_stripe_coupon(stripe_coupon_id)
         return Response(status=status.HTTP_204_NO_CONTENT)

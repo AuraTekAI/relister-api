@@ -3,7 +3,6 @@ from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from celery import shared_task
 from django.conf import settings
-from django.db.models import F
 from django.utils import timezone
 
 import stripe
@@ -94,10 +93,8 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
                 )
             else:
                 discount_amount = min(discount_obj.discount_value, pre_discount)
-            # Increment usage count atomically to prevent race conditions
-            from .models import DiscountCode as _DiscountCode
-            _DiscountCode.objects.filter(pk=discount_obj.pk).update(used_count=F('used_count') + 1)
             # Clear applied discount so it's not double-applied next cycle
+            # Note: used_count is incremented at apply time (ApplyDiscountView), not here
             subscription.active_discount_code = None
             subscription.save(update_fields=['active_discount_code', 'updated_at'])
 
