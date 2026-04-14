@@ -65,8 +65,8 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "relister.urls"
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
-    "REFRESH_TOKEN_LIFETIME": timedelta(weeks=2),
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=env.int('ACCESS_TOKEN_LIFETIME_DAYS', default=1)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(weeks=env.int('REFRESH_TOKEN_LIFETIME_WEEKS', default=2)),
     "ROTATE_REFRESH_TOKENS": True,
 }
 REST_FRAMEWORK = {

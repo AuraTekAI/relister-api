@@ -156,14 +156,13 @@ def _send_invoice_email(user, invoice):
     try:
         from django.core.mail import EmailMessage
         from django.template.loader import render_to_string
-        from relister.settings import EMAIL_HOST_USER
 
         subject = f"Invoice {invoice.invoice_number} — Payment Confirmed"
         body = render_to_string('payments/invoice_email.html', {
             'user': user,
             'invoice': invoice,
         })
-        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email = EmailMessage(subject, body, settings.EMAIL_HOST_USER, [user.email])
         email.content_subtype = 'html'
         email.send(fail_silently=True)
     except Exception as exc:
@@ -175,14 +174,13 @@ def _send_payment_failed_email(user, invoice):
     try:
         from django.core.mail import EmailMessage
         from django.template.loader import render_to_string
-        from relister.settings import EMAIL_HOST_USER
 
         subject = f"Action Required: Payment Failed for Invoice {invoice.invoice_number}"
         body = render_to_string('payments/payment_failed_email.html', {
             'user': user,
             'invoice': invoice,
         })
-        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email = EmailMessage(subject, body, settings.EMAIL_HOST_USER, [user.email])
         email.content_subtype = 'html'
         email.send(fail_silently=True)
     except Exception as exc:
@@ -233,7 +231,6 @@ def _send_subscription_renewal_notification(user, subscription, days_remaining):
     try:
         from django.core.mail import EmailMessage
         from django.template.loader import render_to_string
-        from relister.settings import EMAIL_HOST_USER
 
         period_end = subscription.current_period_end.strftime('%d %B %Y') if subscription.current_period_end else 'N/A'
         plan_name = subscription.plan.name if subscription.plan else 'N/A'
@@ -256,7 +253,7 @@ def _send_subscription_renewal_notification(user, subscription, days_remaining):
             subject = 'Your Relister subscription renews tomorrow'
 
         body = render_to_string(template, context)
-        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email = EmailMessage(subject, body, settings.EMAIL_HOST_USER, [user.email])
         email.content_subtype = 'html'
         email.send(fail_silently=True)
         logger.info(f"Subscription renewal ({days_remaining}d) email sent to {user.email}")
@@ -395,14 +392,13 @@ def _send_overdue_invoice_reminder(user, invoice):
     try:
         from django.core.mail import EmailMessage
         from django.template.loader import render_to_string
-        from relister.settings import EMAIL_HOST_USER
 
         subject = f"Invoice {invoice.invoice_number} is overdue — payment required"
         body = render_to_string('payments/overdue_invoice_reminder.html', {
             'user': user,
             'invoice': invoice,
         })
-        email = EmailMessage(subject, body, EMAIL_HOST_USER, [user.email])
+        email = EmailMessage(subject, body, settings.EMAIL_HOST_USER, [user.email])
         email.content_subtype = 'html'
         email.send(fail_silently=True)
         return True

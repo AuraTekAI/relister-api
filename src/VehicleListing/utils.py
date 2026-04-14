@@ -1,20 +1,16 @@
 import logging
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from relister.settings import EMAIL_HOST_USER
 import time
 import random
 from django.utils import timezone
-from datetime import timedelta
-from .models import  RelistingFacebooklisting
-from relister.settings import MAX_RETRIES_ATTEMPTS
+from datetime import timedelta, datetime
+from .models import RelistingFacebooklisting
 from accounts.models import User
 from django.conf import settings
-from datetime import datetime
 import re
 import csv
 from io import StringIO
-from relister.settings import EMAIL_HOST_USER,MAX_RETRIES_ATTEMPTS, ADMIN_EMAIL, TECH_SUPPORT_EMAIL
 
 logger = logging.getLogger('facebook_listing_cronjob')
 def send_status_reminder_email(facebook_user):
@@ -33,7 +29,7 @@ def send_status_reminder_email(facebook_user):
         email = EmailMessage(
             subject=f"Reminder: Facebook login session",
             body=html_content,
-            from_email=EMAIL_HOST_USER,
+            from_email=settings.EMAIL_HOST_USER,
             to=[facebook_user.user.email]
         )
         email.content_subtype = "html"
@@ -68,7 +64,7 @@ def send_user_approval_email(user):
         email = EmailMessage(
             subject="🎉 Your Relister Account Has Been Approved!",
             body=html_content,
-            from_email=EMAIL_HOST_USER,
+            from_email=settings.EMAIL_HOST_USER,
             to=[user.email]
         )
         email.content_subtype = "html"
@@ -161,7 +157,7 @@ def mark_listing_sold(listing, relisting=None):
         relisting.save()
 
 def handle_retry_or_disable_credentials(credentials, user):
-    if credentials.retry_count < MAX_RETRIES_ATTEMPTS:
+    if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
         credentials.retry_count += 1
         credentials.save()
         logger.info(f"Retrying relisting for user {user.email} (Attempt {credentials.retry_count})")
@@ -285,7 +281,7 @@ def send_welcome_email(user):
         email = EmailMessage(
             subject='Welcome to Relister – Your Free Trial Has Started',
             body=html_content,
-            from_email=EMAIL_HOST_USER,
+            from_email=settings.EMAIL_HOST_USER,
             to=[user.email],
         )
         email.content_subtype = 'html'
@@ -323,7 +319,7 @@ def send_trial_expiry_notification(user, days_remaining):
         email = EmailMessage(
             subject=subject,
             body=html_content,
-            from_email=EMAIL_HOST_USER,
+            from_email=settings.EMAIL_HOST_USER,
             to=[user.email],
         )
         email.content_subtype = 'html'
@@ -359,13 +355,13 @@ def send_missing_listing_notification(listing_id, year, make, model, listed_on, 
         user_email_obj = EmailMessage(
             subject=f"Action Required: Facebook Listing Not Found - {year} {make} {model}",
             body=html_content,
-            from_email=EMAIL_HOST_USER,
-            to=[user.email,TECH_SUPPORT_EMAIL]
+            from_email=settings.EMAIL_HOST_USER,
+            to=[user.email, settings.TECH_SUPPORT_EMAIL]
         )
         user_email_obj.content_subtype = 'html'
         user_email_obj.send()
-        
-        logger.info(f"Missing listing notification sent to {user.email} and {ADMIN_EMAIL}")
+
+        logger.info(f"Missing listing notification sent to {user.email} and {settings.ADMIN_EMAIL}")
         
     except Exception as e:
         logger.error(f"Error sending missing listing notification: {e}")

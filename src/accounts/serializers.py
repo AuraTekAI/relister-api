@@ -52,12 +52,15 @@ class UserListSerializer(serializers.ModelSerializer):
         # Remove confirm_password from attrs as it's not a model field
         attrs.pop('confirm_password', None)
         
-        # Validate at least one URL is present
-        gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
-        facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
-        
-        if not gumtree_url and not facebook_url:
-            raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        # Validate at least one URL is present — only enforce when at least one URL
+        # field is explicitly being changed (skip on partial updates that don't touch URLs).
+        gumtree_key_present = 'gumtree_dealarship_url' in attrs
+        facebook_key_present = 'facebook_dealership_url' in attrs
+        if gumtree_key_present or facebook_key_present:
+            gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
+            facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
+            if not gumtree_url and not facebook_url:
+                raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
         
         return attrs
 

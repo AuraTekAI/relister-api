@@ -1,10 +1,10 @@
 import uuid
-from rest_framework import status
+from django.conf import settings
+from rest_framework import status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
-from rest_framework import status, generics
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import filters
@@ -23,7 +23,7 @@ from accounts.serializers import (
 )
 from accounts.models import User, NotificationPreference, EmailVerificationToken
 from accounts.throttles import LoginRateThrottle, RegisterRateThrottle, PasswordResetRateThrottle
-from VehicleListing.utils import send_welcome_email
+from VehicleListing.utils import send_welcome_email, send_user_approval_email
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from VehicleListing.tasks import profile_listings_for_approved_users
@@ -98,11 +98,10 @@ class PasswordResetRequestView(APIView):
         if user and user.is_active:
             try:
                 from django.core.mail import EmailMessage
-                from relister.settings import EMAIL_HOST_USER, FRONTEND_URL
 
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
                 token = PasswordResetTokenGenerator().make_token(user)
-                reset_url = f"{FRONTEND_URL}/reset-password?uid={uid}&token={token}"
+                reset_url = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
 
                 body = (
                     f"Hi {user.first_name or user.email},\n\n"
@@ -114,7 +113,7 @@ class PasswordResetRequestView(APIView):
                 email_msg = EmailMessage(
                     "Reset your Relister password",
                     body,
-                    EMAIL_HOST_USER,
+                    settings.EMAIL_HOST_USER,
                     [user.email],
                 )
                 email_msg.send(fail_silently=True)
@@ -157,7 +156,6 @@ class SetNewPasswordAPIView(generics.GenericAPIView):
         if not user:
             return Response({'Failed':'User Not Found'},status = status.HTTP_404_NOT_FOUND)
         if PasswordResetTokenGenerator().check_token(user, token):
-            request.session['uid'] = uid
             serializer = self.serializer_class(data=request.data)
             serializer.is_valid(raise_exception=True)
             return Response({'success': True, 'message': 'Password reset success'}, status=status.HTTP_200_OK)
@@ -282,8 +280,7 @@ class UserListview(ModelViewSet):
             #proccess the approved user profile urls
             if user.is_approved and not user_approved:
                 profile_listings_for_approved_users.delay(user.id)
-
-
+                send_user_approval_email(user)
 
             return Response({
                 'status': status.HTTP_200_OK,
@@ -485,14 +482,13 @@ class ChangeEmailView(APIView):
         # Send verification email
         try:
             from django.core.mail import EmailMessage
-            from relister.settings import EMAIL_HOST_USER, FRONTEND_URL
-            verify_url = f"{FRONTEND_URL}/verify-email-change?token={token_value}"
+            verify_url = f"{settings.FRONTEND_URL}/verify-email-change?token={token_value}"
             body = (
                 f"Hi {user.first_name or user.email},\n\n"
                 f"Click the link below to confirm your new email address:\n{verify_url}\n\n"
                 f"This link expires in 24 hours. If you did not request this change, ignore this email."
             )
-            email = EmailMessage("Confirm your new email address", body, EMAIL_HOST_USER, [new_email])
+            email = EmailMessage("Confirm your new email address", body, settings.EMAIL_HOST_USER, [new_email])
             email.send(fail_silently=True)
         except Exception:
             pass  # Email sending failure should not block the response

@@ -14,7 +14,6 @@ from django.utils import timezone
 from datetime import timedelta
 # from .facebook_listing import perform_search_and_delete
 from .models import FacebookUserCredentials
-from relister.settings import MAX_RETRIES_ATTEMPTS
 
 logging = logging.getLogger('gumtree')
 def extract_seller_id(profile_url):

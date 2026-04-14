@@ -162,7 +162,7 @@ class SubscriptionStatusView(APIView):
             'days_remaining': days_remaining,
             'trial_end_date': user.trial_end_date,
             'trial_start_date': user.trial_start_date,
-            'listing_count': user.daily_listing_count,
+            'listing_count': user.listing_count,
             'plan': None,
             'listing_quota': None,
             'overage_rate_aud': None,

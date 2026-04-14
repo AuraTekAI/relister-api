@@ -1,32 +1,60 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family: Arial, sans-serif; color: #333;">
-  <h2>Invoice {{ invoice.invoice_number }}</h2>
-  <p>Hi {{ user.first_name|default:user.email }},</p>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice {{ invoice.invoice_number }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f4f9; }
+        .email-wrapper { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background-color: #0092f9; padding: 30px 20px; text-align: center; color: white; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .content { padding: 30px 20px; }
+        .content h2 { color: #333; margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        td { padding: 10px 8px; border-bottom: 1px solid #eee; }
+        .total-row td { border-top: 2px solid #0092f9; font-size: 1.1em; font-weight: bold; }
+        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #666; border-top: 1px solid #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Invoice {{ invoice.invoice_number }}</h1>
+        </div>
+        <div class="content">
+            <h2>Hi {{ user.first_name|default:user.email }},</h2>
 
-  {% if invoice.status == 'paid' %}
-  <p>Your payment has been confirmed. Here is your invoice summary:</p>
-  {% else %}
-  <p>A payment issue occurred on your account. Please update your payment method. Invoice summary:</p>
-  {% endif %}
+            {% if invoice.status == 'paid' %}
+            <p>Your payment has been confirmed. Here is your invoice summary:</p>
+            {% else %}
+            <p>A payment issue occurred on your account. Please update your payment method. Invoice summary:</p>
+            {% endif %}
 
-  <table style="width:100%; border-collapse: collapse;">
-    <tr><td><strong>Billing Period</strong></td><td>{{ invoice.billing_period_start|date:"d M Y" }} – {{ invoice.billing_period_end|date:"d M Y" }}</td></tr>
-    <tr><td><strong>Plan</strong></td><td>{{ invoice.plan_name }}</td></tr>
-    <tr><td><strong>Base Charge</strong></td><td>${{ invoice.base_plan_charge }} AUD</td></tr>
-    {% if invoice.overage_listings > 0 %}
-    <tr><td><strong>Overage ({{ invoice.overage_listings }} × ${{ invoice.overage_rate }})</strong></td><td>${{ invoice.overage_charge }} AUD</td></tr>
-    {% endif %}
-    {% if invoice.discount_amount > 0 %}
-    <tr><td><strong>Discount</strong></td><td>-${{ invoice.discount_amount }} AUD</td></tr>
-    {% endif %}
-    <tr><td><strong>Subtotal</strong></td><td>${{ invoice.subtotal }} AUD</td></tr>
-    <tr><td><strong>GST (10%)</strong></td><td>${{ invoice.gst_amount }} AUD</td></tr>
-    <tr style="font-size:1.1em;"><td><strong>Total</strong></td><td><strong>${{ invoice.total_amount }} AUD</strong></td></tr>
-    <tr><td><strong>Status</strong></td><td>{{ invoice.status|capfirst }}</td></tr>
-  </table>
+            <table>
+                <tr><td><strong>Billing Period</strong></td><td>{{ invoice.billing_period_start|date:"d M Y" }} – {{ invoice.billing_period_end|date:"d M Y" }}</td></tr>
+                <tr><td><strong>Plan</strong></td><td>{{ invoice.plan_name }}</td></tr>
+                <tr><td><strong>Base Charge</strong></td><td>${{ invoice.base_plan_charge }} AUD</td></tr>
+                {% if invoice.overage_listings > 0 %}
+                <tr><td><strong>Overage ({{ invoice.overage_listings }} × ${{ invoice.overage_rate }})</strong></td><td>${{ invoice.overage_charge }} AUD</td></tr>
+                {% endif %}
+                {% if invoice.discount_amount > 0 %}
+                <tr><td><strong>Discount</strong></td><td>-${{ invoice.discount_amount }} AUD</td></tr>
+                {% endif %}
+                <tr><td><strong>Subtotal</strong></td><td>${{ invoice.subtotal }} AUD</td></tr>
+                <tr><td><strong>GST (10%)</strong></td><td>${{ invoice.gst_amount }} AUD</td></tr>
+                <tr class="total-row"><td><strong>Total</strong></td><td><strong>${{ invoice.total_amount }} AUD</strong></td></tr>
+                <tr><td><strong>Status</strong></td><td>{{ invoice.status|capfirst }}</td></tr>
+            </table>
 
-  <p style="margin-top:24px;">You can view this invoice in full from your dashboard.</p>
+            <p style="margin-top: 24px;">You can view this invoice in full from your dashboard.</p>
+
+            <p>Best regards,<br><strong>The Auto Relister Team</strong></p>
+        </div>
+        <div class="footer">
+            <p><strong>Auto Relister</strong> – Automated Vehicle Listing Management</p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
 </body>
 </html>

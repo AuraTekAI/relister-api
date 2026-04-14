@@ -21,7 +21,6 @@ from queue import Queue
 from django.conf import settings
 from django.utils import timezone
 import logging
-from relister.settings import MAX_RETRIES_ATTEMPTS
 from django.shortcuts import get_object_or_404
 
 logger = logging.getLogger('relister_views')
@@ -491,21 +490,14 @@ def get_gumtree_profile_listings(request):
         import_url = ImportFromUrl(profile_url)
         is_valid, error_message = import_url.validate()
         if not is_valid:
-            return JsonResponse({'error': error_message}, status=200)
-        if import_url.print_url_type == "Facebook" or import_url.print_url_type == "Facebook Profile":
-            return  JsonResponse({'error': 'Please provide the Gumtree Profile Url'}, status=200)
+            return JsonResponse({'error': error_message}, status=400)
+        if import_url.print_url_type() == "Facebook" or import_url.print_url_type() == "Facebook Profile":
+            return JsonResponse({'error': 'Please provide the Gumtree Profile Url'}, status=400)
         seller_id = extract_seller_id(profile_url)
         if not seller_id or not seller_id.isdigit():
-            return JsonResponse({'error': 'Invalid seller ID'}, status=200)
+            return JsonResponse({'error': 'Invalid seller ID'}, status=400)
         if GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).exists():
-            return JsonResponse({'error': 'This URL is already processed'}, status=200)
-        credentials = FacebookUserCredentials.objects.filter(user=user).first()
-        if not credentials or credentials.session_cookie == {}:
-            if credentials:
-                credentials.status = False
-                credentials.save()
-                send_status_reminder_email(credentials)
-            return JsonResponse({'error': 'No facebook credentials found for the user , Please provide the facebook credentials'}, status=200)
+            return JsonResponse({'error': 'This URL is already processed'}, status=409)
         # Get listings from Gumtree
         success, message = get_gumtree_listings(profile_url, user)
         if success:

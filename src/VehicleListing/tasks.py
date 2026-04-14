@@ -14,17 +14,12 @@ from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_i
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import send_status_reminder_email, _clean_log_file
-# from .utils import update_credentials_success, handle_retry_or_disable_credentials, create_or_update_relisting_entry, handle_failed_relisting, should_create_listing, should_check_images_upload_status_time, send_missing_listing_notification
-from relister.settings import EMAIL_HOST_USER, ADMIN_EMAIL
-# from relister.settings import MAX_RETRIES_ATTEMPTS
-from openpyxl import Workbook
+from .utils import _clean_log_file
+# from .utils import update_credentials_success, handle_retry_or_disable_credentials, create_or_update_relisting_entry, handle_failed_relisting, should_create_listing, should_check_images_upload_status_time, send_missing_listing_notification, send_status_reminder_email
 from django.conf import settings
-import uuid
 import time
 import random
 import logging
-import threading
 import os
 logger = logging.getLogger('facebook_listing_cronjob')
 
@@ -493,6 +488,8 @@ def profile_listings_for_approved_users(self, user_id):
         return "No user found for the given ID while processing approved users."
     logger.info(f" Starting profile listing processing for approved user (ID: {user_id})")
 
+    results = []
+
     try:
         if user_instance.gumtree_dealarship_url:
             gumtree_profile_url = user_instance.gumtree_dealarship_url
@@ -500,47 +497,45 @@ def profile_listings_for_approved_users(self, user_id):
 
             if not seller_id or not seller_id.isdigit():
                 logger.warning("Invalid seller ID extracted from Gumtree profile URL.")
-                return "Invalid seller ID"
-
-            if GumtreeProfileListing.objects.filter(url=gumtree_profile_url, user=user_instance, profile_id=seller_id).exists():
+                results.append("Gumtree: Invalid seller ID")
+            elif GumtreeProfileListing.objects.filter(url=gumtree_profile_url, user=user_instance, profile_id=seller_id).exists():
                 logger.info("Gumtree profile URL has already been processed for this user.")
-                return "This Gumtree profile URL is already processed for the approved user"
-
-            success, message = get_gumtree_listings(gumtree_profile_url, user_instance)
-
-            if success:
-                logger.info("Successfully retrieved and scheduled Gumtree listings.")
+                results.append("Gumtree: already processed")
             else:
-                logger.error(f"Gumtree listings fetch failed: {message}")
+                success, message = get_gumtree_listings(gumtree_profile_url, user_instance)
+                if success:
+                    logger.info("Successfully retrieved and scheduled Gumtree listings.")
+                else:
+                    logger.error(f"Gumtree listings fetch failed: {message}")
+                results.append(f"Gumtree: {message}")
 
-            return message
-
-        elif user_instance.facebook_dealership_url:
+        if user_instance.facebook_dealership_url:
             facebook_profile_url = user_instance.facebook_dealership_url
             seller_id = extract_seller_id(facebook_profile_url)
 
             if not seller_id or not seller_id.isdigit():
                 logger.warning("Invalid seller ID from Facebook profile URL.")
-                return "Invalid seller ID of Facebook profile URL for approved user"
-
-            if FacebookProfileListing.objects.filter(url=facebook_profile_url, user=user_instance, profile_id=seller_id).exists():
+                results.append("Facebook: Invalid seller ID")
+            elif FacebookProfileListing.objects.filter(url=facebook_profile_url, user=user_instance, profile_id=seller_id).exists():
                 logger.info("Facebook profile URL already processed for this user.")
-                return "This Facebook profile URL is already processed for the approved user"
+                results.append("Facebook: already processed")
+            else:
+                # Record created for stats and listing count tracking.
+                # Facebook automation (actual posting) is disabled — record is preserved for future use.
+                FacebookProfileListing.objects.create(
+                    url=facebook_profile_url,
+                    user=user_instance,
+                    status="pending",
+                    profile_id=seller_id,
+                    total_listings=0
+                )
+                results.append("Facebook: profile listing record created")
 
-            # Record created for stats and listing count tracking.
-            # Facebook automation (actual posting) is disabled — record is preserved for future use.
-            FacebookProfileListing.objects.create(
-                url=facebook_profile_url,
-                user=user_instance,
-                status="pending",
-                profile_id=seller_id,
-                total_listings=0
-            )
-            return "Facebook profile listing record created for the approved user"
-
-        else:
+        if not results:
             logger.warning("No dealership URL (Gumtree or Facebook) found for the approved user.")
             return "No dealership URL found for this approved user."
+
+        return " | ".join(results)
 
     except Exception as e:
         logger.exception("An unexpected error occurred while processing profile listings.")
