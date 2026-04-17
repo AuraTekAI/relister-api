@@ -38,6 +38,8 @@ from .serializers import (
     DiscountCodeSerializer,
     AdminInvoiceListSerializer,
     AdminDiscountCodeSerializer,
+    AdminCustomPlanSerializer,
+    AdminPlanAssignUsersSerializer,
 )
 
 logger = logging.getLogger('relister_views')
@@ -117,16 +119,26 @@ def _archive_stripe_coupon(stripe_coupon_id):
 
 
 class PlanListView(APIView):
-    """GET /api/payments/plans/ — list all active plans."""
+    """GET /api/payments/plans/ — list all active plans visible to the requesting user."""
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
         operation_summary="List active plans",
-        operation_description="Returns all active subscription plans (Starter, Professional, Enterprise).",
+        operation_description=(
+            "Returns all active standard subscription plans plus any custom plans "
+            "that have been specifically assigned to the requesting user by an admin."
+        ),
         responses={200: PlanSerializer(many=True)},
     )
     def get(self, request):
-        plans = Plan.objects.filter(is_active=True).order_by('price_aud')
+        from django.db.models import Q
+        user = request.user
+        # Standard plans visible to everyone + custom plans assigned to this user
+        plans = Plan.objects.filter(
+            is_active=True
+        ).filter(
+            Q(is_custom=False) | Q(is_custom=True, assigned_users=user)
+        ).distinct().order_by('price_aud')
         serializer = PlanSerializer(plans, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -209,6 +221,7 @@ class CheckoutView(APIView):
     def post(self, request):
         stripe.api_key = settings.STRIPE_SECRET_KEY
         plan_id = request.data.get('plan_id')
+        user = request.user
 
         if not plan_id:
             return Response(
@@ -224,14 +237,19 @@ class CheckoutView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Custom plans are restricted — only explicitly assigned users may subscribe
+        if plan.is_custom and not plan.assigned_users.filter(id=user.id).exists():
+            return Response(
+                {'detail': 'You do not have access to this plan.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Enterprise plans have no Stripe price — contact sales only
         if not plan.stripe_price_id:
             return Response(
                 {'detail': 'This plan requires contacting sales. No checkout available.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        user = request.user
 
         # Retrieve existing Stripe customer ID if present
         stripe_customer_id = None
@@ -296,8 +314,7 @@ class CheckoutView(APIView):
                 customer=stripe_customer_id,
                 mode='subscription',
                 line_items=line_items,
-                automatic_tax={'enabled': True},
-                customer_update={'address': 'auto'},
+                automatic_tax={'enabled': False},
                 success_url=settings.STRIPE_SUCCESS_URL,
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 metadata={
@@ -1403,3 +1420,407 @@ class AdminDiscountCodeDetailView(APIView):
 
         _archive_stripe_coupon(stripe_coupon_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Admin – Custom Plan Management
+# ---------------------------------------------------------------------------
+
+def _sync_custom_plan_to_stripe(plan):
+    """
+    Create Stripe Product + base monthly Price (+ optional metered overage Price)
+    for a custom plan. Stores the resulting IDs on the plan instance.
+    Returns True on success, False if Stripe sync failed.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    product = None
+    try:
+        product = stripe.Product.create(
+            name=f"Relister {plan.name}",
+            metadata={'plan_name': plan.name, 'plan_id': str(plan.id), 'is_custom': 'true'},
+        )
+
+        price_cents = int(plan.price_aud * 100)
+        base_price = stripe.Price.create(
+            product=product.id,
+            unit_amount=price_cents,
+            currency='aud',
+            recurring={'interval': 'month'},
+            tax_behavior='exclusive',
+            metadata={'type': 'base_monthly', 'plan_id': str(plan.id)},
+        )
+        plan.stripe_price_id = base_price.id
+
+        if plan.overage_rate_aud:
+            overage_cents = int(plan.overage_rate_aud * 100)
+            meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
+            try:
+                meter = stripe.billing.Meter.create(
+                    display_name=f"Relister overage meter ({meter_event_name})",
+                    event_name=meter_event_name,
+                    default_aggregation={'formula': 'sum'},
+                    value_settings={'event_payload_key': 'value'},
+                )
+                overage_price = stripe.Price.create(
+                    product=product.id,
+                    unit_amount=overage_cents,
+                    currency='aud',
+                    recurring={
+                        'interval': 'month',
+                        'meter': meter.id,
+                        'usage_type': 'metered',
+                    },
+                    billing_scheme='per_unit',
+                    tax_behavior='exclusive',
+                    metadata={
+                        'type': 'overage_per_listing',
+                        'meter_event_name': meter_event_name,
+                        'plan_id': str(plan.id),
+                    },
+                )
+                plan.stripe_overage_price_id = overage_price.id
+            except stripe.error.StripeError as exc:
+                logger.warning(
+                    f"_sync_custom_plan_to_stripe: Overage meter/price creation failed for plan "
+                    f"'{plan.name}' — base price created, overage skipped. Error: {exc}"
+                )
+
+        plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+        logger.info(
+            f"_sync_custom_plan_to_stripe: Plan '{plan.name}' synced to Stripe — "
+            f"product={product.id}, base_price={plan.stripe_price_id}, "
+            f"overage_price={plan.stripe_overage_price_id}."
+        )
+        return True
+
+    except stripe.error.StripeError as exc:
+        logger.error(f"_sync_custom_plan_to_stripe: Failed for plan '{plan.name}': {exc}")
+        # Clean up orphaned Stripe product if base price creation failed after product was made
+        if product:
+            try:
+                stripe.Product.modify(product.id, active=False)
+            except stripe.error.StripeError:
+                pass
+        return False
+
+
+class AdminCustomPlanListCreateView(APIView):
+    """
+    GET  /api/payments/admin/custom-plans/  — list all custom plans.
+    POST /api/payments/admin/custom-plans/  — create a custom plan and sync to Stripe.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] List custom plans",
+        operation_description="Returns all custom plans with their assigned users.",
+        manual_parameters=[
+            openapi.Parameter('is_active', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, description='Filter by active status'),
+        ],
+        responses={200: AdminCustomPlanSerializer(many=True)},
+    )
+    def get(self, request):
+        qs = Plan.objects.filter(is_custom=True).prefetch_related('assigned_users').order_by('-created_at')
+        is_active = request.query_params.get('is_active')
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+        serializer = AdminCustomPlanSerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Create custom plan",
+        operation_description=(
+            "Creates a custom subscription plan, syncs it to Stripe (Product + Price), "
+            "and optionally assigns it to specific users immediately. "
+            "Only assigned users will see and be able to subscribe to this plan."
+        ),
+        request_body=AdminCustomPlanSerializer,
+        responses={
+            201: AdminCustomPlanSerializer(),
+            400: "Validation error.",
+            502: "Stripe sync failed — plan saved locally but Stripe IDs not set.",
+        },
+    )
+    def post(self, request):
+        serializer = AdminCustomPlanSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        plan = serializer.save()
+        logger.info(f"AdminCustomPlan: Created plan '{plan.name}' by admin {request.user.email}.")
+
+        stripe_ok = _sync_custom_plan_to_stripe(plan)
+        plan.refresh_from_db()
+
+        response_data = AdminCustomPlanSerializer(plan).data
+        if not stripe_ok:
+            return Response(
+                {
+                    'plan': response_data,
+                    'warning': 'Plan created locally but Stripe sync failed. Stripe IDs not set. Retry via PATCH.',
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+class AdminCustomPlanDetailView(APIView):
+    """
+    GET    /api/payments/admin/custom-plans/<pk>/  — retrieve a custom plan.
+    PATCH  /api/payments/admin/custom-plans/<pk>/  — update name/price/quota/users.
+    DELETE /api/payments/admin/custom-plans/<pk>/  — deactivate a custom plan.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def _get_plan(self, pk):
+        try:
+            return Plan.objects.prefetch_related('assigned_users').get(pk=pk, is_custom=True)
+        except Plan.DoesNotExist:
+            return None
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Get custom plan detail",
+        responses={200: AdminCustomPlanSerializer(), 404: "Not found."},
+    )
+    def get(self, request, pk):
+        plan = self._get_plan(pk)
+        if not plan:
+            return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Update custom plan",
+        operation_description=(
+            "Update plan details or assigned users. "
+            "Changing price/quota does NOT automatically update the existing Stripe Price (Stripe prices are immutable). "
+            "Use the /retry-stripe-sync/ endpoint to create new Stripe prices after a price change."
+        ),
+        request_body=AdminCustomPlanSerializer,
+        responses={200: AdminCustomPlanSerializer(), 400: "Validation error.", 404: "Not found."},
+    )
+    def patch(self, request, pk):
+        plan = self._get_plan(pk)
+        if not plan:
+            return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AdminCustomPlanSerializer(plan, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        plan = serializer.save()
+        logger.info(f"AdminCustomPlan: Updated plan '{plan.name}' by admin {request.user.email}.")
+        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Delete custom plan",
+        operation_description=(
+            "Cancels all active Stripe subscriptions tied to this plan first. "
+            "If any cancellation fails the plan is NOT deleted — a 409 is returned listing the failed user emails. "
+            "Once all subscriptions are cancelled the plan is soft-deleted (is_active=False) so historical invoices remain intact."
+        ),
+        responses={
+            204: "All subscriptions cancelled and plan deleted.",
+            404: "Not found.",
+            409: "One or more Stripe subscription cancellations failed — plan not deleted.",
+        },
+    )
+    def delete(self, request, pk):
+        import time as _time
+        plan = self._get_plan(pk)
+        if not plan:
+            return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        max_attempts = getattr(settings, 'MAX_RETRIES_ATTEMPTS', 3)
+
+        active_subs = Subscription.objects.select_related('user').filter(
+            plan=plan,
+            status__in=['active', 'past_due'],
+            stripe_subscription_id__isnull=False,
+        ).exclude(stripe_subscription_id='')
+
+        failed = []       # list of dicts: {email, stripe_subscription_id, last_error}
+        cancelled_ids = []
+
+        for sub in active_subs:
+            last_exc = None
+            cancelled = False
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    stripe.Subscription.cancel(sub.stripe_subscription_id)
+                    cancelled = True
+                    logger.info(
+                        f"AdminCustomPlan delete: Cancelled Stripe subscription "
+                        f"'{sub.stripe_subscription_id}' for user {sub.user.email} "
+                        f"(attempt {attempt}/{max_attempts})."
+                    )
+                    break
+                except stripe.error.StripeError as exc:
+                    last_exc = exc
+                    logger.warning(
+                        f"AdminCustomPlan delete: Attempt {attempt}/{max_attempts} failed to cancel "
+                        f"'{sub.stripe_subscription_id}' for user {sub.user.email}: {exc}"
+                    )
+                    if attempt < max_attempts:
+                        _time.sleep(2 ** (attempt - 1))  # 1s, 2s, 4s …
+
+            if cancelled:
+                cancelled_ids.append(sub.id)
+            else:
+                logger.error(
+                    f"AdminCustomPlan delete: All {max_attempts} attempts exhausted for "
+                    f"'{sub.stripe_subscription_id}' (user {sub.user.email}). Last error: {last_exc}"
+                )
+                failed.append({
+                    'email': sub.user.email,
+                    'stripe_subscription_id': sub.stripe_subscription_id,
+                    'error': str(last_exc),
+                })
+
+        if failed:
+            return Response(
+                {
+                    'detail': (
+                        f'Failed to cancel {len(failed)} Stripe subscription(s) after {max_attempts} attempts each. '
+                        'Plan has NOT been deleted. Cancel the listed subscriptions manually in Stripe, then retry.'
+                    ),
+                    'failed_subscriptions': failed,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Mark locally-tracked subscriptions as cancelled
+        if cancelled_ids:
+            from django.utils import timezone as tz
+            Subscription.objects.filter(id__in=cancelled_ids).update(
+                status='cancelled',
+                cancel_at_period_end=False,
+                cancelled_at=tz.now(),
+            )
+            from accounts.models import User as AuthUser
+            AuthUser.objects.filter(
+                subscription__id__in=cancelled_ids
+            ).update(account_status='trial_expired')
+
+        plan.is_active = False
+        plan.save(update_fields=['is_active'])
+        logger.info(
+            f"AdminCustomPlan: Deleted plan '{plan.name}' by admin {request.user.email}. "
+            f"Cancelled {len(cancelled_ids)} subscription(s)."
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminCustomPlanAssignUsersView(APIView):
+    """
+    POST /api/payments/admin/custom-plans/<pk>/assign-users/
+    Replace the full set of users assigned to a custom plan.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Assign users to custom plan",
+        operation_description=(
+            "Replaces the assigned user list for a custom plan. "
+            "Only users in this list will be able to see and subscribe to the plan. "
+            "Pass an empty list to remove all assignments."
+        ),
+        request_body=AdminPlanAssignUsersSerializer,
+        responses={
+            200: AdminCustomPlanSerializer(),
+            400: "Validation error.",
+            404: "Custom plan not found.",
+        },
+    )
+    def post(self, request, pk):
+        try:
+            plan = Plan.objects.prefetch_related('assigned_users').get(pk=pk, is_custom=True)
+        except Plan.DoesNotExist:
+            return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AdminPlanAssignUsersSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user_ids = serializer.validated_data['user_ids']
+        plan.assigned_users.set(user_ids)
+        plan.refresh_from_db()
+        logger.info(
+            f"AdminCustomPlan: Assigned {len(user_ids)} user(s) to plan '{plan.name}' "
+            f"by admin {request.user.email}."
+        )
+        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+
+class AdminCustomPlanRetryStripeSyncView(APIView):
+    """
+    POST /api/payments/admin/custom-plans/<pk>/retry-stripe-sync/
+    Re-run Stripe sync for a custom plan that failed or needs new prices.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    @swagger_auto_schema(
+        operation_summary="[Admin] Retry Stripe sync for custom plan",
+        operation_description=(
+            "Creates a new Stripe Product and Prices for this custom plan. "
+            "Use this when initial sync failed or after changing price/overage values. "
+            "Existing Stripe IDs are overwritten."
+        ),
+        request_body=openapi.Schema(type=openapi.TYPE_OBJECT, properties={}),
+        responses={
+            200: AdminCustomPlanSerializer(),
+            404: "Custom plan not found.",
+            502: "Stripe sync failed.",
+        },
+    )
+    def post(self, request, pk):
+        try:
+            plan = Plan.objects.get(pk=pk, is_custom=True)
+        except Plan.DoesNotExist:
+            return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Guard: if stripe_price_id already exists, verify it is still valid in Stripe
+        # before allowing a re-sync — prevents creating duplicate orphaned products.
+        if plan.stripe_price_id:
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            try:
+                existing_price = stripe.Price.retrieve(plan.stripe_price_id)
+                if getattr(existing_price, 'active', False):
+                    return Response(
+                        {
+                            'detail': (
+                                'This plan is already synced with Stripe and the existing price is active. '
+                                'Re-syncing would create a duplicate product. '
+                                'If you changed the price/quota, use PATCH to update the plan details — '
+                                'Stripe prices are immutable so a new price cannot replace an active one mid-cycle.'
+                            ),
+                            'stripe_price_id': plan.stripe_price_id,
+                            'stripe_overage_price_id': plan.stripe_overage_price_id,
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+            except stripe.error.InvalidRequestError:
+                # Price no longer exists in Stripe — safe to re-sync
+                logger.warning(
+                    f"AdminCustomPlan retry-sync: stripe_price_id '{plan.stripe_price_id}' "
+                    f"no longer exists in Stripe for plan '{plan.name}' — proceeding with re-sync."
+                )
+            except stripe.error.StripeError as exc:
+                logger.error(f"AdminCustomPlan retry-sync: Could not verify existing price: {exc}")
+                return Response(
+                    {'detail': 'Could not verify existing Stripe price. Please try again.'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        stripe_ok = _sync_custom_plan_to_stripe(plan)
+        plan.refresh_from_db()
+
+        if not stripe_ok:
+            return Response(
+                {'detail': 'Stripe sync failed. Check server logs for details.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        logger.info(f"AdminCustomPlan: Stripe sync retried for plan '{plan.name}' by admin {request.user.email}.")
+        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)

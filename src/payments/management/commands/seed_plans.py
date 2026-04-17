@@ -54,6 +54,7 @@ class Command(BaseCommand):
                     unit_amount=price_cents,
                     currency='aud',
                     recurring={'interval': 'month'},
+                    tax_behavior='exclusive',
                     metadata={'type': 'base_monthly'},
                 )
                 stripe_price_id = base_price.id
@@ -77,6 +78,7 @@ class Command(BaseCommand):
                         'usage_type': 'metered',
                     },
                     billing_scheme='per_unit',
+                    tax_behavior='exclusive',
                     metadata={
                         'type': 'overage_per_listing',
                         'meter_event_name': meter_name,

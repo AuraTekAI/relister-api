@@ -11,6 +11,14 @@ class Plan(models.Model):
     listing_quota = models.IntegerField(null=True, blank=True)
     overage_rate_aud = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    # Custom plans are created by admins and restricted to specific assigned users.
+    # Standard plans (is_custom=False) are visible to all users.
+    is_custom = models.BooleanField(default=False)
+    assigned_users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name='assigned_plans',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

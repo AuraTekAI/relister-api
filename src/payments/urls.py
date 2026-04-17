@@ -16,6 +16,10 @@ from .views import (
     AdminDiscountCodeListCreateView,
     AdminDiscountCodeDetailView,
     AdminInvoiceStatsView,
+    AdminCustomPlanListCreateView,
+    AdminCustomPlanDetailView,
+    AdminCustomPlanAssignUsersView,
+    AdminCustomPlanRetryStripeSyncView,
 )
 
 urlpatterns = [
@@ -39,4 +43,9 @@ urlpatterns = [
     # TICKET-018: Admin discount code management
     path('admin/discount-codes/', AdminDiscountCodeListCreateView.as_view(), name='admin-discount-code-list'),
     path('admin/discount-codes/<int:pk>/', AdminDiscountCodeDetailView.as_view(), name='admin-discount-code-detail'),
+    # Admin – Custom plan management
+    path('admin/custom-plans/', AdminCustomPlanListCreateView.as_view(), name='admin-custom-plan-list'),
+    path('admin/custom-plans/<int:pk>/', AdminCustomPlanDetailView.as_view(), name='admin-custom-plan-detail'),
+    path('admin/custom-plans/<int:pk>/assign-users/', AdminCustomPlanAssignUsersView.as_view(), name='admin-custom-plan-assign-users'),
+    path('admin/custom-plans/<int:pk>/retry-stripe-sync/', AdminCustomPlanRetryStripeSyncView.as_view(), name='admin-custom-plan-retry-stripe-sync'),
 ]

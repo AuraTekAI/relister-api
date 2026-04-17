@@ -4,9 +4,11 @@ from .models import Plan, Subscription, DiscountCode
 
 
 class PlanAdmin(admin.ModelAdmin):
-    list_display = ('name', 'price_aud', 'listing_quota', 'overage_rate_aud', 'is_active', 'created_at')
+    list_display = ('name', 'price_aud', 'listing_quota', 'overage_rate_aud', 'is_active', 'is_custom', 'created_at')
     search_fields = ('name',)
-    list_filter = ('is_active',)
+    list_filter = ('is_active', 'is_custom')
+    filter_horizontal = ('assigned_users',)
+    readonly_fields = ('created_at',)
 
 
 class SubscriptionAdmin(admin.ModelAdmin):

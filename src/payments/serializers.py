@@ -15,8 +15,105 @@ class PlanSerializer(serializers.ModelSerializer):
             'listing_quota',
             'overage_rate_aud',
             'is_active',
+            'is_custom',
             'created_at',
         ]
+
+
+# ---------------------------------------------------------------------------
+# Admin – Custom Plan Management
+# ---------------------------------------------------------------------------
+
+class AdminCustomPlanSerializer(serializers.ModelSerializer):
+    """Used by admin to create/update custom plans. Stripe IDs are read-only (set after sync)."""
+    assigned_user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False,
+        help_text='List of user IDs to assign to this custom plan.',
+    )
+    assigned_users_info = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Plan
+        fields = [
+            'id',
+            'name',
+            'price_aud',
+            'listing_quota',
+            'overage_rate_aud',
+            'is_active',
+            'is_custom',
+            'stripe_price_id',
+            'stripe_overage_price_id',
+            'assigned_user_ids',
+            'assigned_users_info',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'is_custom', 'stripe_price_id', 'stripe_overage_price_id', 'created_at']
+
+    def get_assigned_users_info(self, obj):
+        return [
+            {'id': u.id, 'email': u.email, 'full_name': f"{u.first_name} {u.last_name}".strip()}
+            for u in obj.assigned_users.all()
+        ]
+
+    def validate_price_aud(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("price_aud must be greater than 0.")
+        return value
+
+    def validate_listing_quota(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("listing_quota must be greater than 0.")
+        return value
+
+    def validate_overage_rate_aud(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("overage_rate_aud cannot be negative.")
+        return value
+
+    def validate_assigned_user_ids(self, value):
+        from accounts.models import User
+        if not value:
+            return value
+        existing_ids = set(User.objects.filter(id__in=value, is_staff=False, is_superuser=False).values_list('id', flat=True))
+        invalid = set(value) - existing_ids
+        if invalid:
+            raise serializers.ValidationError(f"User IDs not found or are admin accounts: {sorted(invalid)}")
+        return value
+
+    def create(self, validated_data):
+        assigned_user_ids = validated_data.pop('assigned_user_ids', [])
+        plan = Plan.objects.create(**validated_data, is_custom=True)
+        if assigned_user_ids:
+            plan.assigned_users.set(assigned_user_ids)
+        return plan
+
+    def update(self, instance, validated_data):
+        assigned_user_ids = validated_data.pop('assigned_user_ids', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if assigned_user_ids is not None:
+            instance.assigned_users.set(assigned_user_ids)
+        return instance
+
+
+class AdminPlanAssignUsersSerializer(serializers.Serializer):
+    """Used by admin to assign/replace user assignments on a custom plan."""
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        help_text='Full replacement list of user IDs to assign to this plan.',
+    )
+
+    def validate_user_ids(self, value):
+        from accounts.models import User
+        existing_ids = set(User.objects.filter(id__in=value, is_staff=False, is_superuser=False).values_list('id', flat=True))
+        invalid = set(value) - existing_ids
+        if invalid:
+            raise serializers.ValidationError(f"User IDs not found or are admin accounts: {sorted(invalid)}")
+        return value
 
 
 # ---------------------------------------------------------------------------
