@@ -1426,6 +1426,20 @@ class AdminDiscountCodeDetailView(APIView):
 # Admin – Custom Plan Management
 # ---------------------------------------------------------------------------
 
+def _get_or_create_stripe_meter(event_name):
+    """Return an existing active Stripe Meter with the given event_name, or create one."""
+    meters = stripe.billing.Meter.list(limit=100)
+    for m in meters.auto_paging_iter():
+        if m.event_name == event_name and m.status == 'active':
+            return m
+    return stripe.billing.Meter.create(
+        display_name=f"Relister overage meter ({event_name})",
+        event_name=event_name,
+        default_aggregation={'formula': 'sum'},
+        value_settings={'event_payload_key': 'value'},
+    )
+
+
 def _sync_custom_plan_to_stripe(plan):
     """
     Create Stripe Product + base monthly Price (+ optional metered overage Price)
@@ -1433,6 +1447,11 @@ def _sync_custom_plan_to_stripe(plan):
     Returns True on success, False if Stripe sync failed.
     """
     stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    if not plan.price_aud:
+        logger.error(f"_sync_custom_plan_to_stripe: plan '{plan.name}' has no price_aud — aborting sync.")
+        return False
+
     product = None
     try:
         product = stripe.Product.create(
@@ -1455,12 +1474,7 @@ def _sync_custom_plan_to_stripe(plan):
             overage_cents = int(plan.overage_rate_aud * 100)
             meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
             try:
-                meter = stripe.billing.Meter.create(
-                    display_name=f"Relister overage meter ({meter_event_name})",
-                    event_name=meter_event_name,
-                    default_aggregation={'formula': 'sum'},
-                    value_settings={'event_payload_key': 'value'},
-                )
+                meter = _get_or_create_stripe_meter(meter_event_name)
                 overage_price = stripe.Price.create(
                     product=product.id,
                     unit_amount=overage_cents,
@@ -1557,7 +1571,7 @@ class AdminCustomPlanListCreateView(APIView):
             return Response(
                 {
                     'plan': response_data,
-                    'warning': 'Plan created locally but Stripe sync failed. Stripe IDs not set. Retry via PATCH.',
+                    'warning': 'Plan created locally but Stripe sync failed. Stripe IDs not set. Retry via /retry-stripe-sync/.',
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
@@ -1592,8 +1606,9 @@ class AdminCustomPlanDetailView(APIView):
         operation_summary="[Admin] Update custom plan",
         operation_description=(
             "Update plan details or assigned users. "
-            "Changing price/quota does NOT automatically update the existing Stripe Price (Stripe prices are immutable). "
-            "Use the /retry-stripe-sync/ endpoint to create new Stripe prices after a price change."
+            "If price_aud or overage_rate_aud is changed, the DB is updated immediately but Stripe is NOT — "
+            "Stripe prices are immutable. The response will include a `stripe_action_required` flag. "
+            "Call /retry-stripe-sync/ afterwards to archive the old Stripe prices and create new ones."
         ),
         request_body=AdminCustomPlanSerializer,
         responses={200: AdminCustomPlanSerializer(), 400: "Validation error.", 404: "Not found."},
@@ -1603,13 +1618,36 @@ class AdminCustomPlanDetailView(APIView):
         if not plan:
             return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # Capture old price values before save to detect changes
+        old_price_aud = plan.price_aud
+        old_overage_rate_aud = plan.overage_rate_aud
+
         serializer = AdminCustomPlanSerializer(plan, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         plan = serializer.save()
         logger.info(f"AdminCustomPlan: Updated plan '{plan.name}' by admin {request.user.email}.")
-        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+        price_changed = (
+            plan.price_aud != old_price_aud
+            or plan.overage_rate_aud != old_overage_rate_aud
+        )
+
+        response_data = AdminCustomPlanSerializer(plan).data
+        if price_changed and plan.stripe_price_id:
+            response_data['stripe_action_required'] = (
+                'Price was updated in the database but Stripe prices are immutable — '
+                'existing subscribers continue on the old price until their cycle ends. '
+                'Call POST /retry-stripe-sync/ to archive the old Stripe prices and create new ones '
+                'so future subscribers are charged the updated amount.'
+            )
+            logger.warning(
+                f"AdminCustomPlan: Price changed for plan '{plan.name}' but Stripe not updated. "
+                f"stripe_action_required=True. Admin must call retry-stripe-sync."
+            )
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary="[Admin] Delete custom plan",
@@ -1656,6 +1694,24 @@ class AdminCustomPlanDetailView(APIView):
                         f"(attempt {attempt}/{max_attempts})."
                     )
                     break
+                except stripe.error.InvalidRequestError as exc:
+                    exc_str = str(exc).lower()
+                    # Treat already-cancelled or non-existent subscriptions as successfully handled
+                    if 'no such subscription' in exc_str or 'already canceled' in exc_str or 'already cancelled' in exc_str:
+                        cancelled = True
+                        logger.info(
+                            f"AdminCustomPlan delete: Stripe subscription "
+                            f"'{sub.stripe_subscription_id}' for user {sub.user.email} "
+                            f"already cancelled in Stripe — treating as done."
+                        )
+                        break
+                    last_exc = exc
+                    logger.warning(
+                        f"AdminCustomPlan delete: Attempt {attempt}/{max_attempts} failed to cancel "
+                        f"'{sub.stripe_subscription_id}' for user {sub.user.email}: {exc}"
+                    )
+                    if attempt < max_attempts:
+                        _time.sleep(2 ** (attempt - 1))
                 except stripe.error.StripeError as exc:
                     last_exc = exc
                     logger.warning(
@@ -1739,6 +1795,12 @@ class AdminCustomPlanAssignUsersView(APIView):
         except Plan.DoesNotExist:
             return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        if not plan.is_active:
+            return Response(
+                {'detail': 'Cannot assign users to a deactivated plan.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = AdminPlanAssignUsersSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -1780,32 +1842,88 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
         except Plan.DoesNotExist:
             return Response({'detail': 'Custom plan not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Guard: if stripe_price_id already exists, verify it is still valid in Stripe
-        # before allowing a re-sync — prevents creating duplicate orphaned products.
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+
+        if not plan.is_active:
+            return Response(
+                {'detail': 'Cannot sync a deactivated plan to Stripe.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not plan.price_aud or not plan.listing_quota:
+            return Response(
+                {'detail': 'Plan is missing price_aud or listing_quota. Update the plan via PATCH before retrying Stripe sync.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if plan.stripe_price_id:
-            stripe.api_key = settings.STRIPE_SECRET_KEY
             try:
                 existing_price = stripe.Price.retrieve(plan.stripe_price_id)
-                if getattr(existing_price, 'active', False):
-                    return Response(
-                        {
-                            'detail': (
-                                'This plan is already synced with Stripe and the existing price is active. '
-                                'Re-syncing would create a duplicate product. '
-                                'If you changed the price/quota, use PATCH to update the plan details — '
-                                'Stripe prices are immutable so a new price cannot replace an active one mid-cycle.'
-                            ),
-                            'stripe_price_id': plan.stripe_price_id,
-                            'stripe_overage_price_id': plan.stripe_overage_price_id,
-                        },
-                        status=status.HTTP_409_CONFLICT,
+                existing_active = getattr(existing_price, 'active', False)
+
+                if existing_active:
+                    # Check if DB price matches Stripe price — detect if admin changed price via PATCH
+                    stripe_unit_amount = getattr(existing_price, 'unit_amount', None)
+                    db_unit_amount = int(plan.price_aud * 100) if plan.price_aud else None
+                    price_matches = (stripe_unit_amount == db_unit_amount)
+
+                    if price_matches:
+                        # No price change — truly already synced, block re-sync to prevent duplicates
+                        return Response(
+                            {
+                                'detail': (
+                                    'This plan is already synced with Stripe and the price is unchanged. '
+                                    'Re-syncing is not needed and would create a duplicate product.'
+                                ),
+                                'stripe_price_id': plan.stripe_price_id,
+                                'stripe_overage_price_id': plan.stripe_overage_price_id,
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+
+                    # Price changed — archive old Stripe product so it no longer accepts new subscriptions
+                    # then fall through to create fresh product + prices below
+                    logger.info(
+                        f"AdminCustomPlan retry-sync: Price changed for plan '{plan.name}' "
+                        f"(Stripe={stripe_unit_amount} cents, DB={db_unit_amount} cents). "
+                        f"Archiving old Stripe product before re-sync."
                     )
+                    try:
+                        old_product_id = getattr(existing_price, 'product', None)
+                        if old_product_id:
+                            # Deactivate old prices first (required before archiving product)
+                            stripe.Price.modify(plan.stripe_price_id, active=False)
+                            if plan.stripe_overage_price_id:
+                                try:
+                                    stripe.Price.modify(plan.stripe_overage_price_id, active=False)
+                                except stripe.error.StripeError:
+                                    pass
+                            stripe.Product.modify(old_product_id, active=False)
+                            logger.info(
+                                f"AdminCustomPlan retry-sync: Archived old Stripe product '{old_product_id}' "
+                                f"and prices for plan '{plan.name}'."
+                            )
+                    except stripe.error.StripeError as exc:
+                        logger.warning(
+                            f"AdminCustomPlan retry-sync: Could not archive old Stripe product for "
+                            f"plan '{plan.name}': {exc} — proceeding with re-sync anyway."
+                        )
+
+                    # Clear old IDs so _sync_custom_plan_to_stripe starts fresh
+                    plan.stripe_price_id = None
+                    plan.stripe_overage_price_id = None
+                    plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+
             except stripe.error.InvalidRequestError:
-                # Price no longer exists in Stripe — safe to re-sync
+                # Old price no longer exists in Stripe — safe to re-sync
                 logger.warning(
                     f"AdminCustomPlan retry-sync: stripe_price_id '{plan.stripe_price_id}' "
                     f"no longer exists in Stripe for plan '{plan.name}' — proceeding with re-sync."
                 )
+                plan.stripe_price_id = None
+                plan.stripe_overage_price_id = None
+                plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+
             except stripe.error.StripeError as exc:
                 logger.error(f"AdminCustomPlan retry-sync: Could not verify existing price: {exc}")
                 return Response(

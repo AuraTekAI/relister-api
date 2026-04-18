@@ -59,12 +59,16 @@ class AdminCustomPlanSerializer(serializers.ModelSerializer):
         ]
 
     def validate_price_aud(self, value):
-        if value is not None and value <= 0:
+        if value is None:
+            raise serializers.ValidationError("price_aud is required.")
+        if value <= 0:
             raise serializers.ValidationError("price_aud must be greater than 0.")
         return value
 
     def validate_listing_quota(self, value):
-        if value is not None and value <= 0:
+        if value is None:
+            raise serializers.ValidationError("listing_quota is required.")
+        if value <= 0:
             raise serializers.ValidationError("listing_quota must be greater than 0.")
         return value
 
@@ -82,6 +86,21 @@ class AdminCustomPlanSerializer(serializers.ModelSerializer):
         if invalid:
             raise serializers.ValidationError(f"User IDs not found or are admin accounts: {sorted(invalid)}")
         return value
+
+    def validate(self, attrs):
+        # On create (no instance), price_aud and listing_quota are mandatory
+        if self.instance is None:
+            if not attrs.get('price_aud'):
+                raise serializers.ValidationError({'price_aud': 'price_aud is required.'})
+            if not attrs.get('listing_quota'):
+                raise serializers.ValidationError({'listing_quota': 'listing_quota is required.'})
+        # On update, prevent nullifying price_aud or listing_quota
+        else:
+            if 'price_aud' in attrs and attrs['price_aud'] is None:
+                raise serializers.ValidationError({'price_aud': 'price_aud cannot be set to null.'})
+            if 'listing_quota' in attrs and attrs['listing_quota'] is None:
+                raise serializers.ValidationError({'listing_quota': 'listing_quota cannot be set to null.'})
+        return attrs
 
     def create(self, validated_data):
         assigned_user_ids = validated_data.pop('assigned_user_ids', [])
