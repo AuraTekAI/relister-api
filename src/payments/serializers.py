@@ -139,6 +139,12 @@ class AdminPlanAssignUsersSerializer(serializers.Serializer):
 # TICKET-010: Subscription / Trial status
 # ---------------------------------------------------------------------------
 
+class ActiveDiscountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DiscountCode
+        fields = ['id', 'code', 'discount_type', 'discount_value']
+
+
 class SubscriptionStatusSerializer(serializers.ModelSerializer):
     plan = PlanSerializer(read_only=True)
     days_remaining = serializers.SerializerMethodField()
@@ -146,6 +152,7 @@ class SubscriptionStatusSerializer(serializers.ModelSerializer):
     overage_rate_aud = serializers.SerializerMethodField()
     trial_end_date = serializers.SerializerMethodField()
     account_status = serializers.SerializerMethodField()
+    active_discount = serializers.SerializerMethodField()
 
     class Meta:
         model = Subscription
@@ -163,6 +170,7 @@ class SubscriptionStatusSerializer(serializers.ModelSerializer):
             'overage_rate_aud',
             'cancel_at_period_end',
             'cancelled_at',
+            'active_discount',
         ]
         read_only_fields = [
             'id', 'status', 'current_period_start', 'current_period_end',
@@ -191,6 +199,11 @@ class SubscriptionStatusSerializer(serializers.ModelSerializer):
     def get_account_status(self, obj):
         return obj.user.account_status
 
+    def get_active_discount(self, obj):
+        if obj.active_discount_code and obj.active_discount_code.is_valid():
+            return ActiveDiscountSerializer(obj.active_discount_code).data
+        return None
+
 
 class TrialStatusSerializer(serializers.Serializer):
     """
@@ -202,12 +215,17 @@ class TrialStatusSerializer(serializers.Serializer):
     days_remaining = serializers.IntegerField(allow_null=True)
     trial_end_date = serializers.DateTimeField(allow_null=True)
     trial_start_date = serializers.DateTimeField(allow_null=True)
+    current_period_start = serializers.DateTimeField(allow_null=True)
+    current_period_end = serializers.DateTimeField(allow_null=True)
     listing_count = serializers.IntegerField()
     plan = serializers.DictField(allow_null=True)
     listing_quota = serializers.IntegerField(allow_null=True)
     overage_rate_aud = serializers.DecimalField(
         max_digits=10, decimal_places=2, allow_null=True
     )
+    cancel_at_period_end = serializers.BooleanField()
+    cancelled_at = serializers.DateTimeField(allow_null=True)
+    active_discount = serializers.DictField(allow_null=True)
 
 
 # ---------------------------------------------------------------------------

@@ -157,7 +157,7 @@ class SubscriptionStatusView(APIView):
 
         # Try to get the real subscription record first
         try:
-            subscription = Subscription.objects.select_related('plan').get(user=user)
+            subscription = Subscription.objects.select_related('plan', 'active_discount_code').get(user=user)
             serializer = SubscriptionStatusSerializer(subscription)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Subscription.DoesNotExist:
@@ -176,10 +176,15 @@ class SubscriptionStatusView(APIView):
             'days_remaining': days_remaining,
             'trial_end_date': user.trial_end_date,
             'trial_start_date': user.trial_start_date,
+            'current_period_start': user.trial_start_date,
+            'current_period_end': user.trial_end_date,
             'listing_count': user.listing_count,
             'plan': None,
             'listing_quota': None,
             'overage_rate_aud': None,
+            'cancel_at_period_end': False,
+            'cancelled_at': None,
+            'active_discount': None,
         }
         serializer = TrialStatusSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -525,6 +530,16 @@ class WebhookView(APIView):
             'current_period_start', 'current_period_end', 'status', 'listing_count',
             'cancel_at_period_end', 'cancelled_at', 'updated_at',
         ])
+
+        # Keep User.account_status in sync with the subscription status.
+        # Only mirror statuses that exist on the User model; skip cancelled/suspended
+        # since those are handled by their own dedicated webhook handlers.
+        user_status_map = {'active': 'active', 'past_due': 'past_due', 'trial': 'trial'}
+        new_user_status = user_status_map.get(subscription.status)
+        if new_user_status and subscription.user.account_status != new_user_status:
+            subscription.user.account_status = new_user_status
+            subscription.user.save(update_fields=['account_status', 'updated_at'])
+
         logger.info(f"customer.subscription.updated: {stripe_subscription_id} — status={subscription.status}, cancel_at_period_end={stripe_cancel_at_period_end}.")
 
         try:
@@ -561,7 +576,7 @@ class WebhookView(APIView):
         if not stripe_subscription_id:
             return
         try:
-            subscription = Subscription.objects.get(
+            subscription = Subscription.objects.select_related('user').get(
                 stripe_subscription_id=stripe_subscription_id
             )
         except Subscription.DoesNotExist:
@@ -570,7 +585,11 @@ class WebhookView(APIView):
 
         subscription.status = 'past_due'
         subscription.save(update_fields=['status', 'updated_at'])
-        logger.info(f"invoice.payment_failed: {stripe_subscription_id} marked past_due.")
+
+        user = subscription.user
+        user.account_status = 'past_due'
+        user.save(update_fields=['account_status', 'updated_at'])
+        logger.info(f"invoice.payment_failed: {stripe_subscription_id} marked past_due (subscription + user).")
 
         inv_meta = _sget(invoice, 'metadata') or {}
         if _sget(inv_meta, 'source') == 'listing_overage':

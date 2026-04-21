@@ -55,6 +55,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     ACCOUNT_STATUS_CHOICES = [
         ('trial', 'Trial'),
         ('active', 'Active'),
+        ('past_due', 'Past Due'),
         ('trial_expired', 'Trial Expired'),
         ('suspended', 'Suspended'),
     ]
