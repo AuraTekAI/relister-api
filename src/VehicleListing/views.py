@@ -1141,6 +1141,7 @@ def update_vehicle_listing_listed_on(request):
         
         vehicle_listing_id = data['id']
         listed_on_date = data['listed_on']
+        is_changed = data.get('is_changed', None)
         
         # Validate that the ID is a positive integer
         try:
@@ -1224,6 +1225,8 @@ def update_vehicle_listing_listed_on(request):
 
             vehicle_listing.listed_on = listed_on_datetime
             vehicle_listing.status = "completed"
+            if is_changed is not None:
+                vehicle_listing.is_changed = bool(is_changed)
             vehicle_listing.save()
 
         # Metered overage: first-time listing that exceeds plan quota → Stripe charge + invoice (async).
