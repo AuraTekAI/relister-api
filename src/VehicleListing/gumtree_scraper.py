@@ -413,7 +413,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
-            if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=7)):
+            if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=1)):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.year} {already_exists.make} {already_exists.model} and price is {already_exists.price} and mileage is {already_exists.mileage} and location is {already_exists.location}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"result: {result}")
@@ -444,7 +444,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
-            elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=7):
+            elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=1):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and set(already_exists.images) == set(result.get("image") or []) and already_exists.description == result.get("description"):
