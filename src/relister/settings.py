@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'accounts',
     'VehicleListing',
     'payments',
+    'zip_manager',
 
     # Third party apps
     "django_celery_beat",
@@ -344,6 +345,15 @@ LOGGING = {
     }
 }
 
+
+# ── AWS S3 (zip_manager) ────────────────────────────────────────────────────
+AWS_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID', default='')
+AWS_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY', default='')
+AWS_S3_REGION_NAME = env('AWS_S3_REGION_NAME', default='ap-southeast-2')
+AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='')
+AWS_S3_ZIP_PREFIX = env('AWS_S3_ZIP_PREFIX', default='zip-files/')
+AWS_S3_PRESIGNED_URL_EXPIRY = env.int('AWS_S3_PRESIGNED_URL_EXPIRY', default=3600)
+# ─────────────────────────────────────────────────────────────────────────────
 
 EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='hello@autorelister.com.au')
