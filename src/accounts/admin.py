@@ -46,7 +46,7 @@ class UserAdmin(UserAdmin):
         ('Permissions', {'fields': ('is_superuser', 'is_staff', 'is_active', 'groups', 'user_permissions')}),
         ('Important Dates', {'fields': ('last_login', 'created_at', 'updated_at')}),
     )
-    readonly_fields = ("last_login", "trial_start_date", "trial_end_date", "created_at", "updated_at")
+    readonly_fields = ("last_login", "created_at", "updated_at")
     list_filter = ("account_status", "is_approved", "is_active", "is_superuser", "groups")
 
     add_fieldsets = (
