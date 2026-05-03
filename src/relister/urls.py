@@ -27,6 +27,7 @@ urlpatterns = [
     path('api/vehicle-listing/',include('VehicleListing.urls')),
     path('api/payments/', include('payments.urls')),
     path('api/zip-manager/', include('zip_manager.urls')),
+    path('api/extension-logs/', include('extension_logs.urls')),
 ]
 if settings.ENVIRONMENT == 'DEVELOPMENT' or settings.ENVIRONMENT == 'LOCAL':
     urlpatterns.append(path ('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),)

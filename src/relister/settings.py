@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'VehicleListing',
     'payments',
     'zip_manager',
+    'extension_logs',
 
     # Third party apps
     "django_celery_beat",
