@@ -321,6 +321,12 @@ LOGGING = {
             'filename': os.path.join(LOG_DIR, 'relister_views.log'),
             'formatter': 'verbose'
         },
+        'dnacarsales_file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(LOG_DIR, 'dnacarsales_listing.log'),
+            'formatter': 'verbose'
+        },
     },
     'loggers': {
         'gumtree': {
@@ -340,6 +346,11 @@ LOGGING = {
         },
         'relister_views': {
             'handlers': ['console', 'relister_views_file'],
+            'level': 'DEBUG',
+            'propagate': False
+        },
+        'dnacarsales': {
+            'handlers': ['console', 'dnacarsales_file'],
             'level': 'DEBUG',
             'propagate': False
         },

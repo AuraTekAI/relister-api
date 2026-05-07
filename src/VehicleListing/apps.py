@@ -44,6 +44,11 @@ class VehiclelistingConfig(AppConfig):
                         "task": "VehicleListing.tasks.check_gumtree_profile_relisting_task",
                         "crontab": crontab_map["twice_daily_3am_8am_utc"],
                     },
+                    {
+                        "name": "Check_DNACarSales_Profile_Re-Listings",
+                        "task": "VehicleListing.tasks.check_dnacarsales_profile_relisting_task",
+                        "crontab": crontab_map["twice_daily_3am_8am_utc"],
+                    },
                     # {
                     #     "name": "Send_invoices_to_user",
                     #     "task": "VehicleListing.tasks.generate_and_send_monthly_invoices",

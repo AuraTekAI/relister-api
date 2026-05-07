@@ -1,7 +1,7 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
 # from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync
-from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice
+from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, DNACarSalesProfileListing
 # FacebookUserCredentials import commented out — Facebook automation disabled
 # from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -9,6 +9,7 @@ from django.utils import timezone
 # from VehicleListing.facebook_listing import get_facebook_profile_listings
 # from VehicleListing.facebook_listing import perform_search_and_delete
 from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_id
+from VehicleListing.dnacarsales_scraper import get_dnacarsales_listings, DNA_PROFILE_ID
 # from VehicleListing.views import facebook_profile_listings_thread
 # from VehicleListing.views import image_verification
 from accounts.models import User
@@ -444,6 +445,22 @@ def check_gumtree_profile_relisting_task(self):
             else:
                 logger.error(message)
 
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def check_dnacarsales_profile_relisting_task(self):
+    """Check DNA Car Sales profile relisting"""
+    logger.info("Checking DNA Car Sales profile relisting")
+    dna_profile_listings = DNACarSalesProfileListing.objects.all()
+    if dna_profile_listings:
+        for dna_profile_listing in dna_profile_listings:
+            time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
+            logger.info(f"Checking DNA Car Sales profile relisting for the user {dna_profile_listing.user.email}")
+            result, message = get_dnacarsales_listings(dna_profile_listing.url, dna_profile_listing.user)
+            if result:
+                logger.info(message)
+            else:
+                logger.error(message)
+
 # @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 # def check_facebook_profile_relisting_task(self):
 #     """Check facebook profile relisting"""
@@ -531,8 +548,23 @@ def profile_listings_for_approved_users(self, user_id):
                 )
                 results.append("Facebook: profile listing record created")
 
+        if user_instance.dnacarsales_dealership_url:
+            dnacarsales_profile_url = user_instance.dnacarsales_dealership_url
+            if DNACarSalesProfileListing.objects.filter(
+                url=dnacarsales_profile_url, user=user_instance, profile_id=DNA_PROFILE_ID
+            ).exists():
+                logger.info("DNA Car Sales URL has already been processed for this user.")
+                results.append("DNA Car Sales: already processed")
+            else:
+                success, message = get_dnacarsales_listings(dnacarsales_profile_url, user_instance)
+                if success:
+                    logger.info("Successfully retrieved and scheduled DNA Car Sales listings.")
+                else:
+                    logger.error(f"DNA Car Sales listings fetch failed: {message}")
+                results.append(f"DNA Car Sales: {message}")
+
         if not results:
-            logger.warning("No dealership URL (Gumtree or Facebook) found for the approved user.")
+            logger.warning("No dealership URL (Gumtree, Facebook or DNA Car Sales) found for the approved user.")
             return "No dealership URL found for this approved user."
 
         return " | ".join(results)

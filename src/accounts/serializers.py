@@ -22,6 +22,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dnacarsales_dealership_url',
             'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
@@ -56,11 +57,13 @@ class UserListSerializer(serializers.ModelSerializer):
         # field is explicitly being changed (skip on partial updates that don't touch URLs).
         gumtree_key_present = 'gumtree_dealarship_url' in attrs
         facebook_key_present = 'facebook_dealership_url' in attrs
-        if gumtree_key_present or facebook_key_present:
+        dnacarsales_key_present = 'dnacarsales_dealership_url' in attrs
+        if gumtree_key_present or facebook_key_present or dnacarsales_key_present:
             gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
             facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
-            if not gumtree_url and not facebook_url:
-                raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+            dnacarsales_url = attrs.get('dnacarsales_dealership_url', self.instance.dnacarsales_dealership_url if self.instance else None)
+            if not gumtree_url and not facebook_url and not dnacarsales_url:
+                raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or DNA Car Sales) is required.")
         
         return attrs
 
@@ -128,6 +131,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dnacarsales_dealership_url',
             'dealership_license_number', 'dealership_license_phone',
         )
         extra_kwargs = {
@@ -145,9 +149,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         gumtree_profile_url = attrs.get('gumtree_dealarship_url')
         facebook_profile_url = attrs.get('facebook_dealership_url')
+        dnacarsales_profile_url = attrs.get('dnacarsales_dealership_url')
 
-        if not gumtree_profile_url and not facebook_profile_url:
-            raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        if not gumtree_profile_url and not facebook_profile_url and not dnacarsales_profile_url:
+            raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or DNA Car Sales) is required.")
 
         # Facebook URL validation
         if facebook_profile_url:
@@ -166,6 +171,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             if not gumtree_profile_url.startswith(expected_gumtree_prefix):
                 raise serializers.ValidationError({
                     'gumtree_dealarship_url': 'Invalid Gumtree profile URL. It must start with "https://www.gumtree.com.au/web/s-user".'
+                })
+
+        # DNA Car Sales URL validation
+        if dnacarsales_profile_url:
+            expected_dnacarsales_prefix = "https://www.dnacarsales.com.au"
+            if not dnacarsales_profile_url.startswith(expected_dnacarsales_prefix):
+                raise serializers.ValidationError({
+                    'dnacarsales_dealership_url': 'Invalid DNA Car Sales URL. It must start with "https://www.dnacarsales.com.au".'
                 })
 
         return attrs
@@ -196,6 +209,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'dnacarsales_dealership_url',
             'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
@@ -290,6 +304,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': user.phone_number,
                 'gumtree_dealarship_url': user.gumtree_dealarship_url,
                 'facebook_dealership_url': user.facebook_dealership_url,
+                'dnacarsales_dealership_url': user.dnacarsales_dealership_url,
                 'dealership_license_number': user.dealership_license_number,
                 'dealership_license_phone': user.dealership_license_phone,
                 'is_superuser': user.is_superuser,
