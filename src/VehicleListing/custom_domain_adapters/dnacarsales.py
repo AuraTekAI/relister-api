@@ -351,3 +351,11 @@ class DNACarSalesAdapter(DomainAdapter):
 
     def needs_image_proxy(self, image_url: str) -> bool:
         return bool(image_url) and image_url.startswith(DNA_BASE_URL + "/")
+
+    def discover_dealer_location(self, profile_url: str) -> dict | None:
+        # DNA Car Sales' physical office is in Wangara, WA — confirmed by
+        # their /used-cars-in-wangara/ stock URL path and their contact page.
+        # Resellers using the extension against DNA's site won't actually be
+        # located here, but for DNA themselves (and as a sane default for
+        # the rare reseller who happens to share the area) this is correct.
+        return {"suburb": "Wangara", "state": "WA"}

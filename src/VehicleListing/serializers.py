@@ -7,9 +7,30 @@ from .custom_domain_adapters import any_needs_image_proxy
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookProfileListing, GumtreeProfileListing, RelistingFacebooklisting, CustomDomainProfileListing
 
 
+# State-code → full-name mapping used when assembling a fallback `location`
+# string for custom-domain listings from User.dealership_state. Kept local to
+# this module so VehicleListing/utils.get_full_state_name (used by the Gumtree
+# scrape path) stays untouched.
+_AU_STATE_FULL_NAMES = {
+    'WA': 'Western Australia',
+    'NSW': 'New South Wales',
+    'VIC': 'Victoria',
+    'QLD': 'Queensland',
+    'SA': 'South Australia',
+    'TAS': 'Tasmania',
+    'ACT': 'Australian Capital Territory',
+    'NT': 'Northern Territory',
+}
+
+
 class VehicleListingSerializer(serializers.ModelSerializer):
     relisting_dates = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    # Override the model field so custom-domain rows missing a per-listing
+    # location can fall back to the dealer's saved suburb/state (auto-discovered
+    # from their custom_domain_url at signup). Gumtree rows always carry their
+    # own `adLocationData`-derived location and bypass the fallback.
+    location = serializers.SerializerMethodField()
 
     class Meta:
         model = VehicleListing
@@ -19,6 +40,28 @@ class VehicleListingSerializer(serializers.ModelSerializer):
     def get_relisting_dates(self, obj):
         relisting_dates = RelistingFacebooklisting.objects.filter(listing=obj).values_list('relisting_date', flat=True)
         return list(relisting_dates)
+
+    def get_location(self, obj):
+        # Gumtree path is sacred — its `location` is set per-ad by the Gumtree
+        # scraper from `adLocationData`. Pass through unchanged whenever the
+        # row has a stored value, regardless of source.
+        if obj.location:
+            return obj.location
+        # Only inject for genuine custom-domain rows. Belt-and-braces: require
+        # custom_domain_profile to be set AND gumtree_profile to be unset, so a
+        # row that somehow has both never accidentally picks up the fallback.
+        if obj.custom_domain_profile_id is None or obj.gumtree_profile_id is not None:
+            return obj.location
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        user = getattr(request, 'user', None) if request else None
+        if user is None or not getattr(user, 'is_authenticated', False):
+            return obj.location
+        suburb = getattr(user, 'dealership_suburb', None)
+        state = getattr(user, 'dealership_state', None)
+        if not suburb or not state:
+            return obj.location
+        full_state = _AU_STATE_FULL_NAMES.get(state, state)
+        return f"{suburb}, {full_state}"
 
     def get_images(self, obj):
         # Custom-domain sites typically don't return CORS headers, so the

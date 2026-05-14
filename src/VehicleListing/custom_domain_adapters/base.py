@@ -19,3 +19,41 @@ class DomainAdapter:
 
     def needs_image_proxy(self, image_url: str) -> bool:
         return False
+
+    def discover_dealer_location(self, profile_url: str) -> dict | None:
+        """Best-effort discovery of the dealership's own suburb / state from
+        their custom-domain site. Returns ``{"suburb": str, "state": str}``
+        with ``state`` as a 2–3 char AU state code (WA/NSW/VIC/QLD/SA/TAS/
+        ACT/NT) or ``None`` if the address can't be determined.
+
+        Called once at signup (and on profile-edit / scheduled refresh) so the
+        listing-response layer can fill in ``location`` for custom-domain rows
+        that don't carry a per-listing address — avoiding the extension's
+        manual prompt. Failure must be silent; callers will simply leave the
+        user's saved location null.
+        """
+        return None
+
+
+# Maps the variety of state spellings JSON-LD authors actually use (full name,
+# 2-3 letter code, dotted abbreviation, mixed case) to the canonical 2-3 letter
+# code stored on User.dealership_state. Kept local to the adapter package so
+# Gumtree's get_full_state_name in VehicleListing/utils.py stays untouched.
+_STATE_CODE_MAP = {
+    "wa": "WA", "w.a.": "WA", "western australia": "WA",
+    "nsw": "NSW", "n.s.w.": "NSW", "new south wales": "NSW",
+    "vic": "VIC", "v.i.c.": "VIC", "victoria": "VIC",
+    "qld": "QLD", "q.l.d.": "QLD", "queensland": "QLD",
+    "sa": "SA", "s.a.": "SA", "south australia": "SA",
+    "tas": "TAS", "t.a.s.": "TAS", "tasmania": "TAS",
+    "act": "ACT", "a.c.t.": "ACT", "australian capital territory": "ACT",
+    "nt": "NT", "n.t.": "NT", "northern territory": "NT",
+}
+
+
+def normalize_au_state(value: str | None) -> str | None:
+    """Coerce a free-form state string into one of the AU state codes
+    User.dealership_state accepts. Returns None for unrecognised input."""
+    if not value or not isinstance(value, str):
+        return None
+    return _STATE_CODE_MAP.get(value.strip().lower())

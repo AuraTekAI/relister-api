@@ -48,6 +48,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
+            'dealership_suburb', 'dealership_state',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
             'password', 'confirm_password',
@@ -110,11 +111,24 @@ class UserListSerializer(serializers.ModelSerializer):
             password = validated_data.pop('password')
             instance.set_password(password)
 
+        # Detect whether the custom_domain_url has actually changed so we only
+        # re-run dealer-location discovery (an outbound HTTP call for generic
+        # adapters) when it's needed.
+        previous_custom_domain = instance.custom_domain_url
+        custom_domain_changed = (
+            'custom_domain_url' in validated_data
+            and validated_data.get('custom_domain_url') != previous_custom_domain
+        )
+
         # Update other fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        
+
         instance.save()
+
+        if custom_domain_changed:
+            from accounts.dealer_location import discover_and_save_dealer_location
+            discover_and_save_dealer_location(instance, instance.custom_domain_url)
         return instance
 
 class SetNewPasswordSerializer(serializers.Serializer):
@@ -230,7 +244,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         validated_data['trial_used'] = True
         # is_approved stays False (default) — admin must approve before the
         # existing Chrome extension / listing app becomes accessible.
-        return User.objects.create_user(**validated_data)
+        user = User.objects.create_user(**validated_data)
+        # Best-effort: auto-fill dealership_suburb / dealership_state from the
+        # dealer's custom_domain_url so the extension never has to prompt for
+        # location at publish time. Failure is silent — see
+        # accounts.dealer_location for the safety wrapper.
+        from accounts.dealer_location import discover_and_save_dealer_location
+        discover_and_save_dealer_location(user, user.custom_domain_url)
+        return user
 
 # ---------------------------------------------------------------------------
 # TICKET-013: Account Settings serializers
@@ -247,12 +268,32 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
+            'dealership_suburb', 'dealership_state',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
-        read_only_fields = ['id', 'email', 'account_status', 'trial_start_date', 'trial_end_date']
+        # dealership_suburb / dealership_state are auto-discovered from
+        # custom_domain_url — exposing them read-only here lets the UI surface
+        # the value (e.g. "Listings will be marked as <Suburb>, <State>")
+        # without inviting the user to override the discovery result.
+        read_only_fields = [
+            'id', 'email', 'account_status', 'trial_start_date', 'trial_end_date',
+            'dealership_suburb', 'dealership_state',
+        ]
 
     def validate_facebook_dealership_url(self, value):
         return _validate_facebook_profile_url(value)
+
+    def update(self, instance, validated_data):
+        previous_custom_domain = instance.custom_domain_url
+        custom_domain_changed = (
+            'custom_domain_url' in validated_data
+            and validated_data.get('custom_domain_url') != previous_custom_domain
+        )
+        instance = super().update(instance, validated_data)
+        if custom_domain_changed:
+            from accounts.dealer_location import discover_and_save_dealer_location
+            discover_and_save_dealer_location(instance, instance.custom_domain_url)
+        return instance
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -346,6 +387,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'custom_domain_url': user.custom_domain_url,
                 'dealership_license_number': user.dealership_license_number,
                 'dealership_license_phone': user.dealership_license_phone,
+                'dealership_suburb': user.dealership_suburb,
+                'dealership_state': user.dealership_state,
                 'is_superuser': user.is_superuser,
                 'is_approved': user.is_approved,
                 'account_status': user.account_status,

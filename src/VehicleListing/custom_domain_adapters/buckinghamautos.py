@@ -276,3 +276,9 @@ class BuckinghamAutosAdapter(DomainAdapter):
         # extension can fetch these directly from the Facebook tab without a
         # proxy. Confirmed by inspecting upstream response headers.
         return False
+
+    def discover_dealer_location(self, profile_url: str) -> dict | None:
+        # Buckingham Autos is based in Wangara, WA — same industrial estate
+        # as DNA. Hardcoded here so resellers using their site as a feed get
+        # a sensible default; the admin can override per-user if needed.
+        return {"suburb": "Wangara", "state": "WA"}

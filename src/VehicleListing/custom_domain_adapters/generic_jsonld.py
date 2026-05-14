@@ -22,7 +22,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .base import DomainAdapter
+from .base import DomainAdapter, normalize_au_state
 
 logger = logging.getLogger("custom_domain")
 
@@ -770,3 +770,38 @@ class GenericJsonLdAdapter(DomainAdapter):
         # adapter claims the host via its KNOWN_HOSTS set, preserving
         # Buckingham's Cloudfront pass-through and DNA's same-origin rule.
         return bool(image_url)
+
+    def discover_dealer_location(self, profile_url: str) -> dict | None:
+        # Fetch the dealer's stock/profile page and look for an
+        # AutoDealer / LocalBusiness / Organization JSON-LD block with an
+        # address. Modern dealer-platform sites ship this for SEO; sites
+        # without it return None and the admin fills it in manually.
+        try:
+            response = _http_get(profile_url)
+        except Exception as exc:
+            logger.warning(
+                f"Generic adapter: dealer-location fetch failed for {profile_url}: {exc}"
+            )
+            return None
+        if response.status_code != 200:
+            logger.warning(
+                f"Generic adapter: dealer-location non-200 ({response.status_code}) "
+                f"for {profile_url}"
+            )
+            return None
+
+        for block in _iter_jsonld_blocks(response.text):
+            if not _has_type(block, {"AutoDealer", "LocalBusiness", "Organization"}):
+                continue
+            addr = block.get("address")
+            if not isinstance(addr, dict):
+                continue
+            locality = addr.get("addressLocality")
+            region = addr.get("addressRegion")
+            if not (isinstance(locality, str) and locality.strip()):
+                continue
+            state_code = normalize_au_state(region) if isinstance(region, str) else None
+            if not state_code:
+                continue
+            return {"suburb": locality.strip(), "state": state_code}
+        return None
