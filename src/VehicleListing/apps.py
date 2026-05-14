@@ -14,8 +14,14 @@ class VehiclelistingConfig(AppConfig):
         from django_celery_beat.models import PeriodicTask, CrontabSchedule
         import logging
 
-        @receiver(post_migrate, sender=VehiclelistingConfig)
+        @receiver(post_migrate)
         def setup_periodic_tasks(sender, **kwargs):
+            # post_migrate fires once per app_config; only run our setup when
+            # this app's migrations finish. Filtering by sender= in @receiver()
+            # doesn't work here because Django sends the AppConfig **instance**
+            # but the decorator captured the class — no match would ever fire.
+            if getattr(sender, 'name', None) != 'VehicleListing':
+                return
             try:
                 # Define all required crontab times
                 crontab_map = {
@@ -45,8 +51,8 @@ class VehiclelistingConfig(AppConfig):
                         "crontab": crontab_map["twice_daily_3am_8am_utc"],
                     },
                     {
-                        "name": "Check_DNACarSales_Profile_Re-Listings",
-                        "task": "VehicleListing.tasks.check_dnacarsales_profile_relisting_task",
+                        "name": "Check_Custom_Domain_Profile_Re-Listings",
+                        "task": "VehicleListing.tasks.check_custom_domain_profile_relisting_task",
                         "crontab": crontab_map["twice_daily_3am_8am_utc"],
                     },
                     # {
@@ -73,6 +79,12 @@ class VehiclelistingConfig(AppConfig):
                         "crontab": crontab_map["daily_midnight_10"],
                     },
                 ]
+
+                # Remove obsolete beat rows from the previous DNA-named scheduling.
+                obsolete_task_names = ["Check_DNACarSales_Profile_Re-Listings"]
+                deleted, _ = PeriodicTask.objects.filter(name__in=obsolete_task_names).delete()
+                if deleted:
+                    logging.info(f"Deleted obsolete periodic tasks: {obsolete_task_names}")
 
                 for t in tasks:
                     task_obj, created = PeriodicTask.objects.update_or_create(

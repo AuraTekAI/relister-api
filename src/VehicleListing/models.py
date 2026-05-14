@@ -34,9 +34,10 @@ class GumtreeProfileListing(models.Model):
     def __str__(self):
         return f"{self.url}"
 
-class DNACarSalesProfileListing(models.Model):
+class CustomDomainProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)
+    domain = models.CharField(max_length=255, null=True,blank=True)
     total_listings = models.IntegerField(null=True,blank=True)
     processed_listings = models.IntegerField(null=True,blank=True)
     status = models.CharField(max_length=255, null=True,blank=True)
@@ -63,8 +64,8 @@ class VehicleListing(models.Model):
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
     gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
-    dnacarsales_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True,related_name='dnacarsales_vehicle_listings')
-    dnacarsales_profile = models.ForeignKey(DNACarSalesProfileListing, on_delete=models.CASCADE,null=True,blank=True)
+    custom_domain_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True,related_name='custom_domain_vehicle_listings')
+    custom_domain_profile = models.ForeignKey(CustomDomainProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     
     list_id = models.CharField(max_length=255)
     year = models.CharField(max_length=255,null=True,blank=True)
@@ -99,6 +100,14 @@ class VehicleListing(models.Model):
     sales = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Guard against race-condition duplicates from concurrent background
+        # scrapes (an initial POST overlapping with a cron-triggered re-scrape,
+        # or rapid repeated POSTs). The orchestrator wraps create in
+        # transaction.atomic and treats IntegrityError on this constraint as
+        # "another thread won the race" — see custom_domain_scraper.py.
+        unique_together = [("user", "list_id", "seller_profile_id")]
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"

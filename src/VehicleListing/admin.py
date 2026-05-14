@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,DNACarSalesProfileListing
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing
 
 class FacebookListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'listing', 'status', 'error_message', 'created_at', 'updated_at')
@@ -29,10 +29,10 @@ class GumtreeProfileListingAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'url')
     list_filter = ('user','status')
 
-class DNACarSalesProfileListingAdmin(admin.ModelAdmin):
-    list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'url')
-    list_filter = ('user','status')
+class CustomDomainProfileListingAdmin(admin.ModelAdmin):
+    list_display = ('user', 'url', 'domain', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
+    search_fields = ('user__email', 'url', 'domain')
+    list_filter = ('user','status', 'domain')
 
 class FacebookProfileListingAdmin(admin.ModelAdmin):        
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
@@ -57,6 +57,6 @@ admin.site.register(ListingUrl, ListingUrlAdmin)
 admin.site.register(FacebookListing, FacebookListingAdmin)
 admin.site.register(FacebookUserCredentials, FacebookUserCredentialsAdmin)
 admin.site.register(GumtreeProfileListing, GumtreeProfileListingAdmin)
-admin.site.register(DNACarSalesProfileListing, DNACarSalesProfileListingAdmin)
+admin.site.register(CustomDomainProfileListing, CustomDomainProfileListingAdmin)
 admin.site.register(FacebookProfileListing, FacebookProfileListingAdmin)
 admin.site.register(RelistingFacebooklisting,RelistingFacebooklistingAdmin)

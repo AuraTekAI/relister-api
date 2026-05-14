@@ -34,7 +34,7 @@ class UserAdmin(UserAdmin):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
-            'dnacarsales_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
         )}),
         ('Subscription & Usage', {'fields': (
@@ -55,7 +55,7 @@ class UserAdmin(UserAdmin):
             "email", "first_name", "last_name",
             "dealership_name", "contact_person_name", "phone_number",
             "gumtree_dealarship_url", "facebook_dealership_url",
-            "dnacarsales_dealership_url",
+            "custom_domain_url",
             "dealership_license_number", "dealership_license_phone",
             "is_approved", "account_status",
         )}),

@@ -7,6 +7,30 @@ from rest_framework.exceptions import AuthenticationFailed, NotAcceptable
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.utils import timezone
 from datetime import timedelta
+from urllib.parse import urlparse
+
+# Facebook profile URL forms accepted by the Marketplace extension. Vanity
+# URLs (facebook.com/<name>) hit GUARD 0 in the extension and block publishing,
+# so we reject them at the API boundary instead of silently persisting them.
+_FACEBOOK_PROFILE_URL_PREFIXES = (
+    "https://www.facebook.com/marketplace/profile/",
+    "https://web.facebook.com/marketplace/profile/",
+    "https://www.facebook.com/profile.php?id=",
+    "https://web.facebook.com/profile.php?id=",
+)
+_FACEBOOK_PROFILE_URL_ERROR = (
+    'Invalid Facebook profile URL. Use the numeric form: '
+    'https://www.facebook.com/marketplace/profile/<id> or '
+    'https://www.facebook.com/profile.php?id=<id>.'
+)
+
+
+def _validate_facebook_profile_url(value):
+    if not value:
+        return value
+    if not any(value.startswith(p) for p in _FACEBOOK_PROFILE_URL_PREFIXES):
+        raise serializers.ValidationError(_FACEBOOK_PROFILE_URL_ERROR)
+    return value
 
 class UserListSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
@@ -22,7 +46,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
-            'dnacarsales_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
@@ -57,14 +81,27 @@ class UserListSerializer(serializers.ModelSerializer):
         # field is explicitly being changed (skip on partial updates that don't touch URLs).
         gumtree_key_present = 'gumtree_dealarship_url' in attrs
         facebook_key_present = 'facebook_dealership_url' in attrs
-        dnacarsales_key_present = 'dnacarsales_dealership_url' in attrs
-        if gumtree_key_present or facebook_key_present or dnacarsales_key_present:
+        custom_domain_key_present = 'custom_domain_url' in attrs
+        if gumtree_key_present or facebook_key_present or custom_domain_key_present:
             gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
             facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
-            dnacarsales_url = attrs.get('dnacarsales_dealership_url', self.instance.dnacarsales_dealership_url if self.instance else None)
-            if not gumtree_url and not facebook_url and not dnacarsales_url:
-                raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or DNA Car Sales) is required.")
-        
+            custom_domain_url = attrs.get('custom_domain_url', self.instance.custom_domain_url if self.instance else None)
+            if not gumtree_url and not facebook_url and not custom_domain_url:
+                raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or Custom Domain) is required.")
+
+        # Custom domain URL — accept any well-formed http(s) URL. The generic
+        # JSON-LD adapter handles unregistered hosts; if the page doesn't
+        # expose vehicle structured data the scrape simply returns no
+        # listings, which the extension surfaces to the user.
+        if custom_domain_key_present:
+            new_value = attrs.get('custom_domain_url')
+            if new_value:
+                parsed = urlparse(new_value)
+                if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+                    raise serializers.ValidationError({
+                        'custom_domain_url': 'Invalid URL. Must be a full http(s) URL with a host.'
+                    })
+
         return attrs
 
     def update(self, instance, validated_data):
@@ -131,7 +168,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
-            'dnacarsales_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
         )
         extra_kwargs = {
@@ -149,21 +186,18 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         gumtree_profile_url = attrs.get('gumtree_dealarship_url')
         facebook_profile_url = attrs.get('facebook_dealership_url')
-        dnacarsales_profile_url = attrs.get('dnacarsales_dealership_url')
+        custom_domain_profile_url = attrs.get('custom_domain_url')
 
-        if not gumtree_profile_url and not facebook_profile_url and not dnacarsales_profile_url:
-            raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or DNA Car Sales) is required.")
+        if not gumtree_profile_url and not facebook_profile_url and not custom_domain_profile_url:
+            raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or Custom Domain) is required.")
 
-        # Facebook URL validation
+        # Facebook URL validation — must match a form the Marketplace
+        # extension accepts (numeric-id forms only; vanity URLs hit GUARD 0).
         if facebook_profile_url:
-            expected_prefixes = [
-                "https://www.facebook.com/marketplace/profile/",
-                "https://web.facebook.com/marketplace/profile/",
-            ]
-            if not any(facebook_profile_url.startswith(prefix) for prefix in expected_prefixes):
-                raise serializers.ValidationError({
-                    'facebook_dealership_url': 'Invalid Facebook profile URL. It must start with a valid Facebook Marketplace profile path.'
-                })
+            try:
+                _validate_facebook_profile_url(facebook_profile_url)
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({'facebook_dealership_url': exc.detail})
 
         # Gumtree URL validation
         if gumtree_profile_url:
@@ -173,12 +207,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                     'gumtree_dealarship_url': 'Invalid Gumtree profile URL. It must start with "https://www.gumtree.com.au/web/s-user".'
                 })
 
-        # DNA Car Sales URL validation
-        if dnacarsales_profile_url:
-            expected_dnacarsales_prefix = "https://www.dnacarsales.com.au"
-            if not dnacarsales_profile_url.startswith(expected_dnacarsales_prefix):
+        # Custom domain URL — accept any well-formed http(s) URL (see
+        # UserListSerializer.validate for why we no longer gate on a
+        # registered-adapter allow-list).
+        if custom_domain_profile_url:
+            parsed = urlparse(custom_domain_profile_url)
+            if parsed.scheme not in ('http', 'https') or not parsed.netloc:
                 raise serializers.ValidationError({
-                    'dnacarsales_dealership_url': 'Invalid DNA Car Sales URL. It must start with "https://www.dnacarsales.com.au".'
+                    'custom_domain_url': 'Invalid URL. Must be a full http(s) URL with a host.'
                 })
 
         return attrs
@@ -209,11 +245,14 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
-            'dnacarsales_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
         read_only_fields = ['id', 'email', 'account_status', 'trial_start_date', 'trial_end_date']
+
+    def validate_facebook_dealership_url(self, value):
+        return _validate_facebook_profile_url(value)
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -304,7 +343,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': user.phone_number,
                 'gumtree_dealarship_url': user.gumtree_dealarship_url,
                 'facebook_dealership_url': user.facebook_dealership_url,
-                'dnacarsales_dealership_url': user.dnacarsales_dealership_url,
+                'custom_domain_url': user.custom_domain_url,
                 'dealership_license_number': user.dealership_license_number,
                 'dealership_license_phone': user.dealership_license_phone,
                 'is_superuser': user.is_superuser,

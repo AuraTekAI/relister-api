@@ -1,7 +1,7 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
 # from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync
-from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, DNACarSalesProfileListing
+from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, CustomDomainProfileListing
 # FacebookUserCredentials import commented out — Facebook automation disabled
 # from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -9,7 +9,8 @@ from django.utils import timezone
 # from VehicleListing.facebook_listing import get_facebook_profile_listings
 # from VehicleListing.facebook_listing import perform_search_and_delete
 from VehicleListing.gumtree_scraper import get_gumtree_listings,extract_seller_id
-from VehicleListing.dnacarsales_scraper import get_dnacarsales_listings, DNA_PROFILE_ID
+from VehicleListing.custom_domain_scraper import get_custom_domain_listings
+from VehicleListing.custom_domain_adapters import resolve_for_url
 # from VehicleListing.views import facebook_profile_listings_thread
 # from VehicleListing.views import image_verification
 from accounts.models import User
@@ -447,15 +448,19 @@ def check_gumtree_profile_relisting_task(self):
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
-def check_dnacarsales_profile_relisting_task(self):
-    """Check DNA Car Sales profile relisting"""
-    logger.info("Checking DNA Car Sales profile relisting")
-    dna_profile_listings = DNACarSalesProfileListing.objects.all()
-    if dna_profile_listings:
-        for dna_profile_listing in dna_profile_listings:
+def check_custom_domain_profile_relisting_task(self):
+    """Check custom-domain profile relisting"""
+    logger.info("Checking custom domain profile relisting")
+    custom_domain_profile_listings = CustomDomainProfileListing.objects.all()
+    if custom_domain_profile_listings:
+        for custom_domain_profile_listing in custom_domain_profile_listings:
             time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
-            logger.info(f"Checking DNA Car Sales profile relisting for the user {dna_profile_listing.user.email}")
-            result, message = get_dnacarsales_listings(dna_profile_listing.url, dna_profile_listing.user)
+            logger.info(
+                f"Checking custom domain profile relisting for the user {custom_domain_profile_listing.user.email}"
+            )
+            result, message = get_custom_domain_listings(
+                custom_domain_profile_listing.url, custom_domain_profile_listing.user
+            )
             if result:
                 logger.info(message)
             else:
@@ -548,20 +553,26 @@ def profile_listings_for_approved_users(self, user_id):
                 )
                 results.append("Facebook: profile listing record created")
 
-        if user_instance.dnacarsales_dealership_url:
-            dnacarsales_profile_url = user_instance.dnacarsales_dealership_url
-            if DNACarSalesProfileListing.objects.filter(
-                url=dnacarsales_profile_url, user=user_instance, profile_id=DNA_PROFILE_ID
+        if user_instance.custom_domain_url:
+            custom_domain_profile_url = user_instance.custom_domain_url
+            adapter = resolve_for_url(custom_domain_profile_url)
+            if adapter is None:
+                logger.warning(
+                    f"Could not resolve adapter for custom domain URL {custom_domain_profile_url}"
+                )
+                results.append("Custom domain: invalid URL")
+            elif CustomDomainProfileListing.objects.filter(
+                url=custom_domain_profile_url, user=user_instance, profile_id=adapter.HOST
             ).exists():
-                logger.info("DNA Car Sales URL has already been processed for this user.")
-                results.append("DNA Car Sales: already processed")
+                logger.info("Custom domain URL has already been processed for this user.")
+                results.append("Custom domain: already processed")
             else:
-                success, message = get_dnacarsales_listings(dnacarsales_profile_url, user_instance)
+                success, message = get_custom_domain_listings(custom_domain_profile_url, user_instance)
                 if success:
-                    logger.info("Successfully retrieved and scheduled DNA Car Sales listings.")
+                    logger.info("Successfully retrieved and scheduled custom domain listings.")
                 else:
-                    logger.error(f"DNA Car Sales listings fetch failed: {message}")
-                results.append(f"DNA Car Sales: {message}")
+                    logger.error(f"Custom domain listings fetch failed: {message}")
+                results.append(f"Custom domain: {message}")
 
         if not results:
             logger.warning("No dealership URL (Gumtree, Facebook or DNA Car Sales) found for the approved user.")

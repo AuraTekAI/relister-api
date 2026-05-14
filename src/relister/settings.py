@@ -321,10 +321,10 @@ LOGGING = {
             'filename': os.path.join(LOG_DIR, 'relister_views.log'),
             'formatter': 'verbose'
         },
-        'dnacarsales_file': {
+        'custom_domain_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
-            'filename': os.path.join(LOG_DIR, 'dnacarsales_listing.log'),
+            'filename': os.path.join(LOG_DIR, 'custom_domain_listing.log'),
             'formatter': 'verbose'
         },
     },
@@ -349,8 +349,8 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False
         },
-        'dnacarsales': {
-            'handlers': ['console', 'dnacarsales_file'],
+        'custom_domain': {
+            'handlers': ['console', 'custom_domain_file'],
             'level': 'DEBUG',
             'propagate': False
         },

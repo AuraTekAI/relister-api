@@ -3,9 +3,9 @@ from .views import (
     get_user_gumtree_profile_vehicle_listings,
     update_vehicle_listing_listed_on,
     get_old_vehicle_listings,
-    get_user_dnacarsales_profile_vehicle_listings,
-    get_dnacarsales_profile_listings,
-    dnacarsales_image_proxy,
+    get_user_custom_domain_profile_vehicle_listings,
+    get_custom_domain_profile_listings,
+    custom_domain_image_proxy,
 )
 
 urlpatterns = [
@@ -26,9 +26,9 @@ urlpatterns = [
     # path('monthly_report/', get_montly_listings_report, name='get_montly_listings_report'),
     # path('facebook_session_status/', get_facebook_session_status, name='get_facebook_session_status'),
     path('gumtree-listings/', get_user_gumtree_profile_vehicle_listings, name='get_user_gumtree_profile_vehicle_listings'),
-    path('dnacarsales-listings/', get_user_dnacarsales_profile_vehicle_listings, name='get_user_dnacarsales_profile_vehicle_listings'),
-    path('dnacarsales-profile-listings/', get_dnacarsales_profile_listings, name='get_dnacarsales_profile_listings'),
-    path('dnacarsales-image/', dnacarsales_image_proxy, name='dnacarsales_image_proxy'),
+    path('custom-domain-listings/', get_user_custom_domain_profile_vehicle_listings, name='get_user_custom_domain_profile_vehicle_listings'),
+    path('custom-domain-profile-listings/', get_custom_domain_profile_listings, name='get_custom_domain_profile_listings'),
+    path('custom-domain-image/', custom_domain_image_proxy, name='custom_domain_image_proxy'),
     path('listed-on/', update_vehicle_listing_listed_on, name='update_vehicle_listing_listed_on'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
 ]
