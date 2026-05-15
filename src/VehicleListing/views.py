@@ -1,15 +1,19 @@
 from .gumtree_scraper import get_gumtree_listings,format_car_description
+from .custom_domain_scraper import get_custom_domain_listings
+from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse, HttpResponse, HttpResponseBadRequest
+from django.views.decorators.csrf import csrf_exempt
+import requests as _http_requests
 import threading
 from rest_framework.decorators import api_view, permission_classes
 import time
@@ -500,6 +504,33 @@ def get_gumtree_profile_listings(request):
             return JsonResponse({'error': 'This URL is already processed'}, status=409)
         # Get listings from Gumtree
         success, message = get_gumtree_listings(profile_url, user)
+        if success:
+            return JsonResponse({'message': message}, status=200)
+        else:
+            return JsonResponse({'error': message}, status=200)
+
+    except Exception as e:
+        return JsonResponse({'message': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_custom_domain_profile_listings(request):
+    """Submit a custom-domain URL and start scraping its stock."""
+    try:
+        data = json.loads(request.body)
+        profile_url = data.get('custom_domain_url')
+        user = request.user
+        if not profile_url:
+            return JsonResponse({'error': 'custom_domain_url is required'}, status=400)
+        adapter = resolve_for_url(profile_url)
+        if adapter is None:
+            return JsonResponse({
+                'error': 'Invalid custom_domain_url. Must be a full http(s) URL with a host.'
+            }, status=400)
+        if CustomDomainProfileListing.objects.filter(url=profile_url, user=user, profile_id=adapter.HOST).exists():
+            return JsonResponse({'error': 'This URL is already processed'}, status=409)
+        success, message = get_custom_domain_listings(profile_url, user)
         if success:
             return JsonResponse({'message': message}, status=200)
         else:
@@ -1014,30 +1045,127 @@ def get_user_gumtree_profile_vehicle_listings(request):
     """Get vehicle listings from specific Gumtree profile URL"""
     user = request.user
     gumtree_profile_url = request.GET.get('url')
-    
+
     if not gumtree_profile_url:
         return JsonResponse({'error': 'url parameter is required'}, status=400)
-    
+
     # Verify the profile belongs to the user
     gumtree_profile = GumtreeProfileListing.objects.filter(
-        user=user, 
+        user=user,
         url=gumtree_profile_url
     ).first()
-    
+
     if not gumtree_profile:
         return JsonResponse({'error': 'Gumtree profile not found or does not belong to user'}, status=404)
-    
+
     vehicle_listings = VehicleListing.objects.filter(
         user=user,
         gumtree_profile=gumtree_profile
     ).select_related('gumtree_profile').order_by('-updated_at')
-    
+
     serializer = VehicleListingSerializer(vehicle_listings, many=True)
     return JsonResponse({
         'count': vehicle_listings.count(),
         'gumtree_profile_url': gumtree_profile_url,
         'results': serializer.data
     }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_custom_domain_profile_vehicle_listings(request):
+    """Get vehicle listings from specific custom-domain profile URL"""
+    user = request.user
+    custom_domain_url = request.GET.get('url')
+
+    if not custom_domain_url:
+        return JsonResponse({'error': 'url parameter is required'}, status=400)
+
+    custom_domain_profile = CustomDomainProfileListing.objects.filter(
+        user=user,
+        url=custom_domain_url
+    ).first()
+
+    if not custom_domain_profile:
+        return JsonResponse({'error': 'Custom domain profile not found or does not belong to user'}, status=404)
+
+    # Match the Gumtree GET endpoint exactly — return all rows for the
+    # profile and let the extension handle missing fields (apiflow.md §3.2
+    # tells the extension to assume fields are nullable). Filtering by
+    # field-completeness here silently hid incomplete rows from publishing.
+    vehicle_listings = VehicleListing.objects.filter(
+        user=user,
+        custom_domain_profile=custom_domain_profile
+    ).select_related('custom_domain_profile').order_by('-updated_at')
+
+    serializer = CustomDomainVehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
+    return JsonResponse({
+        'count': vehicle_listings.count(),
+        'custom_domain_url': custom_domain_url,
+        'results': serializer.data
+    }, status=200)
+
+
+@csrf_exempt
+def custom_domain_image_proxy(request):
+    """
+    Stream a custom-domain image with permissive CORS so the Chrome extension
+    can fetch it from inside the Facebook Marketplace tab. Mirrors the role
+    images.gumtree.com.au plays for Gumtree URLs. Allowed only for hosts whose
+    adapter declares needs_image_proxy().
+    """
+    if request.method == "OPTIONS":
+        resp = HttpResponse(status=204)
+        resp["Access-Control-Allow-Origin"] = "*"
+        resp["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp["Access-Control-Allow-Headers"] = "*"
+        resp["Access-Control-Max-Age"] = "86400"
+        return resp
+
+    if request.method != "GET":
+        return HttpResponse(status=405)
+
+    target_url = request.GET.get("url")
+    if not target_url or not any_needs_image_proxy(target_url):
+        return HttpResponseBadRequest("Invalid or missing url parameter")
+
+    proxy_logger = logging.getLogger('custom_domain')
+    try:
+        upstream = _http_requests.get(
+            target_url,
+            timeout=30,
+            stream=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                ),
+            },
+        )
+    except _http_requests.RequestException as exc:
+        proxy_logger.warning("Custom domain image proxy upstream error for %s: %s", target_url, exc)
+        return HttpResponse(status=502)
+
+    if upstream.status_code != 200:
+        proxy_logger.warning("Custom domain image proxy non-200 (%s) for %s", upstream.status_code, target_url)
+        upstream.close()
+        return HttpResponse(status=502)
+
+    content_type = upstream.headers.get("Content-Type", "image/jpeg")
+    if not content_type.lower().startswith("image/"):
+        proxy_logger.warning("Custom domain image proxy non-image Content-Type %s for %s", content_type, target_url)
+        upstream.close()
+        return HttpResponse(status=502)
+
+    response = StreamingHttpResponse(
+        upstream.iter_content(chunk_size=8192),
+        content_type=content_type,
+    )
+    if upstream.headers.get("Content-Length"):
+        response["Content-Length"] = upstream.headers["Content-Length"]
+    response["Access-Control-Allow-Origin"] = "*"
+    response["Cache-Control"] = "public, max-age=86400"
+    return response
 
 
 
@@ -1248,7 +1376,7 @@ def update_vehicle_listing_listed_on(request):
             except Exception as exc:
                 logger.warning(f"update_vehicle_listing_listed_on: could not queue overage billing: {exc}")
 
-        # Return success response
+        # Return success responsea
         return JsonResponse({
             'success': True,
             'message': 'Vehicle listing listed_on date updated successfully',
@@ -1345,8 +1473,12 @@ def get_old_vehicle_listings(request):
             user=user
         ).order_by("listed_on")
         
-        # Serialize the listings using the existing serializer
-        serializer = VehicleListingSerializer(vehicle_listings, many=True)
+        # Serialize the listings using the existing serializer. Request context
+        # is required so DNA image URLs get rewritten to the proxy — the extension
+        # consumes this `images` array directly (publishListing.ts uploads them
+        # to Facebook from the Marketplace tab, which fails CORS on raw DNA URLs).
+        # Gumtree URLs are allowlisted in any_needs_image_proxy and pass through.
+        serializer = VehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
         
         return JsonResponse({
             'count': vehicle_listings.count(),

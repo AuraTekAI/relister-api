@@ -7,6 +7,30 @@ from rest_framework.exceptions import AuthenticationFailed, NotAcceptable
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.utils import timezone
 from datetime import timedelta
+from urllib.parse import urlparse
+
+# Facebook profile URL forms accepted by the Marketplace extension. Vanity
+# URLs (facebook.com/<name>) hit GUARD 0 in the extension and block publishing,
+# so we reject them at the API boundary instead of silently persisting them.
+_FACEBOOK_PROFILE_URL_PREFIXES = (
+    "https://www.facebook.com/marketplace/profile/",
+    "https://web.facebook.com/marketplace/profile/",
+    "https://www.facebook.com/profile.php?id=",
+    "https://web.facebook.com/profile.php?id=",
+)
+_FACEBOOK_PROFILE_URL_ERROR = (
+    'Invalid Facebook profile URL. Use the numeric form: '
+    'https://www.facebook.com/marketplace/profile/<id> or '
+    'https://www.facebook.com/profile.php?id=<id>.'
+)
+
+
+def _validate_facebook_profile_url(value):
+    if not value:
+        return value
+    if not any(value.startswith(p) for p in _FACEBOOK_PROFILE_URL_PREFIXES):
+        raise serializers.ValidationError(_FACEBOOK_PROFILE_URL_ERROR)
+    return value
 
 class UserListSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
@@ -22,7 +46,9 @@ class UserListSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
+            'dealership_suburb', 'dealership_state',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
             'password', 'confirm_password',
@@ -56,12 +82,27 @@ class UserListSerializer(serializers.ModelSerializer):
         # field is explicitly being changed (skip on partial updates that don't touch URLs).
         gumtree_key_present = 'gumtree_dealarship_url' in attrs
         facebook_key_present = 'facebook_dealership_url' in attrs
-        if gumtree_key_present or facebook_key_present:
+        custom_domain_key_present = 'custom_domain_url' in attrs
+        if gumtree_key_present or facebook_key_present or custom_domain_key_present:
             gumtree_url = attrs.get('gumtree_dealarship_url', self.instance.gumtree_dealarship_url if self.instance else None)
             facebook_url = attrs.get('facebook_dealership_url', self.instance.facebook_dealership_url if self.instance else None)
-            if not gumtree_url and not facebook_url:
-                raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
-        
+            custom_domain_url = attrs.get('custom_domain_url', self.instance.custom_domain_url if self.instance else None)
+            if not gumtree_url and not facebook_url and not custom_domain_url:
+                raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or Custom Domain) is required.")
+
+        # Custom domain URL — accept any well-formed http(s) URL. The generic
+        # JSON-LD adapter handles unregistered hosts; if the page doesn't
+        # expose vehicle structured data the scrape simply returns no
+        # listings, which the extension surfaces to the user.
+        if custom_domain_key_present:
+            new_value = attrs.get('custom_domain_url')
+            if new_value:
+                parsed = urlparse(new_value)
+                if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+                    raise serializers.ValidationError({
+                        'custom_domain_url': 'Invalid URL. Must be a full http(s) URL with a host.'
+                    })
+
         return attrs
 
     def update(self, instance, validated_data):
@@ -70,11 +111,24 @@ class UserListSerializer(serializers.ModelSerializer):
             password = validated_data.pop('password')
             instance.set_password(password)
 
+        # Detect whether the custom_domain_url has actually changed so we only
+        # re-run dealer-location discovery (an outbound HTTP call for generic
+        # adapters) when it's needed.
+        previous_custom_domain = instance.custom_domain_url
+        custom_domain_changed = (
+            'custom_domain_url' in validated_data
+            and validated_data.get('custom_domain_url') != previous_custom_domain
+        )
+
         # Update other fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        
+
         instance.save()
+
+        if custom_domain_changed:
+            from accounts.dealer_location import discover_and_save_dealer_location
+            discover_and_save_dealer_location(instance, instance.custom_domain_url)
         return instance
 
 class SetNewPasswordSerializer(serializers.Serializer):
@@ -128,6 +182,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
         )
         extra_kwargs = {
@@ -145,20 +200,18 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         gumtree_profile_url = attrs.get('gumtree_dealarship_url')
         facebook_profile_url = attrs.get('facebook_dealership_url')
+        custom_domain_profile_url = attrs.get('custom_domain_url')
 
-        if not gumtree_profile_url and not facebook_profile_url:
-            raise serializers.ValidationError("At least one dealership URL (Gumtree or Facebook) is required.")
+        if not gumtree_profile_url and not facebook_profile_url and not custom_domain_profile_url:
+            raise serializers.ValidationError("At least one dealership URL (Gumtree, Facebook or Custom Domain) is required.")
 
-        # Facebook URL validation
+        # Facebook URL validation — must match a form the Marketplace
+        # extension accepts (numeric-id forms only; vanity URLs hit GUARD 0).
         if facebook_profile_url:
-            expected_prefixes = [
-                "https://www.facebook.com/marketplace/profile/",
-                "https://web.facebook.com/marketplace/profile/",
-            ]
-            if not any(facebook_profile_url.startswith(prefix) for prefix in expected_prefixes):
-                raise serializers.ValidationError({
-                    'facebook_dealership_url': 'Invalid Facebook profile URL. It must start with a valid Facebook Marketplace profile path.'
-                })
+            try:
+                _validate_facebook_profile_url(facebook_profile_url)
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({'facebook_dealership_url': exc.detail})
 
         # Gumtree URL validation
         if gumtree_profile_url:
@@ -166,6 +219,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             if not gumtree_profile_url.startswith(expected_gumtree_prefix):
                 raise serializers.ValidationError({
                     'gumtree_dealarship_url': 'Invalid Gumtree profile URL. It must start with "https://www.gumtree.com.au/web/s-user".'
+                })
+
+        # Custom domain URL — accept any well-formed http(s) URL (see
+        # UserListSerializer.validate for why we no longer gate on a
+        # registered-adapter allow-list).
+        if custom_domain_profile_url:
+            parsed = urlparse(custom_domain_profile_url)
+            if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+                raise serializers.ValidationError({
+                    'custom_domain_url': 'Invalid URL. Must be a full http(s) URL with a host.'
                 })
 
         return attrs
@@ -181,7 +244,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         validated_data['trial_used'] = True
         # is_approved stays False (default) — admin must approve before the
         # existing Chrome extension / listing app becomes accessible.
-        return User.objects.create_user(**validated_data)
+        user = User.objects.create_user(**validated_data)
+        # Best-effort: auto-fill dealership_suburb / dealership_state from the
+        # dealer's custom_domain_url so the extension never has to prompt for
+        # location at publish time. Failure is silent — see
+        # accounts.dealer_location for the safety wrapper.
+        from accounts.dealer_location import discover_and_save_dealer_location
+        discover_and_save_dealer_location(user, user.custom_domain_url)
+        return user
 
 # ---------------------------------------------------------------------------
 # TICKET-013: Account Settings serializers
@@ -196,10 +266,34 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'first_name', 'last_name',
             'dealership_name', 'contact_person_name', 'phone_number',
             'gumtree_dealarship_url', 'facebook_dealership_url',
+            'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
+            'dealership_suburb', 'dealership_state',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
-        read_only_fields = ['id', 'email', 'account_status', 'trial_start_date', 'trial_end_date']
+        # dealership_suburb / dealership_state are auto-discovered from
+        # custom_domain_url — exposing them read-only here lets the UI surface
+        # the value (e.g. "Listings will be marked as <Suburb>, <State>")
+        # without inviting the user to override the discovery result.
+        read_only_fields = [
+            'id', 'email', 'account_status', 'trial_start_date', 'trial_end_date',
+            'dealership_suburb', 'dealership_state',
+        ]
+
+    def validate_facebook_dealership_url(self, value):
+        return _validate_facebook_profile_url(value)
+
+    def update(self, instance, validated_data):
+        previous_custom_domain = instance.custom_domain_url
+        custom_domain_changed = (
+            'custom_domain_url' in validated_data
+            and validated_data.get('custom_domain_url') != previous_custom_domain
+        )
+        instance = super().update(instance, validated_data)
+        if custom_domain_changed:
+            from accounts.dealer_location import discover_and_save_dealer_location
+            discover_and_save_dealer_location(instance, instance.custom_domain_url)
+        return instance
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -290,8 +384,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': user.phone_number,
                 'gumtree_dealarship_url': user.gumtree_dealarship_url,
                 'facebook_dealership_url': user.facebook_dealership_url,
+                'custom_domain_url': user.custom_domain_url,
                 'dealership_license_number': user.dealership_license_number,
                 'dealership_license_phone': user.dealership_license_phone,
+                'dealership_suburb': user.dealership_suburb,
+                'dealership_state': user.dealership_state,
                 'is_superuser': user.is_superuser,
                 'is_approved': user.is_approved,
                 'account_status': user.account_status,

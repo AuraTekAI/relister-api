@@ -69,8 +69,32 @@ class User(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=15, null=True, blank=True)
     gumtree_dealarship_url = models.URLField(max_length=200, null=True, blank=True)
     facebook_dealership_url = models.URLField(max_length=200, null=True, blank=True)
+    custom_domain_url = models.URLField(max_length=200, null=True, blank=True)
     dealership_license_number = models.CharField(max_length=100, null=True, blank=True)
     dealership_license_phone = models.CharField(max_length=20, null=True, blank=True)
+    # Auto-discovered from the dealer's custom_domain_url at signup / profile-edit
+    # time (or refreshed by the periodic custom-domain scrape). Used to populate
+    # `location` on custom-domain listing responses when the source page exposes
+    # no per-listing location, removing the need for the extension to prompt
+    # the dealer at publish time. Gumtree-sourced listings ignore these fields —
+    # their location comes from `adLocationData` on each ad.
+    dealership_suburb = models.CharField(max_length=100, null=True, blank=True)
+    AU_STATE_CHOICES = [
+        ('WA', 'Western Australia'),
+        ('NSW', 'New South Wales'),
+        ('VIC', 'Victoria'),
+        ('QLD', 'Queensland'),
+        ('SA', 'South Australia'),
+        ('TAS', 'Tasmania'),
+        ('ACT', 'Australian Capital Territory'),
+        ('NT', 'Northern Territory'),
+    ]
+    dealership_state = models.CharField(
+        max_length=3,
+        choices=AU_STATE_CHOICES,
+        null=True,
+        blank=True,
+    )
     is_approved = models.BooleanField(default=False)
 
     # Trial / subscription status
