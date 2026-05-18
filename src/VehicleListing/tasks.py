@@ -440,11 +440,14 @@ def check_gumtree_profile_relisting_task(self):
         for gumtree_profile_listing in gumtree_profile_listings:
             time.sleep(random.randint(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
             logger.info(f"Checking gumtree profile relisting for the user {gumtree_profile_listing.user.email}")
-            result, message = get_gumtree_listings(gumtree_profile_listing.url,gumtree_profile_listing.user)
-            if result:
-                logger.info(message)
+            if gumtree_profile_listing.user.is_approved:
+                result, message = get_gumtree_listings(gumtree_profile_listing.url,gumtree_profile_listing.user)
+                if result:
+                    logger.info(message)
+                else:
+                    logger.error(message)
             else:
-                logger.error(message)
+                logger.error(f"User is not approved {gumtree_profile_listing.user.email}")
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
@@ -478,7 +481,7 @@ def check_custom_domain_profile_relisting_task(self):
 #             if credentials and credentials.session_cookie != {} and credentials.status:
 #                 success, listings = get_facebook_profile_listings(facebook_profile_listing_instance.url, credentials.session_cookie)
 #                 logger.info(f"Success: {success} and listings count: {len(listings)} for the user {facebook_profile_listing_instance.user.email} and profile id: {facebook_profile_listing_instance.profile_id}")
-#                 if success:
+#                 if success:  
 #                     facebook_profile_listing_instance.total_listings = len(listings)
 #                     facebook_profile_listing_instance.processed_listings = 0
 #                     facebook_profile_listing_instance.status = "processing"

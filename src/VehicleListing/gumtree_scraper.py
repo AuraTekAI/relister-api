@@ -513,73 +513,36 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
     gumtree_profile_listing_instance.processed_listings = count
     gumtree_profile_listing_instance.status = "completed"
     gumtree_profile_listing_instance.save()
-    # Mark already exist listing who are not present in profile listings as sold
-    logging.info("Checking for existing listings not present in incoming listings to mark as sold")
-    existing_listings = VehicleListing.objects.filter(
-        user=user, seller_profile_id=seller_id
-    ).exclude(list_id__in=incoming_list_ids)
-    if existing_listings:
-        for listing in existing_listings:
-            if listing.status in ["pending", "failed","sold"]:
-                logging.info(f"Marking listing ID {listing.list_id} as sold (deleting)")
-                listing.delete()
-                continue
-            elif listing.status == "completed":
-                listing.sales=True
-                listing.save()
 
-                # search_query = f"{listing.year} {listing.make} {listing.model}"
-                # price = listing.price
-                # listed_on = timezone.localtime(listing.listed_on)
-                # credentials = FacebookUserCredentials.objects.filter(user=listing.user).first()
-                # if credentials and listing.is_relist:
-                #     relisting = RelistingFacebooklisting.objects.filter(listing=listing, user=listing.user, status__in=["completed", "failed"], last_relisting_status=False).first()
-                #     if relisting and relisting.status == "failed":
-                #         logging.info(f"Relisting status is failed for {search_query}, deleting listing")
-                #         listing.delete()
-                #         continue
-                #     elif relisting and relisting.status == "completed":
-                #         listed_on = timezone.localtime(relisting.relisting_date)
-                #         if relisting.listing.retry_count <= MAX_RETRIES_ATTEMPTS:
-                #             time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                #             response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                #             if response[0] == 1 or response[0] == 6:
-                #                 logging.info(f"response[1]: {response[1]}")
-                #                 logging.info(f"Deleted relisted Facebook listing for {search_query}")
-                #                 listing.delete()
-                #             else:
-                #                 relisting.listing.retry_count += 1
-                #                 relisting.listing.save()
-                #                 logging.info(f"Failed to delete relisting for {search_query} from facebook marketplace, retry count increased")
-                #         else:
-                #             listing.delete()
-                #             logging.info(f"Failed to delete the relisting {search_query} and completed the retry attempt. System deleted the listing")
-                #     else:
-                #         logging.info(f"Unknown relisting status {getattr(relisting, 'status', None)} for user {listing.user.email} and listing {search_query} and last relisting status {getattr(relisting, 'last_relisting_status', None)}")
-                #         logging.info(f"Deleting the listing ID {listing.list_id}")
-                #         listing.delete()
-                #         continue
-                # elif credentials and not listing.is_relist:
-                #     if listing.retry_count <= MAX_RETRIES_ATTEMPTS:
-                #         time.sleep(random.uniform(settings.DELAY_START_TIME_BEFORE_ACCESS_BROWSER, settings.DELAY_END_TIME_BEFORE_ACCESS_BROWSER))
-                #         response = perform_search_and_delete(search_query, price, listed_on, credentials.session_cookie)
-                #         if response[0] == 1 or response[0] == 6:
-                #             logging.info (f"response[1]: {response[1]}")
-                #             logging.info(f"Deleted Facebook listing for {search_query}")
-                #             listing.delete()
-                #         else:
-                #             listing.retry_count += 1
-                #             listing.save()
-                #             logging.info(f"Failed to delete listing for {search_query} from facebook marketplace, retry count increased")
-                #     else:
-                #         logging.info(f"Failed to delete the listing {search_query} and completed the retry attempt. System marked as sold and deleted")
-                #         listing.delete()
-                # else:
-                #     logging.info(f"No credentials found for user {listing.user.email}")
-                #     continue
-            else:
-                logging.info(f"Listing ID {listing.list_id} is already exit and marked as {listing.status} and status is unknown")
-                continue
+    # Listings that came back in this API call are still live on the seller's profile,
+    # so clear any stale sales=True flag in bulk.
+    existing_listings_which_sale_on_list_api_call = VehicleListing.objects.filter(
+        user=user, seller_profile_id=seller_id, list_id__in=incoming_list_ids
+    )
+    updated_sales_count = existing_listings_which_sale_on_list_api_call.update(sales=False)
+    logging.info(f"Reset sales=False on {updated_sales_count} listings still present on the seller's profile")
+
+    # Mark already exist listing who are not present in profile listings as sold.
+    # Skip this block if the incoming API call returned no listings — otherwise we'd
+    # treat every existing listing as "missing" and wipe them all.
+    if not incoming_list_ids:
+        logging.warning("Incoming list IDs are empty; skipping missing-listing cleanup to avoid wiping all rows")
     else:
-        logging.info("No old listings found which not exist in the profile listings")
+        logging.info("Checking for existing listings not present in incoming listings to mark as sold")
+        missing_listings = VehicleListing.objects.filter(
+            user=user, seller_profile_id=seller_id
+        ).exclude(list_id__in=incoming_list_ids)
+
+        if not missing_listings.exists():
+            logging.info("No old listings found which not exist in the profile listings")
+        else:
+            # Bulk delete pending/failed/sold listings that disappeared from the profile
+            deletable = missing_listings.filter(status__in=["pending", "failed", "sold"])
+            deleted_count, _ = deletable.delete()
+            logging.info(f"Bulk deleted {deleted_count} pending/failed/sold listings missing from profile")
+
+            # Bulk mark completed listings as sold
+            completed_missing = missing_listings.filter(status="completed")
+            sold_count = completed_missing.update(sales=True)
+            logging.info(f"Bulk marked {sold_count} completed listings as sales=True (sold)")
     logging.info("Completed gumtree_profile_listings_thread execution")
