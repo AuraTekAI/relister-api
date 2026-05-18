@@ -86,6 +86,9 @@ class VehicleListing(models.Model):
     location = models.CharField(max_length=255,null=True,blank=True)
     url = models.URLField(null=True,blank=True)
     seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
+    # Facebook Marketplace listing ID — captured by the browser extension after publish,
+    # used for targeted deletes (replaces fragile title-search deletes). Overwritten on each call.
+    facebook_listing_id = models.CharField(max_length=128, null=True, blank=True)
     status = models.CharField(max_length=255, null=True)
     is_relist = models.BooleanField(default=False)
     is_changed = models.BooleanField(default=False)     # True when an existing listing's data was updated by the scraper

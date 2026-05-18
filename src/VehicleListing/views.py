@@ -1401,6 +1401,210 @@ def update_vehicle_listing_listed_on(request):
         }, status=500)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_vehicle_listing_is_changed(request):
+    """
+    Flag-only mutation for the `is_changed` field on a VehicleListing.
+
+    This endpoint exists so the browser extension can clear (or set) the
+    `is_changed` flag without being forced to also supply a `listed_on` value.
+    The existing /listed-on/ endpoint rejects payloads without `listed_on`,
+    which caused a flag-clear loop in production (duplicate FB listings).
+
+    Source-agnostic: works for Gumtree and custom-domain listings alike.
+    MUST NOT touch is_listed, relist_count, listing_count, relist_cycles,
+    Subscription.listing_count, or trigger any overage billing.
+
+    Request Body:
+    {
+        "id": 123,
+        "is_changed": false
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": { "id": 123, "is_changed": false }
+    }
+    """
+    try:
+        data = json.loads(request.body)
+
+        if 'id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing ID is required'
+            }, status=400)
+
+        if 'is_changed' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'is_changed is required'
+            }, status=400)
+
+        vehicle_listing_id = data['id']
+        is_changed_raw = data['is_changed']
+
+        # Validate ID
+        try:
+            vehicle_listing_id = int(vehicle_listing_id)
+            if vehicle_listing_id <= 0:
+                raise ValueError("ID must be positive")
+        except (ValueError, TypeError):
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid vehicle listing ID format'
+            }, status=400)
+
+        # Strict bool — reject ints, strings, etc. to avoid surprise truthiness.
+        if not isinstance(is_changed_raw, bool):
+            return JsonResponse({
+                'success': False,
+                'error': 'is_changed must be a boolean (true or false)'
+            }, status=400)
+
+        vehicle_listing = VehicleListing.objects.filter(
+            id=vehicle_listing_id, user=request.user
+        ).first()
+        if vehicle_listing is None:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing not found or you do not have permission to update it'
+            }, status=404)
+
+        # Pure flag mutation — explicit update_fields so nothing else can drift.
+        vehicle_listing.is_changed = is_changed_raw
+        vehicle_listing.save(update_fields=['is_changed', 'updated_at'])
+
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'id': vehicle_listing.id,
+                'is_changed': vehicle_listing.is_changed,
+            }
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON format in request body'
+        }, status=400)
+
+    except Exception as e:
+        logger.error(f"Error updating vehicle listing is_changed flag: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while updating the vehicle listing'
+        }, status=500)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_vehicle_listing_facebook_id(request):
+    """
+    Store the Facebook Marketplace listing ID for a VehicleListing.
+
+    Overwrite-on-each-call (1:1 with VehicleListing — no history kept).
+    Used by the extension to enable targeted deletes via the FB ID
+    instead of fragile title-search deletes.
+
+    Request Body:
+    {
+        "id": 123,
+        "facebook_listing_id": "1234567890123456"
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": { "id": 123, "facebook_listing_id": "1234567890123456" }
+    }
+    """
+    try:
+        data = json.loads(request.body)
+
+        if 'id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing ID is required'
+            }, status=400)
+
+        if 'facebook_listing_id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'facebook_listing_id is required'
+            }, status=400)
+
+        vehicle_listing_id = data['id']
+        facebook_listing_id = data['facebook_listing_id']
+
+        # Validate ID
+        try:
+            vehicle_listing_id = int(vehicle_listing_id)
+            if vehicle_listing_id <= 0:
+                raise ValueError("ID must be positive")
+        except (ValueError, TypeError):
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid vehicle listing ID format'
+            }, status=400)
+
+        # facebook_listing_id must be a non-empty string within the model's max_length.
+        if not isinstance(facebook_listing_id, str):
+            return JsonResponse({
+                'success': False,
+                'error': 'facebook_listing_id must be a string'
+            }, status=400)
+
+        facebook_listing_id = facebook_listing_id.strip()
+        if not facebook_listing_id:
+            return JsonResponse({
+                'success': False,
+                'error': 'facebook_listing_id must not be empty'
+            }, status=400)
+
+        if len(facebook_listing_id) > 128:
+            return JsonResponse({
+                'success': False,
+                'error': 'facebook_listing_id exceeds maximum length of 128 characters'
+            }, status=400)
+
+        vehicle_listing = VehicleListing.objects.filter(
+            id=vehicle_listing_id, user=request.user
+        ).first()
+        if vehicle_listing is None:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing not found or you do not have permission to update it'
+            }, status=404)
+
+        # Overwrite-on-call. Explicit update_fields keeps this surgical.
+        vehicle_listing.facebook_listing_id = facebook_listing_id
+        vehicle_listing.save(update_fields=['facebook_listing_id', 'updated_at'])
+
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'id': vehicle_listing.id,
+                'facebook_listing_id': vehicle_listing.facebook_listing_id,
+            }
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON format in request body'
+        }, status=400)
+
+    except Exception as e:
+        logger.error(f"Error updating vehicle listing facebook_listing_id: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while updating the vehicle listing'
+        }, status=500)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_old_vehicle_listings(request):

@@ -2,6 +2,8 @@ from django.urls import path
 from .views import (
     get_user_gumtree_profile_vehicle_listings,
     update_vehicle_listing_listed_on,
+    update_vehicle_listing_is_changed,
+    update_vehicle_listing_facebook_id,
     get_old_vehicle_listings,
     get_user_custom_domain_profile_vehicle_listings,
     get_custom_domain_profile_listings,
@@ -30,5 +32,7 @@ urlpatterns = [
     path('custom-domain-profile-listings/', get_custom_domain_profile_listings, name='get_custom_domain_profile_listings'),
     path('custom-domain-image/', custom_domain_image_proxy, name='custom_domain_image_proxy'),
     path('listed-on/', update_vehicle_listing_listed_on, name='update_vehicle_listing_listed_on'),
+    path('mark-changed/', update_vehicle_listing_is_changed, name='update_vehicle_listing_is_changed'),
+    path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
 ]
