@@ -77,6 +77,13 @@ class VehicleListing(models.Model):
     model = models.CharField(max_length=100,null=True,blank=True)
     price = models.CharField(max_length=255,null=True,blank=True)
     mileage = models.IntegerField(null=True,blank=True)
+    # True when a custom-domain scrape could not determine a usable odometer
+    # (missing or 0). Mileage is the tie-breaker the extension uses to tell
+    # apart several cars that share a title; this flag marks the rows where
+    # that signal isn't available so they aren't treated as distinguishable.
+    # Gumtree rows always carry a parsed odometer (the scrape drops a listing
+    # rather than store it blank), so this stays False for them.
+    mileage_unavailable = models.BooleanField(default=False)
     exterior_colour = models.CharField(max_length=255,null=True,blank=True)
     interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)

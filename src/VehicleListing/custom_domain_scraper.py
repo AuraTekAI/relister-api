@@ -101,6 +101,9 @@ def _apply_listing_update(existing, result):
     existing.variant = result.get("variant")
     existing.price = str(result.get("price")) if result.get("price") is not None else existing.price
     existing.mileage = result.get("mileage")
+    # Flag rows with no usable odometer (None/0) so the duplicate-matcher
+    # knows mileage can't be used as a tie-breaker for this listing.
+    existing.mileage_unavailable = result.get("mileage") in (None, 0)
     existing.transmission = result.get("transmission")
     existing.description = result.get("description")
     existing.images = result.get("image")
@@ -192,6 +195,7 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                         variant=result.get("variant"),
                         make=result.get("make"),
                         mileage=result.get("mileage"),
+                        mileage_unavailable=result.get("mileage") in (None, 0),
                         model=result.get("model"),
                         price=str(result.get("price")) if result.get("price") is not None else None,
                         transmission=result.get("transmission"),

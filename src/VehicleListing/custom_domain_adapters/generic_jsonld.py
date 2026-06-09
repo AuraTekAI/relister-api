@@ -23,6 +23,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .base import DomainAdapter, normalize_au_state
+from ..make_normalizer import normalize_make
 
 logger = logging.getLogger("custom_domain")
 
@@ -370,11 +371,16 @@ def _parse_via_carssr(html: str, stock_url: str, listing_id: str) -> dict | None
     year = car.get("year")
     make = car.get("make")
     model = car.get("model")
+    # Canonicalise make → exact manufacturer name. Must match migration 0031.
+    make, model = normalize_make(make, model)
     badge = car.get("badge") or ""
     series = car.get("series") or ""
     variant = " ".join(p for p in (badge, series) if p).strip() or None
     price = car.get("egcprice") or car.get("price")
-    mileage = car.get("km") or car.get("odometer_reading")
+    mileage = (
+        car.get("km") or car.get("odometer_reading")
+        or car.get("odometer") or car.get("kms") or car.get("kilometres")
+    )
     body_type = car.get("simple_body") or car.get("body")
     fuel_type = car.get("simple_fuel") or car.get("fuel")
     transmission = car.get("simple_transmission") or car.get("trans")
@@ -719,6 +725,8 @@ class GenericJsonLdAdapter(DomainAdapter):
             _unwrap_name(vehicle.get("model"))
             or _unwrap_name(vehicle.get("vehicleModel"))
         )
+        # Canonicalise make → exact manufacturer name. Must match migration 0031.
+        make, model = normalize_make(make, model)
         year = _extract_year(vehicle)
         price = _extract_price(vehicle)
         mileage = _extract_mileage(vehicle)
