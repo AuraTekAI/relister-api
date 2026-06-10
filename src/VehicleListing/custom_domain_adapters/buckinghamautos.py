@@ -5,6 +5,7 @@ import re
 import requests
 
 from .base import DomainAdapter
+from ..make_normalizer import normalize_make
 
 logger = logging.getLogger("custom_domain")
 
@@ -219,12 +220,17 @@ class BuckinghamAutosAdapter(DomainAdapter):
         year = car.get("year")
         make = _normalize_make(car.get("make"))
         model = car.get("model")
+        # Canonicalise make → exact manufacturer name. Must match migration 0031.
+        make, model = normalize_make(make, model)
         badge = car.get("badge") or ""
         series = car.get("series") or ""
         variant = " ".join([badge, series]).strip() or None
 
         price = car.get("egcprice") or car.get("price")
-        mileage = car.get("km") or car.get("odometer_reading")
+        mileage = (
+            car.get("km") or car.get("odometer_reading")
+            or car.get("odometer") or car.get("kms") or car.get("kilometres")
+        )
         body_type = car.get("simple_body") or car.get("body")
         fuel_type = car.get("simple_fuel") or car.get("fuel")
         transmission = car.get("simple_transmission") or car.get("trans")
