@@ -166,7 +166,10 @@ def get_gumtree_listing_details(listing_id):
     logging.info(f"Fetching listing details from URL: {base_url}")
 
     try:
-        response = client.get(base_url)
+        # The Gumtree init-data endpoint serves the same InitVipDataDto as either JSON
+        # or XML depending on content negotiation. It recently started defaulting to XML,
+        # which broke response.json(). Explicitly ask for JSON to restore the JSON body.
+        response = client.get(base_url, headers={"Accept": "application/json"})
         if response.status_code == 402:
             logging.error(f"402 response code received: Check your Zenrows API key{response.status_code}")
             return None
@@ -174,7 +177,16 @@ def get_gumtree_listing_details(listing_id):
             logging.error(f"Non-200 response code received: {response.status_code}")
             return None
 
-        response_data = response.json()
+        try:
+            response_data = response.json()
+        except ValueError:
+            # Header was ignored / API still returned XML — log the start of the body so
+            # this is diagnosable instead of being swallowed as a generic decode error.
+            logging.error(
+                f"Failed to decode JSON for listing ID {listing_id}; "
+                f"response was not JSON (first 200 chars): {response.text[:200]!r}"
+            )
+            return None
         if not response_data:
             logging.error("Empty response data received")
             return None
@@ -261,15 +273,27 @@ def get_gumtree_listings(profile_url,user):
     base_url = f"https://gt-api.gumtree.com.au/web/user-profile-service/{seller_id}/listings"
     logging.info(f"Fetching all listings for seller ID: {seller_id}")
 
+    # The Gumtree endpoints serve JSON or XML via content negotiation, so explicitly
+    # request JSON to avoid response.json() choking on an XML body (as the init-data
+    # endpoint started doing). content-type is unreliable (text/plain), so we ask for it.
+    json_headers = {"Accept": "application/json"}
+
     try:
         # Get total count of listings
         initial_url = f"{base_url}?page=0&size=1"
-        initial_response = client.get(initial_url)
+        initial_response = client.get(initial_url, headers=json_headers)
         if initial_response.status_code != 200:
             logging.error(f"seller id is not valid {initial_response.status_code}")
             return False,"Invalid seller ID"
 
-        initial_data = initial_response.json()
+        try:
+            initial_data = initial_response.json()
+        except ValueError:
+            logging.error(
+                f"Failed to decode JSON for seller ID {seller_id} (count request); "
+                f"response was not JSON (first 200 chars): {initial_response.text[:200]!r}"
+            )
+            return False,"Invalid response from Gumtree (not JSON)"
         total_count = initial_data.get("totalCount", 0)
         if total_count == 0:
             logging.warning(f"No listings found for seller ID: {seller_id}")
@@ -277,12 +301,19 @@ def get_gumtree_listings(profile_url,user):
 
         # Fetch all listings
         full_url = f"{base_url}?page=0&size={total_count}"
-        full_response = client.get(full_url)
+        full_response = client.get(full_url, headers=json_headers)
         if full_response.status_code != 200:
             logging.error(f"seller id is not valid {full_response.status_code}")
             return False,"seller id is not valid"
 
-        full_data = full_response.json()
+        try:
+            full_data = full_response.json()
+        except ValueError:
+            logging.error(
+                f"Failed to decode JSON for seller ID {seller_id} (listings request); "
+                f"response was not JSON (first 200 chars): {full_response.text[:200]!r}"
+            )
+            return False,"Invalid response from Gumtree (not JSON)"
         listings = full_data.get("profileListingList", [])
         if not listings:
             logging.warning(f"No listings data found for seller ID: {seller_id}")
