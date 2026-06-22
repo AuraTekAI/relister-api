@@ -322,10 +322,22 @@ class CheckoutView(APIView):
                 # Prices are created with tax_behavior='exclusive', so GST must be
                 # computed and added on top at checkout. Stripe Tax does this.
                 automatic_tax={'enabled': True},
+                # Always collect a billing address so Stripe Tax can compute GST
+                # up-front (rather than showing $0.00 until an address is entered).
+                billing_address_collection='required',
+                # We are only GST-registered in Australia and bill in AUD. Stripe
+                # Checkout cannot restrict the *billing* country, but for Checkout
+                # sessions Stripe Tax determines location from the *shipping* address
+                # when one is collected — and shipping_address_collection CAN be locked
+                # to a single country. Restricting it to ['AU'] forces every customer
+                # to a verified Australian address, so the 10% GST always applies and
+                # no one can pick another country to avoid tax.
+                shipping_address_collection={'allowed_countries': ['AU']},
                 # Required by Stripe when an existing customer is passed alongside
                 # automatic_tax: persist the address collected at checkout back to the
-                # customer so tax can be recomputed on renewals.
-                customer_update={'address': 'auto'},
+                # customer so tax can be recomputed on renewals. 'shipping' is included
+                # so the AU address above is the one stored and reused.
+                customer_update={'address': 'auto', 'shipping': 'auto'},
                 success_url=settings.STRIPE_SUCCESS_URL,
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 metadata={
