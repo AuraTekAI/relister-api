@@ -325,7 +325,7 @@ class CheckoutView(APIView):
                 # Required by Stripe when an existing customer is passed alongside
                 # automatic_tax: persist the address collected at checkout back to the
                 # customer so tax can be recomputed on renewals.
-                # customer_update={'address': 'auto'},
+                customer_update={'address': 'auto'},
                 success_url=settings.STRIPE_SUCCESS_URL,
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 metadata={
