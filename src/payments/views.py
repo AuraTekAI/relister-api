@@ -319,7 +319,13 @@ class CheckoutView(APIView):
                 customer=stripe_customer_id,
                 mode='subscription',
                 line_items=line_items,
-                automatic_tax={'enabled': False},
+                # Prices are created with tax_behavior='exclusive', so GST must be
+                # computed and added on top at checkout. Stripe Tax does this.
+                automatic_tax={'enabled': True},
+                # Required by Stripe when an existing customer is passed alongside
+                # automatic_tax: persist the address collected at checkout back to the
+                # customer so tax can be recomputed on renewals.
+                customer_update={'address': 'auto'},
                 success_url=settings.STRIPE_SUCCESS_URL,
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 metadata={
