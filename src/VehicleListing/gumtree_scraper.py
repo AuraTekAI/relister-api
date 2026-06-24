@@ -193,39 +193,59 @@ def get_gumtree_listing_details(listing_id):
 
         # Extract and structure data
         category_info = {item['name']: item['value'] for item in response_data.get("categoryInfo", [])}
-        title=response_data["adHeadingData"]["title"]
+        # Title may be absent on some listings — fall back to empty string rather than KeyError.
+        title = (response_data.get("adHeadingData") or {}).get("title") or ""
         if category_info.get("Make, Model"):
             parts = category_info.get("Make, Model").split(" ", 1)  # Split into two parts at the first space
             make = parts[0]  # First part
             model = ' '.join(title.split(' ')[2:])
         else:
             model=' '.join(title.split(' ')[2:])
-            make=category_info.get("Make") 
-        description=response_data.get("description")
-        odo_meter = category_info.get("Odometer")
-        mileage=int(''.join(filter(str.isdigit, odo_meter)))
+            make=category_info.get("Make")
+        # Description can be missing — normalise to empty string so .splitlines()/.lower() are safe.
+        description = response_data.get("description") or ""
+
+        # Odometer/mileage is optional and not always under the same key. Cars use
+        # "Odometer"; campervans/motorhomes report distance under "KMs"; some vehicle
+        # types (forklifts, towed caravans, new/demo stock) have no distance reading at
+        # all. Previously category_info.get("Odometer") returned None for these and
+        # filter(str.isdigit, None) raised "'NoneType' object is not iterable", which
+        # crashed the whole listing and skipped it. Parse defensively across the known
+        # keys and flag when genuinely unavailable.
+        odo_meter = category_info.get("Odometer") or category_info.get("KMs")
+        mileage = None
+        mileage_unavailable = True
+        if odo_meter:
+            digits = ''.join(filter(str.isdigit, odo_meter))
+            if digits:
+                mileage = int(digits)
+                mileage_unavailable = False
+
         # Split description into lines
         description_lines = description.splitlines()
-        mileage_text = "Mileage: " + str(mileage) + "km"
-        
-        # Check if mileage is already in description (case-insensitive)
-        if mileage_text.lower() not in description.lower():
-            # Insert mileage as the first line
-            description_lines.insert(0, mileage_text)
-            
-            # Update the description
-            description = "\n".join(description_lines)
-        
-        enhanced_description=format_car_description(description) 
+        # Only prepend the mileage line when we actually have a mileage value.
+        if mileage is not None:
+            mileage_text = "Mileage: " + str(mileage) + "km"
+            # Check if mileage is already in description (case-insensitive)
+            if mileage_text.lower() not in description.lower():
+                # Insert mileage as the first line
+                description_lines.insert(0, mileage_text)
+                # Update the description
+                description = "\n".join(description_lines)
+
+        enhanced_description=format_car_description(description)
         location=response_data.get("adLocationData", {}).get("suburb")
         state=response_data.get("adLocationData", {}).get("state")
         full_state_name=get_full_state_name(state)
         location=f"{location}, {full_state_name}"
+        # Price may be missing — keep it None rather than crashing on int(None).
+        raw_amount = (response_data.get("adPriceData") or {}).get("amount")
+        price = int(raw_amount) if raw_amount is not None else None
         listing_details = {
-            "title": response_data.get("adHeadingData", {}).get("title"),
-            "price": int(response_data.get("adPriceData", {}).get("amount")),
+            "title": (response_data.get("adHeadingData") or {}).get("title"),
+            "price": price,
             "description": enhanced_description,
-            "image": [image.get("xlarge") for image in response_data.get("images", [])],
+            "image": [image.get("xlarge") for image in (response_data.get("images") or [])],
             "location": location,
             "body_type": category_info.get("Body Type"),
             "fuel_type": category_info.get("Fuel Type"),
@@ -234,7 +254,8 @@ def get_gumtree_listing_details(listing_id):
             "year": category_info.get("Year"),
             "model": model,
             "make": make,
-            "mileage":int(''.join(filter(str.isdigit, odo_meter))) ,
+            "mileage": mileage,
+            "mileage_unavailable": mileage_unavailable,
             "transmission": category_info.get("Transmission"),
             "url": ""
         }
@@ -465,6 +486,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.variant = result.get("variant")
                         already_exists.price = str(result.get("price"))
                         already_exists.mileage = result.get("mileage")
+                        already_exists.mileage_unavailable = result.get("mileage_unavailable", False)
                         already_exists.transmission = result.get("transmission")
                         already_exists.description = result.get("description")
                         already_exists.images = result.get("image")
@@ -495,6 +517,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.variant = result.get("variant")
                         already_exists.price = str(result.get("price"))
                         already_exists.mileage = result.get("mileage")
+                        already_exists.mileage_unavailable = result.get("mileage_unavailable", False)
                         already_exists.transmission = result.get("transmission")
                         already_exists.description = result.get("description")
                         already_exists.images = result.get("image")
@@ -525,6 +548,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     variant=result.get("variant"),
                     make=result.get("make"),
                     mileage=result.get("mileage"),
+                    mileage_unavailable=result.get("mileage_unavailable", False),
                     model=result.get("model"),
                     price=str(result.get("price")),
                     transmission=result.get("transmission"),
