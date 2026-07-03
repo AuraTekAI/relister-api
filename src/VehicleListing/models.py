@@ -84,6 +84,12 @@ class VehicleListing(models.Model):
     # Gumtree rows always carry a parsed odometer (the scrape drops a listing
     # rather than store it blank), so this stays False for them.
     mileage_unavailable = models.BooleanField(default=False)
+    # 17-character Vehicle Identification Number, captured from Gumtree's
+    # "VIN" category field when a dealer has filled it in — optional because
+    # not every Gumtree listing carries one. Needed for the separate VIN
+    # database project: only listings with a VIN are eligible to display in
+    # Google (per that project's requirement).
+    vin = models.CharField(max_length=17, null=True, blank=True)
     exterior_colour = models.CharField(max_length=255,null=True,blank=True)
     interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)

@@ -170,7 +170,7 @@ class RegisterView(APIView):
         operation_description="Creates a new user account. Trial starts immediately. Admin approval required before login.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['email', 'password', 'confirm_password', 'first_name', 'last_name', 'dealership_name', 'contact_person_name', 'phone_number'],
+            required=['email', 'password', 'confirm_password', 'first_name', 'last_name', 'dealership_name', 'contact_person_name', 'phone_number', 'dealership_address'],
             properties={
                 'email': openapi.Schema(type=openapi.TYPE_STRING, format='email', description='User email address.'),
                 'password': openapi.Schema(type=openapi.TYPE_STRING, description='Password.'),
@@ -180,6 +180,7 @@ class RegisterView(APIView):
                 'dealership_name': openapi.Schema(type=openapi.TYPE_STRING, description='Dealership name.'),
                 'contact_person_name': openapi.Schema(type=openapi.TYPE_STRING, description='Contact person full name.'),
                 'phone_number': openapi.Schema(type=openapi.TYPE_STRING, description='Phone number.'),
+                'dealership_address': openapi.Schema(type=openapi.TYPE_STRING, description='Full street address of the dealership (e.g. "2 Burwash Place, Maddington, WA 6109"). Mandatory: Gumtree never exposes a dealer\'s street address, so this is the only reliable source for one.'),
                 'gumtree_dealarship_url': openapi.Schema(type=openapi.TYPE_STRING, description='Gumtree dealership profile URL (must start with https://www.gumtree.com.au/web/s-user).'),
                 'facebook_dealership_url': openapi.Schema(type=openapi.TYPE_STRING, description='Facebook Marketplace profile URL (must start with https://www.facebook.com/marketplace/profile/).'),
                 'custom_domain_url': openapi.Schema(type=openapi.TYPE_STRING, description='Custom-domain dealership URL. Any http(s) URL accepted; sites that expose schema.org/Vehicle JSON-LD are scraped automatically.'),

@@ -811,5 +811,14 @@ class GenericJsonLdAdapter(DomainAdapter):
             state_code = normalize_au_state(region) if isinstance(region, str) else None
             if not state_code:
                 continue
-            return {"suburb": locality.strip(), "state": state_code}
+            result = {"suburb": locality.strip(), "state": state_code}
+            street = addr.get("streetAddress")
+            postcode = addr.get("postalCode")
+            address_parts = [
+                part.strip() for part in (street, locality, region, postcode)
+                if isinstance(part, str) and part.strip()
+            ]
+            if isinstance(street, str) and street.strip() and address_parts:
+                result["address"] = ", ".join(address_parts)
+            return result
         return None
