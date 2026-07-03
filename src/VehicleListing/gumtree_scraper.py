@@ -14,6 +14,7 @@ from django.utils import timezone
 from datetime import timedelta
 # from .facebook_listing import perform_search_and_delete
 from .models import FacebookUserCredentials
+import xml.etree.ElementTree as ET
 
 logging = logging.getLogger('gumtree')
 def extract_seller_id(profile_url):
@@ -147,6 +148,50 @@ def format_car_description(description):
 #         return None
 
 
+def _parse_gumtree_init_data(response):
+    """Normalize the init-data VIP endpoint's response body into the same
+    JSON-shaped dict the extraction code below expects, regardless of
+    whether Gumtree served JSON or XML for this request.
+
+    As of 2026-07, the endpoint started intermittently (now consistently)
+    returning an XML body (`<InitVipDataDto>...`) instead of the JSON it
+    always used to return, which made every `response.json()` call raise and
+    get swallowed by the caller's blanket except — silently dropping every
+    listing detail fetch. This tries JSON first (in case Gumtree ever reverts
+    or varies per-request) and falls back to parsing the XML shape.
+    """
+    try:
+        return response.json()
+    except Exception:
+        pass
+
+    root = ET.fromstring(response.text)
+
+    def _text(el, path):
+        found = el.find(path) if el is not None else None
+        return found.text if found is not None else None
+
+    category_info = [
+        {'name': _text(item, 'name'), 'value': _text(item, 'value')}
+        for item in root.findall('./categoryInfo/categoryInfo')
+    ]
+    images = [
+        {'xlarge': _text(img, 'xlarge')}
+        for img in root.findall('./images/images')
+    ]
+    return {
+        'adHeadingData': {'title': _text(root, './adHeadingData/title')},
+        'adPriceData': {'amount': _text(root, './adPriceData/amount')},
+        'adLocationData': {
+            'suburb': _text(root, './adLocationData/suburb'),
+            'state': _text(root, './adLocationData/state'),
+        },
+        'description': _text(root, './description'),
+        'categoryInfo': category_info,
+        'images': images,
+    }
+
+
 def get_gumtree_listing_details(listing_id):
     """
     Fetches listing details from the Gumtree API using ZenRowsClient.
@@ -178,13 +223,17 @@ def get_gumtree_listing_details(listing_id):
             return None
 
         try:
-            response_data = response.json()
-        except ValueError:
-            # Header was ignored / API still returned XML — log the start of the body so
+            # _parse_gumtree_init_data tries JSON first (in case the Accept header
+            # above works) and falls back to parsing Gumtree's XML shape — unlike a
+            # bare response.json(), it recovers the listing either way instead of
+            # giving up when the header is ignored and XML comes back anyway.
+            response_data = _parse_gumtree_init_data(response)
+        except Exception as parse_exc:
+            # Neither JSON nor the expected XML shape — log the start of the body so
             # this is diagnosable instead of being swallowed as a generic decode error.
             logging.error(
-                f"Failed to decode JSON for listing ID {listing_id}; "
-                f"response was not JSON (first 200 chars): {response.text[:200]!r}"
+                f"Failed to parse response for listing ID {listing_id}: {parse_exc}; "
+                f"response body (first 200 chars): {response.text[:200]!r}"
             )
             return None
         if not response_data:
@@ -238,9 +287,10 @@ def get_gumtree_listing_details(listing_id):
         state=response_data.get("adLocationData", {}).get("state")
         full_state_name=get_full_state_name(state)
         location=f"{location}, {full_state_name}"
-        # Price may be missing — keep it None rather than crashing on int(None).
+        # Price may be missing entirely (None) or arrive as a decimal string from the
+        # XML response shape (e.g. "6999.00") — handle both rather than crashing.
         raw_amount = (response_data.get("adPriceData") or {}).get("amount")
-        price = int(raw_amount) if raw_amount is not None else None
+        price = int(float(raw_amount)) if raw_amount is not None else None
         listing_details = {
             "title": (response_data.get("adHeadingData") or {}).get("title"),
             "price": price,
@@ -257,6 +307,9 @@ def get_gumtree_listing_details(listing_id):
             "mileage": mileage,
             "mileage_unavailable": mileage_unavailable,
             "transmission": category_info.get("Transmission"),
+            # 17-character Vehicle Identification Number. Not every dealer
+            # fills this in on Gumtree, so it's optional — None when absent.
+            "vin": category_info.get("VIN"),
             "url": ""
         }
         if not listing_details:
@@ -491,6 +544,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.description = result.get("description")
                         already_exists.images = result.get("image")
                         already_exists.location = result.get("location")
+                        already_exists.vin = result.get("vin")
                         already_exists.is_changed = True
                         already_exists.save()
                         logging.info(f"Updated listing {already_exists.list_id} with new details")
@@ -522,6 +576,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.description = result.get("description")
                         already_exists.images = result.get("image")
                         already_exists.location = result.get("location")
+                        already_exists.vin = result.get("vin")
                         already_exists.is_changed = True
                         already_exists.save()
                         logging.info(f"Updated listing {already_exists.list_id} with new details")
@@ -556,6 +611,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     images=result.get("image"),
                     url=result.get("url"),
                     location=result.get("location"),
+                    vin=result.get("vin"),
                     status="pending",
                     is_relist=False,
                     seller_profile_id=seller_id
@@ -600,4 +656,14 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             completed_missing = missing_listings.filter(status="completed")
             sold_count = completed_missing.update(sales=True)
             logging.info(f"Bulk marked {sold_count} completed listings as sales=True (sold)")
+
+    # Best-effort, read-only, non-blocking: back-fill dealership_suburb/state
+    # for Gumtree-only dealers from their just-scraped listings. Never
+    # touches scrape/relist logic above — see accounts.dealer_location.
+    try:
+        from accounts.dealer_location import derive_and_save_gumtree_dealer_location
+        derive_and_save_gumtree_dealer_location(user)
+    except Exception as exc:
+        logging.warning(f"gumtree dealer-location hook failed: {exc}")
+
     logging.info("Completed gumtree_profile_listings_thread execution")

@@ -36,7 +36,7 @@ class UserAdmin(UserAdmin):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
-            'dealership_suburb', 'dealership_state',
+            'dealership_suburb', 'dealership_state', 'dealership_address',
         )}),
         ('Subscription & Usage', {'fields': (
             'account_status', 'trial_start_date', 'trial_end_date', 'trial_used',
@@ -58,7 +58,7 @@ class UserAdmin(UserAdmin):
             "gumtree_dealarship_url", "facebook_dealership_url",
             "custom_domain_url",
             "dealership_license_number", "dealership_license_phone",
-            "dealership_suburb", "dealership_state",
+            "dealership_suburb", "dealership_state", "dealership_address",
             "is_approved", "account_status",
         )}),
         ("Security", {"fields": ("password1", "password2")}),

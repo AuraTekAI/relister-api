@@ -48,7 +48,7 @@ class UserListSerializer(serializers.ModelSerializer):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
-            'dealership_suburb', 'dealership_state',
+            'dealership_suburb', 'dealership_state', 'dealership_address',
             'account_status', 'trial_start_date', 'trial_end_date',
             'plan', 'created_at',
             'password', 'confirm_password',
@@ -184,6 +184,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
+            'dealership_address',
         )
         extra_kwargs = {
             'email': {'required': True},
@@ -192,6 +193,12 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             'dealership_name': {'required': True},
             'contact_person_name': {'required': True},
             'phone_number': {'required': True},
+            # Mandatory at registration: Gumtree never exposes a dealer's
+            # street address (only a per-listing suburb), so relying on
+            # auto-discovery alone leaves Gumtree-only dealers with no real
+            # address. Collecting it directly guarantees every dealer has one,
+            # regardless of listing source.
+            'dealership_address': {'required': True, 'allow_blank': False},
         }
 
     def validate(self, attrs):
@@ -268,13 +275,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'gumtree_dealarship_url', 'facebook_dealership_url',
             'custom_domain_url',
             'dealership_license_number', 'dealership_license_phone',
-            'dealership_suburb', 'dealership_state',
+            'dealership_suburb', 'dealership_state', 'dealership_address',
             'account_status', 'trial_start_date', 'trial_end_date',
         ]
         # dealership_suburb / dealership_state are auto-discovered from
         # custom_domain_url — exposing them read-only here lets the UI surface
         # the value (e.g. "Listings will be marked as <Suburb>, <State>")
         # without inviting the user to override the discovery result.
+        # dealership_address is DIFFERENT: it's a mandatory, user-entered
+        # field collected at registration (Gumtree never exposes a street
+        # address to auto-discover), so it stays editable here.
         read_only_fields = [
             'id', 'email', 'account_status', 'trial_start_date', 'trial_end_date',
             'dealership_suburb', 'dealership_state',
@@ -389,6 +399,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'dealership_license_phone': user.dealership_license_phone,
                 'dealership_suburb': user.dealership_suburb,
                 'dealership_state': user.dealership_state,
+                'dealership_address': user.dealership_address,
                 'is_superuser': user.is_superuser,
                 'is_approved': user.is_approved,
                 'account_status': user.account_status,

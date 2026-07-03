@@ -79,6 +79,13 @@ class User(AbstractBaseUser, PermissionsMixin):
     # the dealer at publish time. Gumtree-sourced listings ignore these fields —
     # their location comes from `adLocationData` on each ad.
     dealership_suburb = models.CharField(max_length=100, null=True, blank=True)
+    # Best-effort full formatted address (street + suburb + state + postcode)
+    # from the same auto-discovery pass, kept as a single free-text line since
+    # that's what a future Google Maps geocoding lookup would take as input.
+    # Not all sources expose a street-level address (e.g. hardcoded adapter
+    # defaults only know suburb/state), so this stays null more often than
+    # dealership_suburb/dealership_state.
+    dealership_address = models.CharField(max_length=255, null=True, blank=True)
     AU_STATE_CHOICES = [
         ('WA', 'Western Australia'),
         ('NSW', 'New South Wales'),
