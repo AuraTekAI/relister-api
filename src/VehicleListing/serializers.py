@@ -116,3 +116,62 @@ class CustomDomainVehicleListingSerializer(VehicleListingSerializer):
 
     def get_has_images(self, obj):
         return bool(obj.images)
+
+
+class ProductListSerializer(serializers.ModelSerializer):
+    """Lightweight, public-facing shape for storefront product grids/cards."""
+    name = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VehicleListing
+        fields = [
+            'id', 'name', 'image', 'price',
+            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+            'description', 'location',
+        ]
+
+    def get_name(self, obj):
+        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+
+    def get_image(self, obj):
+        images = obj.images or []
+        return images[0] if images else None
+
+
+class ProductDetailSerializer(serializers.ModelSerializer):
+    """Public single-product detail shape, keyed by the slug lookup endpoint."""
+    name = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VehicleListing
+        fields = [
+            'id', 'name', 'images', 'price',
+            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+            'description', 'location', 'condition', 'transmission',
+            'mileage', 'exterior_colour', 'interior_colour',
+        ]
+
+    def get_name(self, obj):
+        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+
+    def get_images(self, obj):
+        # Same CORS-proxy rewrite as VehicleListingSerializer.get_images —
+        # custom-domain image hosts rarely send CORS headers, so browser
+        # <img> loads of the raw URL can be blocked.
+        urls = obj.images or []
+        request = self.context.get('request')
+        if not request:
+            return list(urls)
+        try:
+            proxy_base = request.build_absolute_uri(reverse('custom_domain_image_proxy'))
+        except Exception:
+            return list(urls)
+        rewritten = []
+        for url in urls:
+            if url and any_needs_image_proxy(url):
+                rewritten.append(f"{proxy_base}?url={quote(url, safe='')}")
+            else:
+                rewritten.append(url)
+        return rewritten

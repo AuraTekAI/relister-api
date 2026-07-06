@@ -3,9 +3,9 @@ from .custom_domain_scraper import get_custom_domain_listings
 from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
 import json
@@ -1747,3 +1747,59 @@ def get_old_vehicle_listings(request):
             'success': False,
             'error': f'An unexpected error occurred while retrieving old vehicle listings: {str(e)}'
         }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_all_products(request):
+    """
+    Public, unauthenticated product list for storefront consumption.
+
+    Returns only what a listing card needs (id, name, image, price) for every
+    vehicle that has actually been published, newest first.
+
+    Query Parameters:
+    - limit: Integer (default: 20, max: 100) — page size
+    - offset: Integer (default: 0) — rows to skip
+    """
+    try:
+        limit = min(int(request.GET.get('limit', 20)), 100)
+        offset = max(int(request.GET.get('offset', 0)), 0)
+    except ValueError:
+        return JsonResponse({'error': 'limit and offset must be integers'}, status=400)
+
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-updated_at')
+    total_count = products.count()
+    page = products[offset:offset + limit]
+
+    serializer = ProductListSerializer(page, many=True)
+    return JsonResponse({
+        'count': total_count,
+        'limit': limit,
+        'offset': offset,
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_product_by_slug(request, slug):
+    """
+    Public single-product lookup by SEO-friendly slug.
+
+    Slug shape: <make>-<model>-<year>-<id>, e.g. "toyota-corolla-2019-100".
+    Only the trailing number after the last hyphen is used to find the row —
+    the human-readable prefix is decorative and never validated against the
+    row's actual make/model/year, so a stale/mismatched prefix still resolves.
+    """
+    try:
+        vehicle_id = int(slug.rsplit('-', 1)[-1])
+    except (ValueError, IndexError):
+        return JsonResponse({'error': 'Invalid slug'}, status=400)
+
+    product = VehicleListing.objects.filter(pk=vehicle_id, is_listed=True).first()
+    if not product:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    serializer = ProductDetailSerializer(product, context={'request': request})
+    return JsonResponse(serializer.data, status=200)

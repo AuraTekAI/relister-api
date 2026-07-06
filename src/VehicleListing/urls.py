@@ -8,6 +8,8 @@ from .views import (
     get_user_custom_domain_profile_vehicle_listings,
     get_custom_domain_profile_listings,
     custom_domain_image_proxy,
+    get_all_products,
+    get_product_by_slug,
 )
 
 urlpatterns = [
@@ -35,4 +37,6 @@ urlpatterns = [
     path('mark-changed/', update_vehicle_listing_is_changed, name='update_vehicle_listing_is_changed'),
     path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
+    path('products/', get_all_products, name='get_all_products'),
+    path('vehicle/<slug:slug>/', get_product_by_slug, name='get_product_by_slug'),
 ]
