@@ -1783,23 +1783,78 @@ def get_all_products(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def get_product_by_slug(request, slug):
+def get_products_by_category(request, category):
     """
-    Public single-product lookup by SEO-friendly slug.
+    Public, unauthenticated product list filtered by category, e.g.
+    GET /api/vehicle-listing/categories/suv/
 
-    Slug shape: <make>-<model>-<year>-<id>, e.g. "toyota-corolla-2019-100".
-    Only the trailing number after the last hyphen is used to find the row —
-    the human-readable prefix is decorative and never validated against the
-    row's actual make/model/year, so a stale/mismatched prefix still resolves.
+    "Category" maps to the vehicle's body_type (SUV, Sedan, Hatchback, etc.)
+    since that's the closest existing field to a category on this model.
+    Matching is case-insensitive so "suv", "SUV", and "Suv" all resolve.
+    Returns every matching row, unpaginated.
     """
-    try:
-        vehicle_id = int(slug.rsplit('-', 1)[-1])
-    except (ValueError, IndexError):
-        return JsonResponse({'error': 'Invalid slug'}, status=400)
+    products = VehicleListing.objects.filter(
+        is_listed=True,
+        body_type__iexact=category
+    ).order_by('-updated_at')
 
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({
+        'count': products.count(),
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_product_by_slug(request, name, vehicle_id):
+    """
+    Public single-product lookup by SEO-friendly slug: <name>-<id>,
+    e.g. "toyota-corolla-2019-100". The URL converters in urls.py already
+    split this into `name` (everything before the last hyphen) and
+    `vehicle_id` (the trailing integer) — `name` is decorative and never
+    validated against the row's actual make/model/year.
+    """
     product = VehicleListing.objects.filter(pk=vehicle_id, is_listed=True).first()
     if not product:
         return JsonResponse({'error': 'Product not found'}, status=404)
 
     serializer = ProductDetailSerializer(product, context={'request': request})
     return JsonResponse(serializer.data, status=200)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def increment_product_view_count(request, vehicle_id):
+    """
+    Public, unauthenticated view-count increment, called once per product
+    page visit, e.g. POST /api/vehicle-listing/vehicle/100/increment-view/
+
+    Uses an F() expression so concurrent visits increment atomically at the
+    database level instead of racing on a read-modify-write in Python.
+    """
+    updated = VehicleListing.objects.filter(
+        pk=vehicle_id,
+        is_listed=True
+    ).update(total_view_count=F('total_view_count') + 1)
+
+    if not updated:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    total_view_count = VehicleListing.objects.filter(pk=vehicle_id).values_list(
+        'total_view_count', flat=True
+    ).first()
+    return JsonResponse({'total_view_count': total_view_count}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_latest_arrivals(request):
+    """
+    Public, unauthenticated list of the 4 most recently added vehicles,
+    e.g. GET /api/vehicle-listing/latest-arrivals/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)

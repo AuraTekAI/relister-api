@@ -9,7 +9,10 @@ from .views import (
     get_custom_domain_profile_listings,
     custom_domain_image_proxy,
     get_all_products,
+    get_products_by_category,
     get_product_by_slug,
+    increment_product_view_count,
+    get_latest_arrivals,
 )
 
 urlpatterns = [
@@ -38,5 +41,8 @@ urlpatterns = [
     path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
     path('products/', get_all_products, name='get_all_products'),
-    path('vehicle/<slug:slug>/', get_product_by_slug, name='get_product_by_slug'),
+    path('categories/<str:category>/', get_products_by_category, name='get_products_by_category'),
+    path('vehicle/<str:name>-<int:vehicle_id>/', get_product_by_slug, name='get_product_by_slug'),
+    path('vehicle/<int:vehicle_id>/increment-view/', increment_product_view_count, name='increment_product_view_count'),
+    path('latest-arrivals/', get_latest_arrivals, name='get_latest_arrivals'),
 ]

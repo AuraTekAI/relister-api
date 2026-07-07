@@ -108,6 +108,7 @@ class VehicleListing(models.Model):
     listed_on = models.DateTimeField(null=True,blank=True)
     has_images=models.BooleanField(default=False)
     sales = models.BooleanField(default=False)
+    total_view_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
