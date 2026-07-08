@@ -128,7 +128,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'image', 'price',
             'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
-            'description', 'location',
+            'description', 'location', 'total_view_count',
         ]
 
     def get_name(self, obj):

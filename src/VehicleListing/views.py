@@ -1786,17 +1786,23 @@ def get_all_products(request):
 def get_products_by_category(request, category):
     """
     Public, unauthenticated product list filtered by category, e.g.
-    GET /api/vehicle-listing/categories/suv/
+    GET /api/vehicle-listing/categories/toyota/
 
-    "Category" maps to the vehicle's body_type (SUV, Sedan, Hatchback, etc.)
-    since that's the closest existing field to a category on this model.
-    Matching is case-insensitive so "suv", "SUV", and "Suv" all resolve.
+    "Category" maps to the vehicle's make/brand (Toyota, Honda, Ford, etc.)
+    to power the "Browse by Brand" section on the storefront. Matching is
+    case-insensitive so "toyota", "Toyota", and "TOYOTA" all resolve.
     Returns every matching row, unpaginated.
     """
     products = VehicleListing.objects.filter(
         is_listed=True,
-        body_type__iexact=category
+        make__iexact=category
     ).order_by('-updated_at')
+
+    if not products.exists():
+        return JsonResponse({
+            'message': 'This category not found',
+            'results': []
+        }, status=200)
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({
@@ -1855,6 +1861,19 @@ def get_latest_arrivals(request):
     e.g. GET /api/vehicle-listing/latest-arrivals/
     """
     products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_popular_vehicles(request):
+    """
+    Public, unauthenticated list of the 4 most-viewed vehicles, e.g.
+    GET /api/vehicle-listing/popular-vehicles/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
