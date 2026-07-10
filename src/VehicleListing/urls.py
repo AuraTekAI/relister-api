@@ -8,6 +8,14 @@ from .views import (
     get_user_custom_domain_profile_vehicle_listings,
     get_custom_domain_profile_listings,
     custom_domain_image_proxy,
+    get_all_products,
+    get_products_by_category,
+    get_product_by_slug,
+    increment_product_view_count,
+    get_latest_arrivals,
+    get_popular_vehicles,
+    search_products,
+    get_top_dealers,
 )
 
 urlpatterns = [
@@ -35,4 +43,12 @@ urlpatterns = [
     path('mark-changed/', update_vehicle_listing_is_changed, name='update_vehicle_listing_is_changed'),
     path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
+    path('products/', get_all_products, name='get_all_products'),
+    path('categories/<str:category>/', get_products_by_category, name='get_products_by_category'),
+    path('vehicle/<str:name>-<int:vehicle_id>/', get_product_by_slug, name='get_product_by_slug'),
+    path('vehicle/<int:vehicle_id>/increment-view/', increment_product_view_count, name='increment_product_view_count'),
+    path('latest-arrivals/', get_latest_arrivals, name='get_latest_arrivals'),
+    path('popular-vehicles/', get_popular_vehicles, name='get_popular_vehicles'),
+    path('search/', search_products, name='search_products'),
+    path('top-dealers/', get_top_dealers, name='get_top_dealers'),
 ]

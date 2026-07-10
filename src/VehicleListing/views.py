@@ -3,9 +3,9 @@ from .custom_domain_scraper import get_custom_domain_listings
 from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
 import json
@@ -20,7 +20,7 @@ import time
 import random   
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q, Count
 from queue import Queue
 from django.conf import settings
 from django.utils import timezone
@@ -1747,3 +1747,178 @@ def get_old_vehicle_listings(request):
             'success': False,
             'error': f'An unexpected error occurred while retrieving old vehicle listings: {str(e)}'
         }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_all_products(request):
+    """
+    Public, unauthenticated product list for storefront consumption.
+
+    Returns only what a listing card needs (id, name, image, price) for every
+    vehicle that has actually been published, newest first.
+
+    Query Parameters:
+    - limit: Integer (default: 20, max: 100) — page size
+    - offset: Integer (default: 0) — rows to skip
+    """
+    try:
+        limit = min(int(request.GET.get('limit', 20)), 100)
+        offset = max(int(request.GET.get('offset', 0)), 0)
+    except ValueError:
+        return JsonResponse({'error': 'limit and offset must be integers'}, status=400)
+
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-updated_at')
+    total_count = products.count()
+    page = products[offset:offset + limit]
+
+    serializer = ProductListSerializer(page, many=True)
+    return JsonResponse({
+        'count': total_count,
+        'limit': limit,
+        'offset': offset,
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_products_by_category(request, category):
+    """
+    Public, unauthenticated product list filtered by category, e.g.
+    GET /api/vehicle-listing/categories/toyota/
+
+    "Category" maps to the vehicle's make/brand (Toyota, Honda, Ford, etc.)
+    to power the "Browse by Brand" section on the storefront. Matching is
+    case-insensitive so "toyota", "Toyota", and "TOYOTA" all resolve.
+    Returns every matching row, unpaginated.
+    """
+    products = VehicleListing.objects.filter(
+        is_listed=True,
+        make__iexact=category
+    ).order_by('-updated_at')
+
+    if not products.exists():
+        return JsonResponse({
+            'message': 'This category not found',
+            'results': []
+        }, status=200)
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({
+        'count': products.count(),
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_product_by_slug(request, name, vehicle_id):
+    """
+    Public single-product lookup by SEO-friendly slug: <name>-<id>,
+    e.g. "toyota-corolla-2019-100". The URL converters in urls.py already
+    split this into `name` (everything before the last hyphen) and
+    `vehicle_id` (the trailing integer) — `name` is decorative and never
+    validated against the row's actual make/model/year.
+    """
+    product = VehicleListing.objects.select_related('user').filter(pk=vehicle_id, is_listed=True).first()
+    if not product:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    serializer = ProductDetailSerializer(product, context={'request': request})
+    return JsonResponse(serializer.data, status=200)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def increment_product_view_count(request, vehicle_id):
+    """
+    Public, unauthenticated view-count increment, called once per product
+    page visit, e.g. POST /api/vehicle-listing/vehicle/100/increment-view/
+
+    Uses an F() expression so concurrent visits increment atomically at the
+    database level instead of racing on a read-modify-write in Python.
+    """
+    updated = VehicleListing.objects.filter(
+        pk=vehicle_id,
+        is_listed=True
+    ).update(total_view_count=F('total_view_count') + 1)
+
+    if not updated:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    total_view_count = VehicleListing.objects.filter(pk=vehicle_id).values_list(
+        'total_view_count', flat=True
+    ).first()
+    return JsonResponse({'total_view_count': total_view_count}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_latest_arrivals(request):
+    """
+    Public, unauthenticated list of the 4 most recently added vehicles,
+    e.g. GET /api/vehicle-listing/latest-arrivals/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_popular_vehicles(request):
+    """
+    Public, unauthenticated list of the 4 most-viewed vehicles, e.g.
+    GET /api/vehicle-listing/popular-vehicles/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_products(request):
+    """
+    Public, unauthenticated vehicle search by product name, e.g.
+    GET /api/vehicle-listing/search/?name=corolla
+
+    Query Parameters:
+    - name: Text — matches make, model, or variant (case-insensitive, partial)
+    Returns every matching row, unpaginated.
+    """
+    name = request.GET.get('name')
+    if not name:
+        return JsonResponse({'error': 'name query parameter is required'}, status=400)
+
+    products = VehicleListing.objects.filter(
+        is_listed=True
+    ).filter(
+        Q(make__icontains=name) | Q(model__icontains=name) | Q(variant__icontains=name)
+    ).order_by('-updated_at')
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'count': products.count(), 'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_top_dealers(request):
+    """
+    Public, unauthenticated list of the top 4 dealers/sellers by listing
+    count, e.g. GET /api/vehicle-listing/top-dealers/
+
+    Returns each dealer's name, address, and how many vehicles they
+    currently have listed.
+    """
+    dealers = User.objects.filter(
+        is_approved=True, is_active=True
+    ).annotate(
+        active_listing_count=Count('vehiclelisting', filter=Q(vehiclelisting__is_listed=True))
+    ).order_by('-active_listing_count', 'dealership_name')[:4]
+
+    serializer = DealerListSerializer(dealers, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
