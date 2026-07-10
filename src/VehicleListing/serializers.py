@@ -3,6 +3,8 @@ from urllib.parse import quote
 from django.urls import reverse
 from rest_framework import serializers
 
+from accounts.models import User
+
 from .custom_domain_adapters import any_needs_image_proxy
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookProfileListing, GumtreeProfileListing, RelistingFacebooklisting, CustomDomainProfileListing
 
@@ -143,6 +145,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     """Public single-product detail shape, keyed by the slug lookup endpoint."""
     name = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    dealer_phone = serializers.SerializerMethodField()
 
     class Meta:
         model = VehicleListing
@@ -150,11 +153,14 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'images', 'price',
             'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
             'description', 'location', 'condition', 'transmission',
-            'mileage', 'exterior_colour', 'interior_colour',
+            'mileage', 'exterior_colour', 'interior_colour', 'dealer_phone',
         ]
 
     def get_name(self, obj):
         return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+
+    def get_dealer_phone(self, obj):
+        return getattr(obj.user, 'phone_number', None)
 
     def get_images(self, obj):
         # Same CORS-proxy rewrite as VehicleListingSerializer.get_images —
@@ -175,3 +181,25 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             else:
                 rewritten.append(url)
         return rewritten
+
+
+class DealerListSerializer(serializers.ModelSerializer):
+    """Public-facing dealer/seller directory entry for the storefront."""
+    name = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+    active_listing_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'name', 'address',
+            'dealership_suburb', 'dealership_state', 'phone_number',
+            'active_listing_count',
+        ]
+
+    def get_name(self, obj):
+        return obj.dealership_name or obj.contact_person_name or obj.email
+
+    def get_address(self, obj):
+        parts = [obj.dealership_suburb, obj.dealership_state]
+        return ', '.join(part for part in parts if part) or None

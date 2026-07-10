@@ -5,7 +5,7 @@ from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
 import json
@@ -20,7 +20,7 @@ import time
 import random   
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q, Count
 from queue import Queue
 from django.conf import settings
 from django.utils import timezone
@@ -1821,7 +1821,7 @@ def get_product_by_slug(request, name, vehicle_id):
     `vehicle_id` (the trailing integer) — `name` is decorative and never
     validated against the row's actual make/model/year.
     """
-    product = VehicleListing.objects.filter(pk=vehicle_id, is_listed=True).first()
+    product = VehicleListing.objects.select_related('user').filter(pk=vehicle_id, is_listed=True).first()
     if not product:
         return JsonResponse({'error': 'Product not found'}, status=404)
 
@@ -1876,4 +1876,49 @@ def get_popular_vehicles(request):
     products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_products(request):
+    """
+    Public, unauthenticated vehicle search by product name, e.g.
+    GET /api/vehicle-listing/search/?name=corolla
+
+    Query Parameters:
+    - name: Text — matches make, model, or variant (case-insensitive, partial)
+    Returns every matching row, unpaginated.
+    """
+    name = request.GET.get('name')
+    if not name:
+        return JsonResponse({'error': 'name query parameter is required'}, status=400)
+
+    products = VehicleListing.objects.filter(
+        is_listed=True
+    ).filter(
+        Q(make__icontains=name) | Q(model__icontains=name) | Q(variant__icontains=name)
+    ).order_by('-updated_at')
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'count': products.count(), 'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_top_dealers(request):
+    """
+    Public, unauthenticated list of the top 4 dealers/sellers by listing
+    count, e.g. GET /api/vehicle-listing/top-dealers/
+
+    Returns each dealer's name, address, and how many vehicles they
+    currently have listed.
+    """
+    dealers = User.objects.filter(
+        is_approved=True, is_active=True
+    ).annotate(
+        active_listing_count=Count('vehiclelisting', filter=Q(vehiclelisting__is_listed=True))
+    ).order_by('-active_listing_count', 'dealership_name')[:4]
+
+    serializer = DealerListSerializer(dealers, many=True)
     return JsonResponse({'results': serializer.data}, status=200)

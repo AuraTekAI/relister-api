@@ -14,6 +14,8 @@ from .views import (
     increment_product_view_count,
     get_latest_arrivals,
     get_popular_vehicles,
+    search_products,
+    get_top_dealers,
 )
 
 urlpatterns = [
@@ -47,4 +49,6 @@ urlpatterns = [
     path('vehicle/<int:vehicle_id>/increment-view/', increment_product_view_count, name='increment_product_view_count'),
     path('latest-arrivals/', get_latest_arrivals, name='get_latest_arrivals'),
     path('popular-vehicles/', get_popular_vehicles, name='get_popular_vehicles'),
+    path('search/', search_products, name='search_products'),
+    path('top-dealers/', get_top_dealers, name='get_top_dealers'),
 ]
