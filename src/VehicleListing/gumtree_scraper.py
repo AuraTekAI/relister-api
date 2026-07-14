@@ -8,7 +8,7 @@ import threading
 from django.conf import settings
 from bs4 import BeautifulSoup
 import re
-from .utils import get_full_state_name
+from .utils import get_full_state_name, mark_listing_sold
 # from .models import RelistingFacebooklisting
 from django.utils import timezone
 from datetime import timedelta
@@ -323,6 +323,56 @@ def get_gumtree_listing_details(listing_id):
     except Exception as e:
         logging.error(f"Error fetching details for listing ID {listing_id}: {e}")
         return None
+
+
+def is_gumtree_listing_active(list_id):
+    """
+    Live, single-listing existence check against Gumtree — used right before a relist
+    action to close the staleness window left by the twice-daily profile re-scrape
+    (check_gumtree_profile_relisting_task). Cheap (one ad, not a full profile fetch).
+
+    Returns:
+        True  - listing still exists on Gumtree (safe to relist)
+        False - listing confirmed gone (404/removed) - caller should mark it sold
+        None  - indeterminate (ZenRows/network error, missing API key) - caller should
+                NOT change any state and should retry later rather than assume sold
+    """
+    if not settings.ZENROWS_API_KEY:
+        logging.error("ZENROWS_API_KEY is not configured — cannot verify listing status")
+        return None
+    if not list_id:
+        return None
+
+    client = ZenRowsClient(settings.ZENROWS_API_KEY)
+    base_url = f"https://gt-api.gumtree.com.au/web/vip/init-data/{list_id}"
+
+    try:
+        response = client.get(base_url, headers={"Accept": "application/json"})
+    except Exception as e:
+        logging.error(f"is_gumtree_listing_active: request failed for listing {list_id}: {e}")
+        return None
+
+    if response.status_code == 404:
+        return False
+    if response.status_code == 402:
+        logging.error(f"is_gumtree_listing_active: 402 from ZenRows for listing {list_id} — check API key/quota")
+        return None
+    if response.status_code != 200:
+        logging.warning(f"is_gumtree_listing_active: non-200 ({response.status_code}) for listing {list_id} — treating as indeterminate")
+        return None
+
+    try:
+        response_data = _parse_gumtree_init_data(response)
+    except Exception as parse_exc:
+        logging.warning(f"is_gumtree_listing_active: could not parse response for listing {list_id}: {parse_exc} — treating as indeterminate")
+        return None
+
+    # An empty/absent body on a 200 response is how Gumtree represents a removed ad
+    # for this endpoint (as opposed to a hard 404) — treat it the same as confirmed-gone.
+    if not response_data:
+        return False
+
+    return True
 
 
 def get_gumtree_listings(profile_url,user):
@@ -652,10 +702,15 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             deleted_count, _ = deletable.delete()
             logging.info(f"Bulk deleted {deleted_count} pending/failed/sold listings missing from profile")
 
-            # Bulk mark completed listings as sold
-            completed_missing = missing_listings.filter(status="completed")
-            sold_count = completed_missing.update(sales=True)
-            logging.info(f"Bulk marked {sold_count} completed listings as sales=True (sold)")
+            # Mark completed listings as sold. Goes through mark_listing_sold() (not a bulk
+            # .update()) so status flips to "sold" and sold_at is stamped, not just the
+            # sales=True flag — the relist-queue endpoint (get_old_vehicle_listings) and the
+            # extension's publish guard both need status=="sold" to reliably exclude these,
+            # since a stale sales flag alone was previously being missed downstream.
+            completed_missing = list(missing_listings.filter(status="completed"))
+            for listing in completed_missing:
+                mark_listing_sold(listing)
+            logging.info(f"Marked {len(completed_missing)} completed listings as sold (status=sold, sales=True)")
 
     # Best-effort, read-only, non-blocking: back-fill dealership_suburb/state
     # for Gumtree-only dealers from their just-scraped listings. Never

@@ -109,6 +109,9 @@ class VehicleListing(models.Model):
     # True after Stripe metered overage for this listing was invoiced & recorded (idempotency).
     stripe_overage_reported = models.BooleanField(default=False)
     relist_count = models.IntegerField(default=0)       # how many times this specific listing has been relisted
+    # Set together with status="sold" by mark_listing_sold() — when the listing was
+    # last detected as removed/sold. Cleared (None) if it's ever reactivated or republished.
+    sold_at = models.DateTimeField(null=True, blank=True)
     rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))
     retry_count = models.IntegerField(default=0)
     listed_on = models.DateTimeField(null=True,blank=True)
