@@ -35,24 +35,24 @@ services:
     networks:
       - internal_network
 
-  # db:
-  #   container_name: db
-  #   restart: unless-stopped
-  #   image: postgres:16-alpine
-  #   ports:
-  #     - "15432:5432"
-  #   volumes:
-  #     - local-db-data:/var/lib/postgresql/data
-  #   env_file:
-  #     - ./src/.env
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 5
-  #     start_period: 30s
-  #   networks:
-  #     - internal_network
+  db:
+    container_name: db
+    restart: unless-stopped
+    image: postgres:16-alpine
+    ports:
+      - "15432:5432"
+    volumes:
+      - local-db-data:/var/lib/postgresql/data
+    env_file:
+      - ./src/.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal_network
 
   beat-scheduler:
     container_name: beat-scheduler
@@ -115,6 +115,9 @@ services:
 
 
 
+
+volumes:
+  local-db-data:
 
 networks:
   internal_network:

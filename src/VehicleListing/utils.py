@@ -147,6 +147,8 @@ def mark_listing_sold(listing, relisting=None):
     now = timezone.now()
     listing.is_relist = True
     listing.status = "sold"
+    listing.sales = True
+    listing.sold_at = now
     listing.updated_at = now
     listing.save()
     logger.info(f"Listing sold for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
@@ -155,6 +157,15 @@ def mark_listing_sold(listing, relisting=None):
         relisting.status = "completed"
         relisting.last_relisting_status = True
         relisting.save()
+
+def reactivate_listing(listing):
+    """Manually undo mark_listing_sold — used when a listing was flagged sold in error
+    (e.g. a transient Gumtree/scrape failure) and the dealer confirms it's still for sale."""
+    listing.status = "completed"
+    listing.sales = False
+    listing.sold_at = None
+    listing.save()
+    logger.info(f"Listing manually reactivated for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
 
 def handle_retry_or_disable_credentials(credentials, user):
     if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
