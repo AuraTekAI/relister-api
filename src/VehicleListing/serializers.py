@@ -3,6 +3,8 @@ from urllib.parse import quote
 from django.urls import reverse
 from rest_framework import serializers
 
+from accounts.models import User
+
 from .custom_domain_adapters import any_needs_image_proxy
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookProfileListing, GumtreeProfileListing, RelistingFacebooklisting, CustomDomainProfileListing
 
@@ -116,3 +118,89 @@ class CustomDomainVehicleListingSerializer(VehicleListingSerializer):
 
     def get_has_images(self, obj):
         return bool(obj.images)
+
+
+class ProductListSerializer(serializers.ModelSerializer):
+    """Lightweight, public-facing shape for storefront product grids/cards."""
+    name = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VehicleListing
+        fields = [
+            'id', 'name', 'image', 'price',
+            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+            'mileage', 'transmission', 'color',
+            'description', 'location', 'total_view_count',
+        ]
+
+    def get_name(self, obj):
+        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+
+    def get_image(self, obj):
+        images = obj.images or []
+        return images[0] if images else None
+
+
+class ProductDetailSerializer(serializers.ModelSerializer):
+    """Public single-product detail shape, keyed by the slug lookup endpoint."""
+    name = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+    dealer_phone = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VehicleListing
+        fields = [
+            'id', 'name', 'images', 'price',
+            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+            'description', 'location', 'condition', 'transmission',
+            'mileage', 'exterior_colour', 'interior_colour', 'dealer_phone',
+        ]
+
+    def get_name(self, obj):
+        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+
+    def get_dealer_phone(self, obj):
+        return getattr(obj.user, 'phone_number', None)
+
+    def get_images(self, obj):
+        # Same CORS-proxy rewrite as VehicleListingSerializer.get_images —
+        # custom-domain image hosts rarely send CORS headers, so browser
+        # <img> loads of the raw URL can be blocked.
+        urls = obj.images or []
+        request = self.context.get('request')
+        if not request:
+            return list(urls)
+        try:
+            proxy_base = request.build_absolute_uri(reverse('custom_domain_image_proxy'))
+        except Exception:
+            return list(urls)
+        rewritten = []
+        for url in urls:
+            if url and any_needs_image_proxy(url):
+                rewritten.append(f"{proxy_base}?url={quote(url, safe='')}")
+            else:
+                rewritten.append(url)
+        return rewritten
+
+
+class DealerListSerializer(serializers.ModelSerializer):
+    """Public-facing dealer/seller directory entry for the storefront."""
+    name = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+    active_listing_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'name', 'address',
+            'dealership_suburb', 'dealership_state', 'phone_number',
+            'active_listing_count',
+        ]
+
+    def get_name(self, obj):
+        return obj.dealership_name or obj.contact_person_name or obj.email
+
+    def get_address(self, obj):
+        parts = [obj.dealership_suburb, obj.dealership_state]
+        return ', '.join(part for part in parts if part) or None

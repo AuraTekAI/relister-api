@@ -3,6 +3,7 @@ from django.contrib import admin
 # Register your models here
 from .models import VehicleListing, ListingUrl
 from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing
+from .utils import reactivate_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'listing', 'status', 'error_message', 'created_at', 'updated_at')
@@ -20,9 +21,18 @@ class ListingUrlAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','listed_on','retry_count', 'created_at', 'updated_at')
+    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
     search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
     list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
+    actions = ['reactivate_sold_listings']
+
+    @admin.action(description="Reactivate selected listings (undo sold — dealer confirmed still for sale)")
+    def reactivate_sold_listings(self, request, queryset):
+        count = 0
+        for listing in queryset.filter(status="sold"):
+            reactivate_listing(listing)
+            count += 1
+        self.message_user(request, f"Reactivated {count} listing(s).")
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')

@@ -1,16 +1,16 @@
-from .gumtree_scraper import get_gumtree_listings,format_car_description
+from .gumtree_scraper import get_gumtree_listings,format_car_description,is_gumtree_listing_active
 from .custom_domain_scraper import get_custom_domain_listings
 from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import filters
-from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer
+from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
-from .utils import send_status_reminder_email
+from .utils import send_status_reminder_email, mark_listing_sold
 from django.http import JsonResponse, StreamingHttpResponse, HttpResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
 import requests as _http_requests
@@ -20,7 +20,8 @@ import time
 import random   
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q, Count, IntegerField
+from django.db.models.functions import Cast
 from queue import Queue
 from django.conf import settings
 from django.utils import timezone
@@ -1353,6 +1354,10 @@ def update_vehicle_listing_listed_on(request):
 
             vehicle_listing.listed_on = listed_on_datetime
             vehicle_listing.status = "completed"
+            # A listing that was just successfully (re)published is, by definition, not
+            # sold — clear any stale sold state so it doesn't get skipped/misreported later.
+            vehicle_listing.sales = False
+            vehicle_listing.sold_at = None
             if is_changed is not None:
                 vehicle_listing.is_changed = bool(is_changed)
             vehicle_listing.save()
@@ -1717,9 +1722,10 @@ def get_old_vehicle_listings(request):
         
         # Get user's vehicle listings older than the cutoff datetime
         vehicle_listings = VehicleListing.objects.filter(
-            status="completed", 
-            listed_on__lte=cutoff_datetime, 
+            status="completed",
+            listed_on__lte=cutoff_datetime,
             is_relist=False,
+            sales=False,
             user=user
         ).order_by("listed_on")
         
@@ -1747,3 +1753,391 @@ def get_old_vehicle_listings(request):
             'success': False,
             'error': f'An unexpected error occurred while retrieving old vehicle listings: {str(e)}'
         }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def verify_listing_active(request):
+    """
+    Live, single-listing check called by the extension immediately before it relists a
+    vehicle — closes the staleness window left by the twice-daily Gumtree profile
+    re-scrape (a car sold between scrapes would otherwise still show sales=False).
+
+    Query Parameters:
+    - id: VehicleListing primary key (required)
+
+    Returns:
+    {"success": true, "active": true|false, "indeterminate": false}
+    - active=false  -> listing confirmed gone from Gumtree; backend has just marked it
+                       sold (status="sold", sales=True). Caller must not relist it.
+    - active=true   -> confirmed still live on Gumtree; sales/sold_at cleared if stale.
+    - indeterminate -> Gumtree/ZenRows could not be reached; no state was changed.
+                       Caller should skip this cycle and retry later rather than guess.
+    """
+    listing_id = request.GET.get('id')
+    if not listing_id:
+        return JsonResponse({'success': False, 'error': 'id parameter is required'}, status=400)
+
+    try:
+        listing_id = int(listing_id)
+    except ValueError:
+        return JsonResponse({'success': False, 'error': 'id must be an integer'}, status=400)
+
+    listing = VehicleListing.objects.filter(id=listing_id, user=request.user).first()
+    if not listing:
+        return JsonResponse({'success': False, 'error': 'Vehicle listing not found'}, status=404)
+
+    # Only rows actually sourced from a Gumtree profile scrape have a list_id that
+    # means anything to Gumtree's API. Custom-domain rows also populate list_id (with
+    # an internal identifier from that scraper), so checking list_id truthiness alone
+    # would run a bogus "Gumtree existence" lookup against it and could misreport a
+    # perfectly live custom-domain listing as sold. Gate on the actual source instead.
+    if not listing.gumtree_profile_id or not listing.list_id:
+        return JsonResponse({'success': True, 'active': None, 'indeterminate': True})
+
+    result = is_gumtree_listing_active(listing.list_id)
+
+    if result is False:
+        if listing.status != "sold":
+            mark_listing_sold(listing)
+        return JsonResponse({'success': True, 'active': False, 'indeterminate': False})
+
+    if result is True:
+        if listing.sales or listing.sold_at or listing.status == "sold":
+            listing.status = "completed"
+            listing.sales = False
+            listing.sold_at = None
+            listing.save(update_fields=['status', 'sales', 'sold_at', 'updated_at'])
+        return JsonResponse({'success': True, 'active': True, 'indeterminate': False})
+
+    # result is None — ZenRows/network failure. Don't mutate anything.
+    logger.warning(f"verify_listing_active: indeterminate result for listing {listing_id} (list_id={listing.list_id})")
+    return JsonResponse({'success': True, 'active': None, 'indeterminate': True})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_all_products(request):
+    """
+    Public, unauthenticated product list for storefront consumption.
+
+    Returns only what a listing card needs (id, name, image, price) for every
+    vehicle that has actually been published, newest first.
+
+    Query Parameters:
+    - limit: Integer (default: 20, max: 100) — page size
+    - offset: Integer (default: 0) — rows to skip
+    """
+    try:
+        limit = min(int(request.GET.get('limit', 20)), 100)
+        offset = max(int(request.GET.get('offset', 0)), 0)
+    except ValueError:
+        return JsonResponse({'error': 'limit and offset must be integers'}, status=400)
+
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-updated_at')
+    total_count = products.count()
+    page = products[offset:offset + limit]
+
+    serializer = ProductListSerializer(page, many=True)
+    return JsonResponse({
+        'count': total_count,
+        'limit': limit,
+        'offset': offset,
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_products_by_category(request, category):
+    """
+    Public, unauthenticated product list filtered by category, e.g.
+    GET /api/vehicle-listing/categories/toyota/
+
+    "Category" maps to the vehicle's make/brand (Toyota, Honda, Ford, etc.)
+    to power the "Browse by Brand" section on the storefront. Matching is
+    case-insensitive so "toyota", "Toyota", and "TOYOTA" all resolve.
+    Returns every matching row, unpaginated.
+    """
+    products = VehicleListing.objects.filter(
+        is_listed=True,
+        make__iexact=category
+    ).order_by('-updated_at')
+
+    if not products.exists():
+        return JsonResponse({
+            'message': 'This category not found',
+            'results': []
+        }, status=200)
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({
+        'count': products.count(),
+        'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_product_by_slug(request, name, vehicle_id):
+    """
+    Public single-product lookup by SEO-friendly slug: <name>-<id>,
+    e.g. "toyota-corolla-2019-100". The URL converters in urls.py already
+    split this into `name` (everything before the last hyphen) and
+    `vehicle_id` (the trailing integer) — `name` is decorative and never
+    validated against the row's actual make/model/year.
+    """
+    product = VehicleListing.objects.select_related('user').filter(pk=vehicle_id, is_listed=True).first()
+    if not product:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    serializer = ProductDetailSerializer(product, context={'request': request})
+    return JsonResponse(serializer.data, status=200)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def increment_product_view_count(request, vehicle_id):
+    """
+    Public, unauthenticated view-count increment, called once per product
+    page visit, e.g. POST /api/vehicle-listing/vehicle/100/increment-view/
+
+    Uses an F() expression so concurrent visits increment atomically at the
+    database level instead of racing on a read-modify-write in Python.
+    """
+    updated = VehicleListing.objects.filter(
+        pk=vehicle_id,
+        is_listed=True
+    ).update(total_view_count=F('total_view_count') + 1)
+
+    if not updated:
+        return JsonResponse({'error': 'Product not found'}, status=404)
+
+    total_view_count = VehicleListing.objects.filter(pk=vehicle_id).values_list(
+        'total_view_count', flat=True
+    ).first()
+    return JsonResponse({'total_view_count': total_view_count}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_latest_arrivals(request):
+    """
+    Public, unauthenticated list of the 4 most recently added vehicles,
+    e.g. GET /api/vehicle-listing/latest-arrivals/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_popular_vehicles(request):
+    """
+    Public, unauthenticated list of the 4 most-viewed vehicles, e.g.
+    GET /api/vehicle-listing/popular-vehicles/
+    """
+    products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
+
+    serializer = ProductListSerializer(products, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
+
+
+# Numeric-range params: (query param prefix, model field, cast target field name).
+# price/year are stored as CharField (scrapers normalize them to plain digit
+# strings, e.g. "45000", but the column itself has no numeric constraint) so a
+# min/max range needs an explicit Cast rather than a plain __gte/__lte, which
+# would otherwise compare lexicographically. The regex guard excludes any
+# legacy/dirty non-digit values instead of letting the Cast error out.
+_NUMERIC_RANGE_FIELDS = {
+    'year': 'year',
+    'mileage': 'mileage',
+    'price': 'price',
+}
+# Fields matched with an exact (case-insensitive) equality check per value —
+# these are dropdown-style filters with a small, clean set of values in the
+# data (e.g. transmission is always "Automatic"/"Manual"), so the frontend
+# sends one of a known value (repeat/comma-separate the param for an OR match).
+_EXACT_MULTI_FIELDS = ['transmission', 'body_type']
+# Fields matched with a partial (case-insensitive) substring check per value —
+# these carry free-text/compound values in the data (e.g. model is a full
+# trim string like "Outlander ES ZL", fuel_type is "Petrol - Unleaded"), so an
+# exact match would almost never hit; substring match is what users expect
+# when typing a make/model/colour into a search box.
+_PARTIAL_MULTI_FIELDS = ['make', 'model', 'fuel_type', 'color', 'location']
+
+ORDERING_OPTIONS = {
+    'newest': '-updated_at',
+    'price_asc': 'price_int',
+    'price_desc': '-price_int',
+    'mileage_asc': 'mileage',
+    'mileage_desc': '-mileage',
+    'year_asc': 'year_int',
+    'year_desc': '-year_int',
+}
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_products(request):
+    """
+    Public, unauthenticated vehicle search with multi-field filtering, e.g.
+    GET /api/vehicle-listing/search/?make=Toyota&transmission=Automatic&price_max=30000
+
+    All parameters are optional and combined with AND. Comma-separate a
+    value to OR within that parameter, e.g. make=Toyota,Honda.
+
+    Query Parameters:
+    - name: Text — matches make, model, or variant (case-insensitive, partial)
+    - transmission, body_type: exact match (case-insensitive), comma-separated
+      for multiple values, e.g. transmission=Automatic
+    - make, model, fuel_type, color, location: partial match
+      (case-insensitive), comma-separated for multiple values
+    - year: exact year(s), comma-separated for multiple values
+    - year_min, year_max: inclusive year range
+    - mileage_min, mileage_max: inclusive mileage (km) range
+    - price_min, price_max: inclusive price range
+    - ordering: one of newest (default), price_asc, price_desc, mileage_asc,
+      mileage_desc, year_asc, year_desc
+    - limit: Integer (default 20, max 100) — page size
+    - offset: Integer (default 0) — rows to skip
+    """
+    params = request.GET
+    errors = {}
+
+    def multi_values(param_name):
+        raw = params.get(param_name)
+        if not raw:
+            return None
+        return [v.strip() for v in raw.split(',') if v.strip()]
+
+    def parse_int(param_name):
+        raw = params.get(param_name)
+        if raw in (None, ''):
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            errors[param_name] = 'must be an integer'
+            return None
+
+    products = VehicleListing.objects.filter(is_listed=True)
+
+    name = params.get('name')
+    if name:
+        products = products.filter(
+            Q(make__icontains=name) | Q(model__icontains=name) | Q(variant__icontains=name)
+        )
+
+    for field in _EXACT_MULTI_FIELDS:
+        values = multi_values(field)
+        if values:
+            match = Q()
+            for value in values:
+                match |= Q(**{f'{field}__iexact': value})
+            products = products.filter(match)
+
+    for field in _PARTIAL_MULTI_FIELDS:
+        values = multi_values(field)
+        if values:
+            match = Q()
+            for value in values:
+                match |= Q(**{f'{field}__icontains': value})
+            products = products.filter(match)
+
+    years = multi_values('year')
+    if years:
+        match = Q()
+        for year in years:
+            match |= Q(year__iexact=year)
+        products = products.filter(match)
+
+    range_filters = {
+        'year': (parse_int('year_min'), parse_int('year_max')),
+        'mileage': (parse_int('mileage_min'), parse_int('mileage_max')),
+        'price': (parse_int('price_min'), parse_int('price_max')),
+    }
+
+    needs_year_cast = any(range_filters['year'])
+    needs_price_cast = any(range_filters['price'])
+    if needs_year_cast:
+        products = products.filter(year__regex=r'^\d+$').annotate(
+            year_int=Cast('year', output_field=IntegerField())
+        )
+    if needs_price_cast:
+        products = products.filter(price__regex=r'^\d+$').annotate(
+            price_int=Cast('price', output_field=IntegerField())
+        )
+
+    range_min, range_max = range_filters['year']
+    if range_min is not None:
+        products = products.filter(year_int__gte=range_min)
+    if range_max is not None:
+        products = products.filter(year_int__lte=range_max)
+
+    range_min, range_max = range_filters['mileage']
+    if range_min is not None:
+        products = products.filter(mileage__gte=range_min)
+    if range_max is not None:
+        products = products.filter(mileage__lte=range_max)
+
+    range_min, range_max = range_filters['price']
+    if range_min is not None:
+        products = products.filter(price_int__gte=range_min)
+    if range_max is not None:
+        products = products.filter(price_int__lte=range_max)
+
+    ordering = params.get('ordering', 'newest')
+    if ordering not in ORDERING_OPTIONS:
+        errors['ordering'] = f"must be one of {', '.join(ORDERING_OPTIONS)}"
+    elif ordering in ('price_asc', 'price_desc') and not needs_price_cast:
+        products = products.filter(price__regex=r'^\d+$').annotate(
+            price_int=Cast('price', output_field=IntegerField())
+        )
+    elif ordering in ('year_asc', 'year_desc') and not needs_year_cast:
+        products = products.filter(year__regex=r'^\d+$').annotate(
+            year_int=Cast('year', output_field=IntegerField())
+        )
+
+    limit = parse_int('limit')
+    offset = parse_int('offset')
+
+    if errors:
+        return JsonResponse({'errors': errors}, status=400)
+
+    limit = min(limit, 100) if limit is not None else 20
+    offset = max(offset, 0) if offset is not None else 0
+
+    products = products.order_by(ORDERING_OPTIONS[ordering])
+    total_count = products.count()
+    page = products[offset:offset + limit]
+
+    serializer = ProductListSerializer(page, many=True)
+    return JsonResponse({
+        'count': total_count,
+        'limit': limit,
+        'offset': offset,
+        'results': serializer.data,
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_top_dealers(request):
+    """
+    Public, unauthenticated list of the top 4 dealers/sellers by listing
+    count, e.g. GET /api/vehicle-listing/top-dealers/
+
+    Returns each dealer's name, address, and how many vehicles they
+    currently have listed.
+    """
+    dealers = User.objects.filter(
+        is_approved=True, is_active=True
+    ).annotate(
+        active_listing_count=Count('vehiclelisting', filter=Q(vehiclelisting__is_listed=True))
+    ).order_by('-active_listing_count', 'dealership_name')[:4]
+
+    serializer = DealerListSerializer(dealers, many=True)
+    return JsonResponse({'results': serializer.data}, status=200)
