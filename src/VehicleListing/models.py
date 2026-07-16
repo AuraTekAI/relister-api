@@ -77,6 +77,19 @@ class VehicleListing(models.Model):
     model = models.CharField(max_length=100,null=True,blank=True)
     price = models.CharField(max_length=255,null=True,blank=True)
     mileage = models.IntegerField(null=True,blank=True)
+    # True when a custom-domain scrape could not determine a usable odometer
+    # (missing or 0). Mileage is the tie-breaker the extension uses to tell
+    # apart several cars that share a title; this flag marks the rows where
+    # that signal isn't available so they aren't treated as distinguishable.
+    # Gumtree rows always carry a parsed odometer (the scrape drops a listing
+    # rather than store it blank), so this stays False for them.
+    mileage_unavailable = models.BooleanField(default=False)
+    # 17-character Vehicle Identification Number, captured from Gumtree's
+    # "VIN" category field when a dealer has filled it in — optional because
+    # not every Gumtree listing carries one. Needed for the separate VIN
+    # database project: only listings with a VIN are eligible to display in
+    # Google (per that project's requirement).
+    vin = models.CharField(max_length=17, null=True, blank=True)
     exterior_colour = models.CharField(max_length=255,null=True,blank=True)
     interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)
@@ -86,6 +99,9 @@ class VehicleListing(models.Model):
     location = models.CharField(max_length=255,null=True,blank=True)
     url = models.URLField(null=True,blank=True)
     seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
+    # Facebook Marketplace listing ID — captured by the browser extension after publish,
+    # used for targeted deletes (replaces fragile title-search deletes). Overwritten on each call.
+    facebook_listing_id = models.CharField(max_length=128, null=True, blank=True)
     status = models.CharField(max_length=255, null=True)
     is_relist = models.BooleanField(default=False)
     is_changed = models.BooleanField(default=False)     # True when an existing listing's data was updated by the scraper

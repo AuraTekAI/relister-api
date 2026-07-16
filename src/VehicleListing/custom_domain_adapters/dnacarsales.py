@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from django.conf import settings
 
 from .base import DomainAdapter
+from ..make_normalizer import normalize_make
 
 logger = logging.getLogger("custom_domain")
 
@@ -177,6 +178,24 @@ def _parse_mileage(text):
     return int(digits) if digits else None
 
 
+def _find_odometer(spec):
+    """Best-effort odometer lookup. Prefer the exact 'Odometer' label, then
+    fall back to any spec row whose label looks like an odometer
+    (odometer / kilometres / kms / mileage) so a slightly different label
+    doesn't leave the listing with no mileage. Restricted to odometer-like
+    labels so we never mistake an unrelated number (doors, engine size) for it.
+    """
+    if spec.get("Odometer"):
+        return _parse_mileage(spec.get("Odometer"))
+    for key, value in spec.items():
+        k = (key or "").lower()
+        if "odom" in k or "kilom" in k or k == "kms" or "mileage" in k:
+            parsed = _parse_mileage(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def _absolute_image_url(src):
     if not src:
         return None
@@ -279,6 +298,10 @@ class DNACarSalesAdapter(DomainAdapter):
         make = _normalize_make(parts[1]) if len(parts) > 1 else None
         model = parts[2] if len(parts) > 2 else None
         variant = " ".join(parts[3:]) if len(parts) > 3 else None
+        # Canonicalise make → exact manufacturer name (FB "Other" category fix);
+        # recovers split multi-word brands ("Land"/"Rover" → "Land Rover") by
+        # borrowing from model. Must match migration 0031 byte-for-byte.
+        make, model = normalize_make(make, model)
 
         price_node = soup.select_one("#details-vehicle-info-vehicle-Price")
         price = _parse_price(price_node.get_text(strip=True)) if price_node else None
@@ -298,7 +321,7 @@ class DNACarSalesAdapter(DomainAdapter):
         fuel_type = _normalize_fuel(spec.get("Fuel"))
         color = _normalize_color(spec.get("Colour"))
         transmission = _normalize_transmission(spec.get("Transmission"))
-        mileage = _parse_mileage(spec.get("Odometer"))
+        mileage = _find_odometer(spec)
 
         images = []
         for img in soup.select("ul.bxslider img"):

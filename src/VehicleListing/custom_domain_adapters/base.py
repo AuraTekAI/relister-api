@@ -21,16 +21,24 @@ class DomainAdapter:
         return False
 
     def discover_dealer_location(self, profile_url: str) -> dict | None:
-        """Best-effort discovery of the dealership's own suburb / state from
-        their custom-domain site. Returns ``{"suburb": str, "state": str}``
-        with ``state`` as a 2–3 char AU state code (WA/NSW/VIC/QLD/SA/TAS/
-        ACT/NT) or ``None`` if the address can't be determined.
+        """Best-effort discovery of the dealership's own suburb / state (and,
+        where available, full address) from their custom-domain site. Returns
+        ``None`` if nothing can be determined, otherwise a dict with:
+
+          * ``suburb`` (str) and ``state`` (str, 2–3 char AU code — WA/NSW/
+            VIC/QLD/SA/TAS/ACT/NT) — REQUIRED. Both must be present or the
+            caller discards the whole result.
+          * ``address`` (str, optional) — a single-line formatted street
+            address (street + suburb + state + postcode, whatever the source
+            exposes), stored as-is for a future Google Maps geocoding lookup.
+            Omit or return ``None`` when only suburb/state are known (e.g. a
+            hardcoded adapter default with no street-level data).
 
         Called once at signup (and on profile-edit / scheduled refresh) so the
         listing-response layer can fill in ``location`` for custom-domain rows
         that don't carry a per-listing address — avoiding the extension's
         manual prompt. Failure must be silent; callers will simply leave the
-        user's saved location null.
+        user's saved location/address null.
         """
         return None
 
