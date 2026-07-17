@@ -1816,6 +1816,45 @@ def verify_listing_active(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_facebook_listings_pending_removal(request):
+    """
+    Listings the backend has confirmed sold/removed at the source (Gumtree or
+    custom-domain) that still carry a live `facebook_listing_id`.
+
+    Nothing currently tells the extension when a posted Facebook listing needs
+    to come down — `mark_listing_sold()` only flips status/sales on this row,
+    it never notifies anything. This endpoint is the missing signal: the
+    extension should poll it, delete each result from Facebook using
+    `facebook_listing_id`, then call DELETE /facebook-id/ to clear the field
+    (that endpoint already exists and already works — it just has nothing
+    upstream telling it when to fire for this case).
+
+    Source-agnostic: works for Gumtree and custom-domain listings alike.
+
+    Returns:
+    {
+        "count": 2,
+        "results": [ { ...VehicleListing fields..., "facebook_listing_id": "..." } ]
+    }
+    """
+    vehicle_listings = VehicleListing.objects.filter(
+        user=request.user,
+        sales=True,
+    ).exclude(
+        facebook_listing_id__isnull=True
+    ).exclude(
+        facebook_listing_id=''
+    ).order_by('-sold_at')
+
+    serializer = VehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
+    return JsonResponse({
+        'count': vehicle_listings.count(),
+        'results': serializer.data,
+    }, status=200)
+
+
+@api_view(['GET'])
 @permission_classes([AllowAny])
 def get_all_products(request):
     """
