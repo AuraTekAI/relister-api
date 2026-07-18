@@ -53,7 +53,8 @@ class UserListSerializer(serializers.ModelSerializer):
             'plan', 'created_at',
             'password', 'confirm_password',
         ]
-        read_only_fields = ['id', 'is_superuser', 'trial_start_date', 'trial_end_date', 'created_at', 'plan']
+        # trial_start_date / trial_end_date are admin-editable (were read-only).
+        read_only_fields = ['id', 'is_superuser', 'created_at', 'plan']
 
     def get_plan(self, obj):
         try:

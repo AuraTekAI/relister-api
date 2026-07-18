@@ -20,7 +20,7 @@ import time
 import random   
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import F, Q, Count, IntegerField
+from django.db.models import F, Q, Count, IntegerField, Max
 from django.db.models.functions import Cast
 from queue import Queue
 from django.conf import settings
@@ -2152,10 +2152,12 @@ def _parse_dt(value):
     """Accept ISO-8601 strings OR unix seconds (int/float/str) → aware datetime."""
     if value in (None, ''):
         return None
+    # Python's datetime.timezone.utc — django.utils.timezone.utc was removed in Django 5.0.
+    from datetime import timezone as _dt_timezone
     try:
         # Unix seconds (Facebook creationTime is seconds since epoch)
         if isinstance(value, (int, float)) or (isinstance(value, str) and value.replace('.', '', 1).isdigit()):
-            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            return datetime.fromtimestamp(float(value), tz=_dt_timezone.utc)
         # ISO-8601 (allow trailing 'Z')
         return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
     except (ValueError, TypeError, OSError):
@@ -2249,65 +2251,122 @@ def sync_facebook_listing_snapshot(request):
 @permission_classes([IsAdminUser])
 def get_facebook_listing_snapshots(request):
     """
-    ADMIN ONLY — return every user's latest Facebook-listing snapshot, grouped by
-    user with a per-user summary, for the admin dashboard.
+    ADMIN ONLY — Facebook-listing snapshot grouped by dealer, with a per-user
+    summary, SERVER-PAGINATED by dealer for the admin dashboard.
 
-    Query params (optional):
-      - user_id: restrict to one user
-      - aged=1:  only aged listings
-      - duplicates=1: only duplicate listings
+    Query params (all optional):
+      - page:        1-based page of dealers (default 1)
+      - page_size:   dealers per page (default 10, max 100)
+      - user_id:     restrict to one dealer
+      - aged=1:      only aged listings (and dealers that have some)
+      - duplicates=1:only duplicate listings
+      - min_days:    only listings that have been on Facebook >= N days
+      - search:      match dealer email / contact name / dealership name
     """
-    qs = FacebookListingSnapshot.objects.select_related('user', 'matched_listing')
+    # Filtered base set of listing rows.
+    base = FacebookListingSnapshot.objects.all()
     user_id = request.GET.get('user_id')
     if user_id:
-        qs = qs.filter(user_id=user_id)
+        base = base.filter(user_id=user_id)
     if request.GET.get('aged') in ('1', 'true', 'True'):
-        qs = qs.filter(is_aged=True)
+        base = base.filter(is_aged=True)
     if request.GET.get('duplicates') in ('1', 'true', 'True'):
-        qs = qs.filter(is_duplicate=True)
-    qs = qs.order_by('user_id', 'fb_published_at')
+        base = base.filter(is_duplicate=True)
+    try:
+        min_days = int(request.GET.get('min_days', ''))
+    except (ValueError, TypeError):
+        min_days = None
+    if min_days and min_days > 0:
+        base = base.filter(days_on_facebook__gte=min_days)
+    search = (request.GET.get('search') or '').strip()
+    if search:
+        base = base.filter(
+            Q(user__email__icontains=search) |
+            Q(user__contact_person_name__icontains=search) |
+            Q(user__dealership_name__icontains=search)
+        )
 
-    grouped = {}
-    for s in qs:
-        g = grouped.setdefault(s.user_id, {
-            'user_id': s.user_id,
-            'email': getattr(s.user, 'email', None),
-            'name': getattr(s.user, 'contact_person_name', None) or getattr(s.user, 'dealership_name', None),
-            'mode': s.mode,
-            'last_synced_at': None,
-            'total': 0,
-            'aged': 0,
-            'duplicates': 0,
-            'matched': 0,
-            'listings': [],
-        })
-        g['total'] += 1
-        if s.is_aged:
-            g['aged'] += 1
-        if s.is_duplicate:
-            g['duplicates'] += 1
-        if s.matched_listing_id:
-            g['matched'] += 1
-        if s.synced_at and (g['last_synced_at'] is None or s.synced_at.isoformat() > g['last_synced_at']):
-            g['last_synced_at'] = s.synced_at.isoformat()
-        g['listings'].append({
-            'fb_listing_id': s.fb_listing_id,
-            'fb_url': s.fb_url,
-            'title': s.title,
-            'price': s.price,
-            'fb_published_at': s.fb_published_at.isoformat() if s.fb_published_at else None,
-            'days_on_facebook': s.days_on_facebook,
-            'is_aged': s.is_aged,
-            'is_duplicate': s.is_duplicate,
-            'duplicate_count': s.duplicate_count,
-            'matched_listing_id': s.matched_listing_id,
-            'matched_listing': (
-                f"{s.matched_listing.year or ''} {s.matched_listing.make or ''} {s.matched_listing.model or ''}".strip()
-                if s.matched_listing_id else None
-            ),
-            'mode': s.mode,
-            'synced_at': s.synced_at.isoformat() if s.synced_at else None,
+    # Per-dealer summary over the filtered rows (ordered by most-aged).
+    summary_qs = (
+        base.values('user_id')
+        .annotate(
+            total=Count('id'),
+            aged=Count('id', filter=Q(is_aged=True)),
+            duplicates=Count('id', filter=Q(is_duplicate=True)),
+            matched=Count('id', filter=Q(matched_listing_id__isnull=False)),
+            last_synced=Max('synced_at'),
+        )
+        .order_by('-aged', 'user_id')
+    )
+
+    total_users = summary_qs.count()
+    try:
+        page = max(1, int(request.GET.get('page', '1')))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        page_size = min(100, max(1, int(request.GET.get('page_size', '10'))))
+    except (ValueError, TypeError):
+        page_size = 10
+    total_pages = max(1, (total_users + page_size - 1) // page_size)
+    start = (page - 1) * page_size
+    page_summary = list(summary_qs[start:start + page_size])
+    page_user_ids = [row['user_id'] for row in page_summary]
+
+    # Fetch listing rows only for the dealers on this page.
+    listings_by_user = {}
+    user_by_id = {}
+    if page_user_ids:
+        rows = (
+            base.filter(user_id__in=page_user_ids)
+            .select_related('user', 'matched_listing')
+            .order_by('user_id', 'fb_published_at')
+        )
+        for s in rows:
+            listings_by_user.setdefault(s.user_id, []).append(s)
+            if s.user_id not in user_by_id:
+                user_by_id[s.user_id] = s.user
+
+    results = []
+    for row in page_summary:
+        uid = row['user_id']
+        user_obj = user_by_id.get(uid)
+        rows = listings_by_user.get(uid, [])
+        results.append({
+            'user_id': uid,
+            'email': getattr(user_obj, 'email', None),
+            'name': (getattr(user_obj, 'contact_person_name', None) or getattr(user_obj, 'dealership_name', None)),
+            'mode': rows[0].mode if rows else None,
+            'last_synced_at': row['last_synced'].isoformat() if row['last_synced'] else None,
+            'total': row['total'],
+            'aged': row['aged'],
+            'duplicates': row['duplicates'],
+            'matched': row['matched'],
+            'listings': [{
+                'fb_listing_id': s.fb_listing_id,
+                'fb_url': s.fb_url,
+                'title': s.title,
+                'price': s.price,
+                'fb_published_at': s.fb_published_at.isoformat() if s.fb_published_at else None,
+                'days_on_facebook': s.days_on_facebook,
+                'is_aged': s.is_aged,
+                'is_duplicate': s.is_duplicate,
+                'duplicate_count': s.duplicate_count,
+                'matched_listing_id': s.matched_listing_id,
+                'matched_listing': (
+                    f"{s.matched_listing.year or ''} {s.matched_listing.make or ''} {s.matched_listing.model or ''}".strip()
+                    if s.matched_listing_id else None
+                ),
+                'mode': s.mode,
+                'synced_at': s.synced_at.isoformat() if s.synced_at else None,
+            } for s in rows],
         })
 
-    results = sorted(grouped.values(), key=lambda g: (-g['aged'], g['email'] or ''))
-    return JsonResponse({'success': True, 'users': results, 'user_count': len(results)}, status=200)
+    return JsonResponse({
+        'success': True,
+        'users': results,
+        'page': page,
+        'page_size': page_size,
+        'total_users': total_users,
+        'total_pages': total_pages,
+    }, status=200)
