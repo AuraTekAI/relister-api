@@ -3,11 +3,11 @@ from .custom_domain_scraper import get_custom_domain_listings
 from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -2141,3 +2141,173 @@ def get_top_dealers(request):
 
     serializer = DealerListSerializer(dealers, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Facebook listing snapshot — pushed hourly by the extension, read by the admin
+# dashboard (gumtree + custom-domain modes). See VehicleListing.models.FacebookListingSnapshot.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _parse_dt(value):
+    """Accept ISO-8601 strings OR unix seconds (int/float/str) → aware datetime."""
+    if value in (None, ''):
+        return None
+    try:
+        # Unix seconds (Facebook creationTime is seconds since epoch)
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.replace('.', '', 1).isdigit()):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        # ISO-8601 (allow trailing 'Z')
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def sync_facebook_listing_snapshot(request):
+    """
+    Replace the authenticated user's Facebook-listing snapshot with the set the
+    extension just observed. Called ~hourly while the extension runs.
+
+    Request Body:
+    {
+      "mode": "gumtree" | "customdomain",
+      "listings": [
+        {
+          "fb_listing_id": "1234567890",
+          "fb_url": "https://www.facebook.com/marketplace/item/1234567890/",
+          "title": "2019 Nissan Navara ST",
+          "price": "35490",
+          "fb_published_at": 1784321532,          # unix seconds OR ISO-8601
+          "days_on_facebook": 14,                  # optional; computed if omitted
+          "matched_listing_id": 7945,              # backend VehicleListing id or null
+          "is_aged": true,
+          "is_duplicate": false,
+          "duplicate_count": 1
+        }, ...
+      ]
+    }
+    Returns: { "success": true, "saved": <n>, "synced_at": <iso> }
+    """
+    user = request.user
+    try:
+        data = json.loads(request.body or b'{}')
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'Invalid JSON body'}, status=400)
+
+    mode = data.get('mode')
+    listings = data.get('listings')
+    if not isinstance(listings, list):
+        return JsonResponse({'success': False, 'error': '`listings` must be a list'}, status=400)
+
+    now = timezone.now()
+    # Cache this user's VehicleListing ids so a bogus/foreign matched_listing_id can't
+    # attach a snapshot to another user's listing.
+    own_listing_ids = set(
+        VehicleListing.objects.filter(user=user).values_list('id', flat=True)
+    )
+
+    rows = []
+    for item in listings:
+        if not isinstance(item, dict):
+            continue
+        fb_id = str(item.get('fb_listing_id') or '').strip()
+        if not fb_id:
+            continue
+        published = _parse_dt(item.get('fb_published_at'))
+        days = item.get('days_on_facebook')
+        if days is None and published is not None:
+            days = max(0, (now - published).days)
+        matched_id = item.get('matched_listing_id')
+        matched_id = matched_id if matched_id in own_listing_ids else None
+        rows.append(FacebookListingSnapshot(
+            user=user,
+            fb_listing_id=fb_id,
+            fb_url=(item.get('fb_url') or None),
+            title=(item.get('title') or None),
+            price=(str(item.get('price')) if item.get('price') is not None else None),
+            fb_published_at=published,
+            days_on_facebook=days,
+            matched_listing_id=matched_id,
+            is_aged=bool(item.get('is_aged')),
+            is_duplicate=bool(item.get('is_duplicate')),
+            duplicate_count=int(item.get('duplicate_count') or 1),
+            mode=(mode if mode in ('gumtree', 'customdomain') else None),
+        ))
+
+    # Whole-set replace for this user (atomic).
+    with transaction.atomic():
+        FacebookListingSnapshot.objects.filter(user=user).delete()
+        if rows:
+            FacebookListingSnapshot.objects.bulk_create(rows, batch_size=500)
+
+    logger.info("fb-snapshot sync user=%s mode=%s saved=%s", getattr(user, 'email', user), mode, len(rows))
+    return JsonResponse({'success': True, 'saved': len(rows), 'synced_at': now.isoformat()}, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_facebook_listing_snapshots(request):
+    """
+    ADMIN ONLY — return every user's latest Facebook-listing snapshot, grouped by
+    user with a per-user summary, for the admin dashboard.
+
+    Query params (optional):
+      - user_id: restrict to one user
+      - aged=1:  only aged listings
+      - duplicates=1: only duplicate listings
+    """
+    qs = FacebookListingSnapshot.objects.select_related('user', 'matched_listing')
+    user_id = request.GET.get('user_id')
+    if user_id:
+        qs = qs.filter(user_id=user_id)
+    if request.GET.get('aged') in ('1', 'true', 'True'):
+        qs = qs.filter(is_aged=True)
+    if request.GET.get('duplicates') in ('1', 'true', 'True'):
+        qs = qs.filter(is_duplicate=True)
+    qs = qs.order_by('user_id', 'fb_published_at')
+
+    grouped = {}
+    for s in qs:
+        g = grouped.setdefault(s.user_id, {
+            'user_id': s.user_id,
+            'email': getattr(s.user, 'email', None),
+            'name': getattr(s.user, 'contact_person_name', None) or getattr(s.user, 'dealership_name', None),
+            'mode': s.mode,
+            'last_synced_at': None,
+            'total': 0,
+            'aged': 0,
+            'duplicates': 0,
+            'matched': 0,
+            'listings': [],
+        })
+        g['total'] += 1
+        if s.is_aged:
+            g['aged'] += 1
+        if s.is_duplicate:
+            g['duplicates'] += 1
+        if s.matched_listing_id:
+            g['matched'] += 1
+        if s.synced_at and (g['last_synced_at'] is None or s.synced_at.isoformat() > g['last_synced_at']):
+            g['last_synced_at'] = s.synced_at.isoformat()
+        g['listings'].append({
+            'fb_listing_id': s.fb_listing_id,
+            'fb_url': s.fb_url,
+            'title': s.title,
+            'price': s.price,
+            'fb_published_at': s.fb_published_at.isoformat() if s.fb_published_at else None,
+            'days_on_facebook': s.days_on_facebook,
+            'is_aged': s.is_aged,
+            'is_duplicate': s.is_duplicate,
+            'duplicate_count': s.duplicate_count,
+            'matched_listing_id': s.matched_listing_id,
+            'matched_listing': (
+                f"{s.matched_listing.year or ''} {s.matched_listing.make or ''} {s.matched_listing.model or ''}".strip()
+                if s.matched_listing_id else None
+            ),
+            'mode': s.mode,
+            'synced_at': s.synced_at.isoformat() if s.synced_at else None,
+        })
+
+    results = sorted(grouped.values(), key=lambda g: (-g['aged'], g['email'] or ''))
+    return JsonResponse({'success': True, 'users': results, 'user_count': len(results)}, status=200)

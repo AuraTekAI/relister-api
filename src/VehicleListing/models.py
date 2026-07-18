@@ -152,7 +152,50 @@ class RelistingFacebooklisting(models.Model):
 
     def __str__(self):
         return f"{self.listing.make} {self.listing.model}"
-    
+
+
+class FacebookListingSnapshot(models.Model):
+    """
+    Latest snapshot of a user's LIVE Facebook Marketplace listings, pushed by the
+    browser extension roughly every hour while it is running (gumtree + custom-domain
+    modes). One row per (user, fb_listing_id); the whole set for a user is replaced
+    on each sync. Powers the admin dashboard: which FB listings exist, how long since
+    each was published on Facebook, which backend VehicleListing it matches, whether
+    it is aged (older than the relist threshold), and duplicates.
+    """
+    MODE_CHOICES = [
+        ('gumtree', 'Gumtree'),
+        ('customdomain', 'Custom Domain'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fb_snapshots')
+    fb_listing_id = models.CharField(max_length=64)
+    fb_url = models.URLField(max_length=500, null=True, blank=True)
+    title = models.CharField(max_length=500, null=True, blank=True)
+    price = models.CharField(max_length=64, null=True, blank=True)
+    # When the CURRENT Facebook listing was published (Facebook's own creationTime).
+    fb_published_at = models.DateTimeField(null=True, blank=True)
+    days_on_facebook = models.IntegerField(null=True, blank=True)
+    # The backend VehicleListing this FB listing is matched to (null if unmatched).
+    matched_listing = models.ForeignKey(
+        VehicleListing, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='fb_snapshots'
+    )
+    is_aged = models.BooleanField(default=False)      # older than the relist threshold
+    is_duplicate = models.BooleanField(default=False) # part of a same-title duplicate group
+    duplicate_count = models.IntegerField(default=1)  # how many FB listings share this title
+    mode = models.CharField(max_length=32, choices=MODE_CHOICES, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'fb_listing_id')
+        indexes = [
+            models.Index(fields=['user', 'synced_at']),
+            models.Index(fields=['user', 'is_aged']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.fb_listing_id} {self.title}"
+
 
 class Invoice(models.Model):
     STATUS_CHOICES = [
