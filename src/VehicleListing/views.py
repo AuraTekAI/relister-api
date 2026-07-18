@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -2237,14 +2237,54 @@ def sync_facebook_listing_snapshot(request):
             mode=(mode if mode in ('gumtree', 'customdomain') else None),
         ))
 
+    # Backend listings NOT on Facebook + the exact reason (optional array —
+    # older extension builds won't send it, so treat a missing/invalid value as
+    # "don't touch the unpublished set" only when the key is entirely absent;
+    # an explicit empty list means "no unpublished listings", so clear the set).
+    unpublished_in = data.get('unpublished')
+    unpublished_present = 'unpublished' in data and isinstance(unpublished_in, list)
+    VALID_REASONS = {c[0] for c in UnpublishedListingSnapshot.REASON_CHOICES}
+    unpublished_rows = []
+    if unpublished_present:
+        for item in unpublished_in:
+            if not isinstance(item, dict):
+                continue
+            lid = item.get('listing_id')
+            lid = lid if lid in own_listing_ids else None
+            reason = item.get('reason')
+            reason = reason if reason in VALID_REASONS else None
+            unpublished_rows.append(UnpublishedListingSnapshot(
+                user=user,
+                listing_id=lid,
+                title=(item.get('title') or None),
+                price=(str(item.get('price')) if item.get('price') is not None else None),
+                images_count=int(item.get('images_count') or 0),
+                reason=reason,
+                reason_detail=(item.get('reason_detail') or None),
+                mode=(mode if mode in ('gumtree', 'customdomain') else None),
+            ))
+
     # Whole-set replace for this user (atomic).
     with transaction.atomic():
         FacebookListingSnapshot.objects.filter(user=user).delete()
         if rows:
             FacebookListingSnapshot.objects.bulk_create(rows, batch_size=500)
+        if unpublished_present:
+            UnpublishedListingSnapshot.objects.filter(user=user).delete()
+            if unpublished_rows:
+                UnpublishedListingSnapshot.objects.bulk_create(unpublished_rows, batch_size=500)
 
-    logger.info("fb-snapshot sync user=%s mode=%s saved=%s", getattr(user, 'email', user), mode, len(rows))
-    return JsonResponse({'success': True, 'saved': len(rows), 'synced_at': now.isoformat()}, status=200)
+    logger.info(
+        "fb-snapshot sync user=%s mode=%s saved=%s unpublished=%s",
+        getattr(user, 'email', user), mode, len(rows),
+        len(unpublished_rows) if unpublished_present else 'n/a',
+    )
+    return JsonResponse({
+        'success': True,
+        'saved': len(rows),
+        'unpublished_saved': len(unpublished_rows) if unpublished_present else None,
+        'synced_at': now.isoformat(),
+    }, status=200)
 
 
 @api_view(['GET'])
@@ -2327,6 +2367,19 @@ def get_facebook_listing_snapshots(request):
             if s.user_id not in user_by_id:
                 user_by_id[s.user_id] = s.user
 
+    # Unpublished (not-on-Facebook) listings for the dealers on this page. Not
+    # affected by the aged/duplicates/min_days FB-listing filters — those narrow
+    # which dealers appear, but a dealer's full unpublished set is always shown.
+    unpublished_by_user = {}
+    if page_user_ids:
+        up_rows = (
+            UnpublishedListingSnapshot.objects.filter(user_id__in=page_user_ids)
+            .select_related('listing')
+            .order_by('user_id', 'reason', 'title')
+        )
+        for u in up_rows:
+            unpublished_by_user.setdefault(u.user_id, []).append(u)
+
     results = []
     for row in page_summary:
         uid = row['user_id']
@@ -2357,9 +2410,31 @@ def get_facebook_listing_snapshots(request):
                     f"{s.matched_listing.year or ''} {s.matched_listing.make or ''} {s.matched_listing.model or ''}".strip()
                     if s.matched_listing_id else None
                 ),
+                # Source listing URL (Gumtree profile listing / custom-domain detail page)
+                # and the Django-admin change page for that backend row.
+                'matched_listing_url': (s.matched_listing.url if s.matched_listing_id else None),
+                'matched_listing_admin_url': (
+                    request.build_absolute_uri(f'/admin/VehicleListing/vehiclelisting/{s.matched_listing_id}/change/')
+                    if s.matched_listing_id else None
+                ),
                 'mode': s.mode,
                 'synced_at': s.synced_at.isoformat() if s.synced_at else None,
             } for s in rows],
+            'unpublished_count': len(unpublished_by_user.get(uid, [])),
+            'unpublished': [{
+                'listing_id': u.listing_id,
+                'title': u.title,
+                'price': u.price,
+                'images_count': u.images_count,
+                'reason': u.reason,
+                'reason_detail': u.reason_detail,
+                'source_url': (u.listing.url if u.listing_id else None),
+                'admin_url': (
+                    request.build_absolute_uri(f'/admin/VehicleListing/vehiclelisting/{u.listing_id}/change/')
+                    if u.listing_id else None
+                ),
+                'synced_at': u.synced_at.isoformat() if u.synced_at else None,
+            } for u in unpublished_by_user.get(uid, [])],
         })
 
     return JsonResponse({

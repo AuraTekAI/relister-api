@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot
 from .utils import reactivate_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
@@ -78,3 +78,11 @@ class FacebookListingSnapshotAdmin(admin.ModelAdmin):
     list_filter = ('user', 'mode', 'is_aged', 'is_duplicate')
 
 admin.site.register(FacebookListingSnapshot, FacebookListingSnapshotAdmin)
+
+
+class UnpublishedListingSnapshotAdmin(admin.ModelAdmin):
+    list_display = ('user', 'listing', 'title', 'price', 'images_count', 'reason', 'reason_detail', 'mode', 'synced_at')
+    search_fields = ('user__email', 'title')
+    list_filter = ('user', 'mode', 'reason')
+
+admin.site.register(UnpublishedListingSnapshot, UnpublishedListingSnapshotAdmin)

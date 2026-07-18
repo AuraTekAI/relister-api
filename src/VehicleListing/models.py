@@ -197,6 +197,49 @@ class FacebookListingSnapshot(models.Model):
         return f"{self.user_id}:{self.fb_listing_id} {self.title}"
 
 
+class UnpublishedListingSnapshot(models.Model):
+    """
+    Backend VehicleListings that are NOT currently on Facebook, together with the
+    EXACT reason the extension skipped or couldn't publish them, pushed by the
+    extension alongside the Facebook snapshot. Whole-set replace per user on each
+    sync (mirrors FacebookListingSnapshot). Powers the admin dashboard's
+    "which listings are not published — and why" view.
+    """
+    REASON_CHOICES = [
+        ('SOLD', 'Sold on source'),
+        ('INSUFFICIENT_IMAGES', 'Fewer than 2 images'),
+        ('LOCATION_MISSING', 'No dealer location'),
+        ('FAILED_HIDDEN', 'Failed repeatedly — hidden'),
+        ('FAILED_COOLDOWN', 'In failure cooldown'),
+        ('QUOTA_REACHED', 'Daily publish limit reached'),
+        ('PENDING', 'Queued — not yet published'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='unpublished_snapshots')
+    # The backend VehicleListing that isn't on Facebook. SET_NULL so a deleted
+    # listing doesn't drop the (already stale-by-next-sync) snapshot row mid-cycle.
+    listing = models.ForeignKey(
+        VehicleListing, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='unpublished_snapshots'
+    )
+    title = models.CharField(max_length=500, null=True, blank=True)
+    price = models.CharField(max_length=64, null=True, blank=True)
+    images_count = models.IntegerField(default=0)
+    # Machine reason code (see REASON_CHOICES) + a human-readable detail string.
+    reason = models.CharField(max_length=40, choices=REASON_CHOICES, null=True, blank=True)
+    reason_detail = models.CharField(max_length=255, null=True, blank=True)
+    mode = models.CharField(max_length=32, choices=FacebookListingSnapshot.MODE_CHOICES, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'synced_at']),
+            models.Index(fields=['user', 'reason']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.listing_id} {self.title} ({self.reason})"
+
+
 class Invoice(models.Model):
     STATUS_CHOICES = [
         ('paid', 'Paid'),
