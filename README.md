@@ -1,5 +1,12 @@
 # Application Setup and Execution Guide
 
+> **Real-time extension control (WebSockets):** the admin webapp can control each
+> dealer's running extension live (start/stop/override auto-processing, remove
+> duplicates, delete/relist/republish, and stream full logs) over Django Channels.
+> Deployment, the required nginx `/ws/` + `/static/` blocks, the Redis
+> `--databases` requirement, the gunicorn/uvicorn ASGI switch, and the admin-static
+> fix are documented in **[docs/REALTIME_CONTROL.md](docs/REALTIME_CONTROL.md)**.
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed on your system:

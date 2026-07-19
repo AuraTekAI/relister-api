@@ -111,3 +111,85 @@ every publish guard (sold, <2 images, location, verification, failure cooldown,
 daily quota) and the 90–120s publish / 18–28s delete anti-detection cooldowns.
 A remote "publish now" cannot bypass those. Only `is_staff` users may send
 commands, and each extension can only be controlled on its own user's channel.
+
+---
+
+## Production deployment (autorelister.com.au) — as actually deployed
+
+The prod box runs the stack in Docker (`~/relister-api`, `docker compose`), behind
+**host nginx** (`/etc/nginx/sites-available/autorelister.com.au`), with the
+`web`/celery/beat/redis containers on the internal network and `web` published on
+`127.0.0.1:8000`. React app + extension are static under `/var/www/autorelister/`.
+
+**1. Redis must expose ≥4 databases.** The channel layer uses Redis DB index 3
+(`CHANNELS_REDIS_DB`, default 3). Redis was started with `--databases 2` (only DB
+0–1), which made every WS connect throw `redis.exceptions.ResponseError: DB index
+is out of range` and the socket fail. Fix: the redis `command:` in all three
+compose files now uses `--databases 16`. If you change `CHANNELS_REDIS_DB`, keep
+it `< --databases`.
+
+**2. ASGI server.** All three compose files run
+`gunicorn --workers 2 -k uvicorn.workers.UvicornWorker relister.asgi:application`
+(needs `uvicorn[standard]`, in requirements). WSGI/`runserver` cannot serve WS.
+Any code change forces a full image rebuild (the Dockerfile `COPY`s before
+`pip install`), which also reinstalls Playwright — expect a slow build and watch
+disk. Reclaim afterward with `docker builder prune -f`.
+
+**3. Host nginx blocks** (added inside the `server { server_name
+api.autorelister.com.au; … }` block):
+
+```nginx
+    # WebSocket control channel
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+    # Django admin/DRF static (gunicorn does NOT serve static like runserver did)
+    location /static/ {
+        alias /var/www/autorelister/static/;
+        expires 7d;
+        access_log off;
+    }
+```
+Then `sudo nginx -t && sudo systemctl reload nginx`.
+
+**4. Admin/DRF static** (fixes the unstyled `/admin`): gunicorn doesn't serve
+static. `STATIC_ROOT=/app/src/staticfiles` is bind-mounted to the host, but
+`/home/ubuntu` is `750` so nginx (`www-data`) can't read it — so collect + copy to
+the nginx-served path:
+```bash
+docker compose run --rm web python src/manage.py collectstatic --noinput
+sudo cp -a ~/relister-api/src/staticfiles/. /var/www/autorelister/static/
+```
+Re-run these two after any Django/app upgrade that changes admin assets.
+
+**Deploy sequence used:**
+```bash
+cd ~/relister-api && git pull origin master
+docker compose build                 # installs channels/daphne/uvicorn (+Playwright)
+docker compose run --rm web python src/manage.py migrate --noinput
+docker compose run --rm web python src/manage.py collectstatic --noinput
+sudo cp -a ~/relister-api/src/staticfiles/. /var/www/autorelister/static/
+docker compose up -d                 # recreates redis (new --databases) + web (gunicorn/ASGI)
+docker builder prune -f              # reclaim build cache
+```
+
+**Verify:**
+```bash
+docker logs web --tail 5             # "Using worker: uvicorn.workers.UvicornWorker"
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" \
+  "https://api.autorelister.com.au/ws/extension/?role=extension"   # 403 (no token) = routed+auth-gated OK
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" \
+  https://api.autorelister.com.au/static/admin/css/base.css        # 200 text/css
+```
+A valid dealer/admin token upgrades to `101`; check `docker logs web` shows no
+`DB index is out of range`.

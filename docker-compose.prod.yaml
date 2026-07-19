@@ -25,7 +25,7 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
-    command: redis-server --save 60 1 --appendonly yes --databases 2
+    command: redis-server --save 60 1 --appendonly yes --databases 16
     healthcheck:
       test:
         - CMD
