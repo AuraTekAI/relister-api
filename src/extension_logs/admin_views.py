@@ -213,7 +213,12 @@ def send_extension_command(request):
         })
         return Response({'success': True, 'queued': True, 'waited': False, 'command': command})
 
-    result = _send_command_await_ack(uid, command, payload)
+    # A live extension answers status/refresh/cancel almost instantly; only the
+    # publish/relist actions legitimately take a while. Use a short wait for the
+    # quick ones so an OFFLINE dealer doesn't tie up a worker for the full window.
+    quick = {'report_status', 'cancel', 'refresh', 'stop_auto', 'start_auto', 'start_video', 'stop_video'}
+    timeout = 12 if command in quick else COMMAND_ACK_TIMEOUT
+    result = _send_command_await_ack(uid, command, payload, timeout=timeout)
     return Response({'success': result.get('ok', False), 'waited': True, 'command': command,
                      'result': result})
 
