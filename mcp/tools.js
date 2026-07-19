@@ -7,6 +7,10 @@
 import { z } from 'zod';
 
 const API_BASE = (process.env.RELISTER_API_BASE || 'http://web:8000/api').replace(/\/+$/, '');
+// When calling the API directly (bypassing nginx), Django checks ALLOWED_HOSTS
+// against the Host header — `web:8000` is rejected (DisallowedHost). Send an
+// allowed host instead.
+const API_HOST = process.env.RELISTER_API_HOST || '';
 const ADMIN_EMAIL = process.env.RELISTER_ADMIN_EMAIL || '';
 const ADMIN_PASSWORD = process.env.RELISTER_ADMIN_PASSWORD || '';
 const STATIC_TOKEN = process.env.RELISTER_ADMIN_TOKEN || '';
@@ -17,7 +21,7 @@ let loginInFlight = null;
 async function rawFetch(path, { method = 'GET', headers = {}, body } = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', ...(API_HOST ? { host: API_HOST } : {}), ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();

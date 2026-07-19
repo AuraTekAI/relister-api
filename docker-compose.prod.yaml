@@ -88,6 +88,7 @@ services:
       - PORT=9090
       - MCP_PUBLIC_URL=https://mcp.autorelister.com.au
       - RELISTER_API_BASE=http://web:8000/api
+      - RELISTER_API_HOST=api.autorelister.com.au
       - RELISTER_ADMIN_EMAIL=${MCP_ADMIN_EMAIL}
       - RELISTER_ADMIN_PASSWORD=${MCP_ADMIN_PASSWORD}
     ports:
