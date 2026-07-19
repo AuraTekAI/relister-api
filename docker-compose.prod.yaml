@@ -13,7 +13,7 @@ services:
     command: >
       sh -c "python /app/src/manage.py wait_for_db &&
              python /app/src/manage.py collectstatic --no-input &&
-             PYTHONPATH=/app/src gunicorn --workers 2 --bind 0.0.0.0:8000 relister.wsgi:application"
+             PYTHONPATH=/app/src gunicorn --workers 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 relister.asgi:application"
     networks:
       - internal_network
     depends_on:

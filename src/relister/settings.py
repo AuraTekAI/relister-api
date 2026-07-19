@@ -28,6 +28,10 @@ else:
 
 # Application definition
 INSTALLED_APPS = [
+    # Daphne must come first so `runserver` uses the ASGI/Channels server
+    # (enables websockets in development). Production runs daphne/uvicorn directly.
+    "daphne",
+
     # Pre installed apps
     "django.contrib.admin",
     "django.contrib.auth",
@@ -52,7 +56,8 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'django_filters',
-    
+    "channels",
+
 ]
 
 MIDDLEWARE = [
@@ -257,6 +262,25 @@ CORS_ALLOW_METHODS = [
     "POST",
     "PUT",
 ]
+
+# ── Channels (websocket real-time extension control) ──────────────────────────
+# The ASGI app (relister.asgi.application) wraps Django's HTTP handler with a
+# websocket router. The channel layer uses the same Redis that Celery/cache use,
+# on a dedicated DB index so control messages never collide with other keys.
+ASGI_APPLICATION = "relister.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [{
+                "host": REDIS_HOST,
+                "port": int(REDIS_PORT),
+                "password": (REDIS_PASSWORD or None),
+                "db": env.int("CHANNELS_REDIS_DB", default=3),
+            }],
+        },
+    },
+}
 
 # Optional: If you need to allow specific headers
 CORS_ALLOW_HEADERS = [
