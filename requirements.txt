@@ -33,3 +33,5 @@ uvicorn[standard]==0.30.6
 # read-timeout cancels the channel layer's blocking receive → WS drops every few
 # seconds). 5.0.x is the known-good pairing (also fine for django-redis/celery).
 redis==5.0.8
+# Web Push (VAPID) sending
+pywebpush==2.0.0

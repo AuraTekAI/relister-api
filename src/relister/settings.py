@@ -416,4 +416,10 @@ SIMPLE_DELAY_END_TIME = int(env('SIMPLE_DELAY_END_TIME'))
 DELAY_START_TIME_FOR_LOADING_PAGE = int(env('DELAY_START_TIME_FOR_LOADING_PAGE'))
 DELAY_END_TIME_FOR_LOADING_PAGE = int(env('DELAY_END_TIME_FOR_LOADING_PAGE'))
 
+# ── Web Push (VAPID) ────────────────────────────────────────────────────────
+# Private key must never be committed — set both in .env on the server.
+VAPID_PUBLIC_KEY = env('VAPID_PUBLIC_KEY', default='')
+VAPID_PRIVATE_KEY = env('VAPID_PRIVATE_KEY', default='')
+VAPID_SUBJECT = env('VAPID_SUBJECT', default='mailto:support@autorelister.com.au')
+
 

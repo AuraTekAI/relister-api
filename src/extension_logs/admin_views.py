@@ -99,6 +99,7 @@ def get_dealer_meta(request):
 
     sub = getattr(user, 'subscription', None)
     sync = getattr(user, 'ext_sync_status', None)
+    push = user.push_subscriptions.order_by('-updated_at').first() if hasattr(user, 'push_subscriptions') else None
 
     return Response({
         'success': True,
@@ -125,6 +126,13 @@ def get_dealer_meta(request):
             'unpublished_count': sync.unpublished_count,
             'extension_version': sync.extension_version,
             'synced_at': sync.synced_at.isoformat() if sync.synced_at else None,
+        },
+        'push': None if not push else {
+            'install_type': push.install_type,          # 'development' = load-unpacked (can't auto-update)
+            'can_auto_update': push.install_type not in ('development', None),
+            'extension_version': push.extension_version,
+            'subscriptions': user.push_subscriptions.count(),
+            'updated_at': push.updated_at.isoformat() if push.updated_at else None,
         },
     })
 
