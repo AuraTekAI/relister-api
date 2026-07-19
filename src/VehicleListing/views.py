@@ -2365,6 +2365,7 @@ def get_facebook_listing_snapshots(request):
         or request.GET.get('duplicates') in ('1', 'true', 'True')
         or bool(min_days and min_days > 0)
     )
+    # Status rows (search/user filtered) — source of truth for "broken" dealers.
     status_qs = ExtensionSyncStatus.objects.select_related('user')
     if user_id:
         status_qs = status_qs.filter(user_id=user_id)
@@ -2374,15 +2375,46 @@ def get_facebook_listing_snapshots(request):
             Q(user__contact_person_name__icontains=search) |
             Q(user__dealership_name__icontains=search)
         )
-    if listing_filters_active:
-        matching_ids = list(base.values_list('user_id', flat=True).distinct())
-        status_qs = status_qs.filter(user_id__in=matching_ids)
-    # Broken dealers (status != ok) first, then most-recently synced.
-    status_qs = status_qs.annotate(
-        _err=Case(When(status='ok', then=Value(1)), default=Value(0), output_field=IntegerField())
-    ).order_by('_err', '-synced_at')
+    status_map = {s.user_id: s for s in status_qs}
 
-    total_users = status_qs.count()
+    # Per-dealer FB summary (from the already search/filter-narrowed `base`) — used
+    # for counts + ordering AND to include dealers whose extension hasn't sent a
+    # status yet (older build) so nothing disappears during rollout.
+    fb_summary = {
+        row['user_id']: row
+        for row in base.values('user_id').annotate(
+            aged=Count('id', filter=Q(is_aged=True)),
+            last_synced=Max('synced_at'),
+        )
+    }
+
+    # Candidate dealers = union of (ever-synced) + (has FB rows) + (has unpublished),
+    # unless a listing-level filter is active (then only dealers with matching rows).
+    if listing_filters_active:
+        candidate_ids = set(fb_summary.keys())
+    else:
+        candidate_ids = set(status_map.keys()) | set(fb_summary.keys())
+        up_q = UnpublishedListingSnapshot.objects.all()
+        if user_id:
+            up_q = up_q.filter(user_id=user_id)
+        if search:
+            up_q = up_q.filter(
+                Q(user__email__icontains=search) |
+                Q(user__contact_person_name__icontains=search) |
+                Q(user__dealership_name__icontains=search)
+            )
+        candidate_ids |= set(up_q.values_list('user_id', flat=True).distinct())
+
+    # Order: broken dealers (status != ok) first, then most-aged, then most-recent.
+    def _sort_key(uid):
+        st = status_map.get(uid)
+        err = 0 if (st and st.status and st.status != 'ok') else 1
+        aged = fb_summary.get(uid, {}).get('aged', 0) or 0
+        synced = (st.synced_at if st else None) or fb_summary.get(uid, {}).get('last_synced')
+        return (err, -aged, -(synced.timestamp() if synced else 0))
+    ordered_ids = sorted(candidate_ids, key=_sort_key)
+
+    total_users = len(ordered_ids)
     try:
         page = max(1, int(request.GET.get('page', '1')))
     except (ValueError, TypeError):
@@ -2393,8 +2425,8 @@ def get_facebook_listing_snapshots(request):
         page_size = 10
     total_pages = max(1, (total_users + page_size - 1) // page_size)
     start = (page - 1) * page_size
-    page_status = list(status_qs[start:start + page_size])
-    page_user_ids = [s.user_id for s in page_status]
+    page_user_ids = ordered_ids[start:start + page_size]
+    users_by_id = {u.id: u for u in User.objects.filter(id__in=page_user_ids)}
 
     # Fetch listing rows only for the dealers on this page.
     listings_by_user = {}
@@ -2419,19 +2451,20 @@ def get_facebook_listing_snapshots(request):
             unpublished_by_user.setdefault(u.user_id, []).append(u)
 
     results = []
-    for st in page_status:
-        uid = st.user_id
-        user_obj = st.user
+    for uid in page_user_ids:
+        st = status_map.get(uid)
+        user_obj = users_by_id.get(uid) or (st.user if st else None)
         rows = listings_by_user.get(uid, [])
+        last_synced = (st.synced_at if st else None) or (rows[0].synced_at if rows else None)
         results.append({
             'user_id': uid,
             'email': getattr(user_obj, 'email', None),
             'name': (getattr(user_obj, 'contact_person_name', None) or getattr(user_obj, 'dealership_name', None)),
-            'mode': st.mode or (rows[0].mode if rows else None),
-            'last_synced_at': st.synced_at.isoformat() if st.synced_at else None,
-            'status': st.status,
-            'status_detail': st.status_detail,
-            'extension_version': st.extension_version,
+            'mode': (st.mode if st else None) or (rows[0].mode if rows else None),
+            'last_synced_at': last_synced.isoformat() if last_synced else None,
+            'status': st.status if st else 'ok',
+            'status_detail': st.status_detail if st else None,
+            'extension_version': st.extension_version if st else None,
             'total': len(rows),
             'aged': sum(1 for s in rows if s.is_aged),
             'duplicates': sum(1 for s in rows if s.is_duplicate),
