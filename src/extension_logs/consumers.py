@@ -116,7 +116,7 @@ class ExtensionControlConsumer(AsyncWebsocketConsumer):
                 "by": getattr(self.user, "email", None),
             })
         else:  # extension → observers
-            if msg.get("type") in ("log", "ack", "status", "presence"):
+            if msg.get("type") in ("log", "ack", "status", "presence", "snapshot_pushed"):
                 await self._to_observers(msg)
 
     # ── group fan-out helpers ────────────────────────────────────────────────
