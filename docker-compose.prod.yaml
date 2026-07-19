@@ -8,6 +8,11 @@ services:
     env_file:
       - ./src/.env
     volumes:
+      # Mount the source so `git pull` + restart deploys code changes instantly —
+      # no image rebuild needed for Python changes (the image only needs rebuilding
+      # when requirements.txt / the Dockerfile change). staticfiles + .env stay as
+      # nested mounts on top.
+      - ./src:/app/src
       - staticfiles:/app/src/staticfiles
       - ./src/.env:/app/src/.env
     command: >
