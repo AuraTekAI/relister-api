@@ -1,6 +1,8 @@
 # Use the official Python 3.12 slim image as the base image.
-# The slim version is a minimal Docker image that reduces the overall size of the container.
-FROM python:3.12-slim
+# Pinned to bookworm (Debian 12): the bare `slim` tag now floats to Debian trixie
+# (13), whose t64 library renames break the Chromium apt deps below. Bookworm is
+# stable, matches the currently-deployed image, and is officially Playwright-supported.
+FROM python:3.12-slim-bookworm
 
 # Set environment variables to control Python behavior inside the Docker container.
 # PYTHONDOWNWRITEBYTECODE=1 prevents Python from writing .pyc files, which can save space.
