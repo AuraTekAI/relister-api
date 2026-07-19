@@ -76,6 +76,27 @@ services:
     depends_on:
       - web
 
+  # Hosted debug MCP server (remote/Streamable-HTTP + OAuth), fronted by the host
+  # nginx at https://mcp.autorelister.com.au. Talks to the API over the internal
+  # network and logs in with a service admin account.
+  mcp:
+    container_name: mcp
+    restart: unless-stopped
+    build:
+      context: ./mcp
+    environment:
+      - PORT=9090
+      - MCP_PUBLIC_URL=https://mcp.autorelister.com.au
+      - RELISTER_API_BASE=http://web:8000/api
+      - RELISTER_ADMIN_EMAIL=${MCP_ADMIN_EMAIL}
+      - RELISTER_ADMIN_PASSWORD=${MCP_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - internal_network
+    depends_on:
+      - web
+
 
 volumes:
   staticfiles:

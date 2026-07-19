@@ -1,0 +1,19 @@
+{
+  "name": "relister-mcp-host",
+  "version": "1.0.0",
+  "description": "Hosted Streamable-HTTP MCP server (with OAuth) for debugging Relister. Deployed at https://mcp.autorelister.com.au.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "zod": "^3.23.8"
+  }
+}
