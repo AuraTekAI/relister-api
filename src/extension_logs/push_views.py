@@ -106,10 +106,11 @@ def send_push(request):
     data = request.data if isinstance(request.data, dict) else {}
     target = data.get('target')
     ptype = data.get('type', 'message')
-    title = data.get('title') or ('Update available' if ptype == 'update' else 'Auto Relister')
+    _default_titles = {'update': 'Update available', 'open': 'Auto Relister'}
+    title = data.get('title') or _default_titles.get(ptype, 'Auto Relister')
     body = data.get('body') or ''
-    if ptype not in ('message', 'update'):
-        return Response({'success': False, 'error': 'type must be message or update'}, status=400)
+    if ptype not in ('message', 'update', 'open'):
+        return Response({'success': False, 'error': 'type must be message, update, or open'}, status=400)
 
     qs = PushSubscription.objects.all()
     if target != 'all':
