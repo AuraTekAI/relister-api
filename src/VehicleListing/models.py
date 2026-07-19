@@ -240,6 +240,36 @@ class UnpublishedListingSnapshot(models.Model):
         return f"{self.user_id}:{self.listing_id} {self.title} ({self.reason})"
 
 
+class ExtensionSyncStatus(models.Model):
+    """
+    One row per dealer, upserted by the extension on EVERY sync — including when
+    Facebook can't be loaded (verification wall, not logged in, rate limited).
+    This is what makes a dealer appear on the admin dashboard even when they have
+    zero Facebook listings, so operators can see WHICH dealers are broken and why.
+    """
+    STATUS_CHOICES = [
+        ('ok', 'OK'),
+        ('verification_required', 'Facebook verification required'),
+        ('fb_error', 'Facebook load error'),
+        ('rate_limited', 'Rate limited'),
+        ('no_facebook', 'Not logged in to Facebook'),
+    ]
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='ext_sync_status')
+    mode = models.CharField(max_length=32, choices=FacebookListingSnapshot.MODE_CHOICES, null=True, blank=True)
+    status = models.CharField(max_length=40, choices=STATUS_CHOICES, default='ok')
+    status_detail = models.CharField(max_length=255, null=True, blank=True)
+    fb_count = models.IntegerField(default=0)
+    unpublished_count = models.IntegerField(default=0)
+    extension_version = models.CharField(max_length=32, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['status', 'synced_at'])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.status} @ {self.synced_at:%Y-%m-%d %H:%M}"
+
+
 class Invoice(models.Model):
     STATUS_CHOICES = [
         ('paid', 'Paid'),

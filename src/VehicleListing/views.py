@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -20,7 +20,7 @@ import time
 import random   
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import F, Q, Count, IntegerField, Max
+from django.db.models import F, Q, Count, IntegerField, Max, Case, When, Value
 from django.db.models.functions import Cast
 from queue import Queue
 from django.conf import settings
@@ -2198,9 +2198,19 @@ def sync_facebook_listing_snapshot(request):
         return JsonResponse({'success': False, 'error': 'Invalid JSON body'}, status=400)
 
     mode = data.get('mode')
+    # `listings` is now OPTIONAL: the extension pushes status-only syncs when
+    # Facebook can't be loaded (verification wall / not logged in), so a dealer
+    # still reports in and shows on the dashboard with their error. Only replace
+    # the FB set when a listings array is actually provided.
     listings = data.get('listings')
-    if not isinstance(listings, list):
-        return JsonResponse({'success': False, 'error': '`listings` must be a list'}, status=400)
+    listings_present = isinstance(listings, list)
+
+    # Per-sync status (drives the dashboard's "which dealers are broken" view).
+    VALID_STATUSES = {c[0] for c in ExtensionSyncStatus.STATUS_CHOICES}
+    status = data.get('status')
+    status = status if status in VALID_STATUSES else 'ok'
+    status_detail = data.get('status_detail') or None
+    extension_version = data.get('extension_version') or None
 
     now = timezone.now()
     # Cache this user's VehicleListing ids so a bogus/foreign matched_listing_id can't
@@ -2210,7 +2220,7 @@ def sync_facebook_listing_snapshot(request):
     )
 
     rows = []
-    for item in listings:
+    for item in (listings if listings_present else []):
         if not isinstance(item, dict):
             continue
         fb_id = str(item.get('fb_listing_id') or '').strip()
@@ -2264,25 +2274,45 @@ def sync_facebook_listing_snapshot(request):
                 mode=(mode if mode in ('gumtree', 'customdomain') else None),
             ))
 
-    # Whole-set replace for this user (atomic).
+    # Whole-set replace for this user (atomic). FB / unpublished sets are only
+    # touched when their arrays were provided, so a status-only sync (FB failed)
+    # leaves the last-known-good listings intact and just updates the status.
     with transaction.atomic():
-        FacebookListingSnapshot.objects.filter(user=user).delete()
-        if rows:
-            FacebookListingSnapshot.objects.bulk_create(rows, batch_size=500)
+        if listings_present:
+            FacebookListingSnapshot.objects.filter(user=user).delete()
+            if rows:
+                FacebookListingSnapshot.objects.bulk_create(rows, batch_size=500)
         if unpublished_present:
             UnpublishedListingSnapshot.objects.filter(user=user).delete()
             if unpublished_rows:
                 UnpublishedListingSnapshot.objects.bulk_create(unpublished_rows, batch_size=500)
 
+        # Heartbeat/status row — upserted on EVERY sync so the dealer always shows.
+        fb_count = len(rows) if listings_present else FacebookListingSnapshot.objects.filter(user=user).count()
+        unpub_count = len(unpublished_rows) if unpublished_present else UnpublishedListingSnapshot.objects.filter(user=user).count()
+        ExtensionSyncStatus.objects.update_or_create(
+            user=user,
+            defaults={
+                'mode': (mode if mode in ('gumtree', 'customdomain') else None),
+                'status': status,
+                'status_detail': status_detail,
+                'fb_count': fb_count,
+                'unpublished_count': unpub_count,
+                'extension_version': extension_version,
+            },
+        )
+
     logger.info(
-        "fb-snapshot sync user=%s mode=%s saved=%s unpublished=%s",
-        getattr(user, 'email', user), mode, len(rows),
+        "fb-snapshot sync user=%s mode=%s status=%s saved=%s unpublished=%s",
+        getattr(user, 'email', user), mode, status,
+        len(rows) if listings_present else 'n/a',
         len(unpublished_rows) if unpublished_present else 'n/a',
     )
     return JsonResponse({
         'success': True,
-        'saved': len(rows),
+        'saved': len(rows) if listings_present else None,
         'unpublished_saved': len(unpublished_rows) if unpublished_present else None,
+        'status': status,
         'synced_at': now.isoformat(),
     }, status=200)
 
@@ -2326,20 +2356,33 @@ def get_facebook_listing_snapshots(request):
             Q(user__dealership_name__icontains=search)
         )
 
-    # Per-dealer summary over the filtered rows (ordered by most-aged).
-    summary_qs = (
-        base.values('user_id')
-        .annotate(
-            total=Count('id'),
-            aged=Count('id', filter=Q(is_aged=True)),
-            duplicates=Count('id', filter=Q(is_duplicate=True)),
-            matched=Count('id', filter=Q(matched_listing_id__isnull=False)),
-            last_synced=Max('synced_at'),
-        )
-        .order_by('-aged', 'user_id')
+    # Which dealers to list: ALL that have ever synced (ExtensionSyncStatus), so
+    # dealers with Facebook errors / zero listings still appear (with their
+    # status). When a listing-level filter is active (aged/duplicates/min_days),
+    # restrict to dealers that actually have matching Facebook rows.
+    listing_filters_active = (
+        request.GET.get('aged') in ('1', 'true', 'True')
+        or request.GET.get('duplicates') in ('1', 'true', 'True')
+        or bool(min_days and min_days > 0)
     )
+    status_qs = ExtensionSyncStatus.objects.select_related('user')
+    if user_id:
+        status_qs = status_qs.filter(user_id=user_id)
+    if search:
+        status_qs = status_qs.filter(
+            Q(user__email__icontains=search) |
+            Q(user__contact_person_name__icontains=search) |
+            Q(user__dealership_name__icontains=search)
+        )
+    if listing_filters_active:
+        matching_ids = list(base.values_list('user_id', flat=True).distinct())
+        status_qs = status_qs.filter(user_id__in=matching_ids)
+    # Broken dealers (status != ok) first, then most-recently synced.
+    status_qs = status_qs.annotate(
+        _err=Case(When(status='ok', then=Value(1)), default=Value(0), output_field=IntegerField())
+    ).order_by('_err', '-synced_at')
 
-    total_users = summary_qs.count()
+    total_users = status_qs.count()
     try:
         page = max(1, int(request.GET.get('page', '1')))
     except (ValueError, TypeError):
@@ -2350,26 +2393,21 @@ def get_facebook_listing_snapshots(request):
         page_size = 10
     total_pages = max(1, (total_users + page_size - 1) // page_size)
     start = (page - 1) * page_size
-    page_summary = list(summary_qs[start:start + page_size])
-    page_user_ids = [row['user_id'] for row in page_summary]
+    page_status = list(status_qs[start:start + page_size])
+    page_user_ids = [s.user_id for s in page_status]
 
     # Fetch listing rows only for the dealers on this page.
     listings_by_user = {}
-    user_by_id = {}
     if page_user_ids:
         rows = (
             base.filter(user_id__in=page_user_ids)
-            .select_related('user', 'matched_listing')
+            .select_related('matched_listing')
             .order_by('user_id', 'fb_published_at')
         )
         for s in rows:
             listings_by_user.setdefault(s.user_id, []).append(s)
-            if s.user_id not in user_by_id:
-                user_by_id[s.user_id] = s.user
 
-    # Unpublished (not-on-Facebook) listings for the dealers on this page. Not
-    # affected by the aged/duplicates/min_days FB-listing filters — those narrow
-    # which dealers appear, but a dealer's full unpublished set is always shown.
+    # Unpublished (not-on-Facebook) listings for the dealers on this page.
     unpublished_by_user = {}
     if page_user_ids:
         up_rows = (
@@ -2381,20 +2419,23 @@ def get_facebook_listing_snapshots(request):
             unpublished_by_user.setdefault(u.user_id, []).append(u)
 
     results = []
-    for row in page_summary:
-        uid = row['user_id']
-        user_obj = user_by_id.get(uid)
+    for st in page_status:
+        uid = st.user_id
+        user_obj = st.user
         rows = listings_by_user.get(uid, [])
         results.append({
             'user_id': uid,
             'email': getattr(user_obj, 'email', None),
             'name': (getattr(user_obj, 'contact_person_name', None) or getattr(user_obj, 'dealership_name', None)),
-            'mode': rows[0].mode if rows else None,
-            'last_synced_at': row['last_synced'].isoformat() if row['last_synced'] else None,
-            'total': row['total'],
-            'aged': row['aged'],
-            'duplicates': row['duplicates'],
-            'matched': row['matched'],
+            'mode': st.mode or (rows[0].mode if rows else None),
+            'last_synced_at': st.synced_at.isoformat() if st.synced_at else None,
+            'status': st.status,
+            'status_detail': st.status_detail,
+            'extension_version': st.extension_version,
+            'total': len(rows),
+            'aged': sum(1 for s in rows if s.is_aged),
+            'duplicates': sum(1 for s in rows if s.is_duplicate),
+            'matched': sum(1 for s in rows if s.matched_listing_id),
             'listings': [{
                 'fb_listing_id': s.fb_listing_id,
                 'fb_url': s.fb_url,

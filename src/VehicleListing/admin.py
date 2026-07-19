@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
 from .utils import reactivate_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
@@ -86,3 +86,11 @@ class UnpublishedListingSnapshotAdmin(admin.ModelAdmin):
     list_filter = ('user', 'mode', 'reason')
 
 admin.site.register(UnpublishedListingSnapshot, UnpublishedListingSnapshotAdmin)
+
+
+class ExtensionSyncStatusAdmin(admin.ModelAdmin):
+    list_display = ('user', 'status', 'status_detail', 'fb_count', 'unpublished_count', 'mode', 'extension_version', 'synced_at')
+    search_fields = ('user__email',)
+    list_filter = ('status', 'mode')
+
+admin.site.register(ExtensionSyncStatus, ExtensionSyncStatusAdmin)
