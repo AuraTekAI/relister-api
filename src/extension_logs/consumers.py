@@ -38,6 +38,7 @@ KNOWN_COMMANDS = {
     "report_status",     # ask the extension to emit its current status
     "set_log_stream",    # payload: { on: bool } — start/stop live log streaming
     "refresh",           # re-push the FB + unpublished snapshot so the admin sees latest
+    "cancel",            # abort the running remote action + pause auto-processing
 }
 
 
@@ -116,7 +117,7 @@ class ExtensionControlConsumer(AsyncWebsocketConsumer):
                 "by": getattr(self.user, "email", None),
             })
         else:  # extension → observers
-            if msg.get("type") in ("log", "ack", "status", "presence", "snapshot_pushed"):
+            if msg.get("type") in ("log", "ack", "status", "presence", "snapshot_pushed", "activity"):
                 await self._to_observers(msg)
 
     # ── group fan-out helpers ────────────────────────────────────────────────
