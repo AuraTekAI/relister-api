@@ -84,18 +84,19 @@ services:
     restart: unless-stopped
     build:
       context: ./mcp
-    # Reaches the API through the host gateway (host :8000 → compose nginx → web),
-    # so it does not need to join the app's internal network.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       - PORT=9090
       - MCP_PUBLIC_URL=https://mcp.autorelister.com.au
-      - RELISTER_API_BASE=http://host.docker.internal:8000/api
+      - RELISTER_API_BASE=http://web:8000/api
       - RELISTER_ADMIN_EMAIL=${MCP_ADMIN_EMAIL}
       - RELISTER_ADMIN_PASSWORD=${MCP_ADMIN_PASSWORD}
     ports:
       - "127.0.0.1:9090:9090"
+    # Join the app's ACTUAL running network (by its real name) so it can reach the
+    # `web` service directly. The file's `internal_network` is mis-declared as an
+    # external overlay, so we reference the concrete bridge instead.
+    networks:
+      - appnet
 
 
 volumes:
@@ -106,3 +107,6 @@ networks:
   internal_network:
     driver: overlay
     external: true
+  appnet:
+    external: true
+    name: relister-api_internal_network
