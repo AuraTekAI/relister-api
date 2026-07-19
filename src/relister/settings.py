@@ -268,16 +268,17 @@ CORS_ALLOW_METHODS = [
 # websocket router. The channel layer uses the same Redis that Celery/cache use,
 # on a dedicated DB index so control messages never collide with other keys.
 ASGI_APPLICATION = "relister.asgi.application"
+# Connect the channel layer EXACTLY like the cache does — via REDIS_URL, a plain
+# redis:// URL with NO auth. The local Redis has no password (cache/Celery use
+# REDIS_URL, not REDIS_PASSWORD); passing REDIS_PASSWORD here made every WS
+# connect fail with "AUTH called without any password configured". A dedicated DB
+# index (default 3) keeps control-channel keys isolated from cache/Celery.
+CHANNELS_REDIS_URL = REDIS_URL.rstrip("/") + "/" + str(env.int("CHANNELS_REDIS_DB", default=3))
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [{
-                "host": REDIS_HOST,
-                "port": int(REDIS_PORT),
-                "password": (REDIS_PASSWORD or None),
-                "db": env.int("CHANNELS_REDIS_DB", default=3),
-            }],
+            "hosts": [CHANNELS_REDIS_URL],
         },
     },
 }
