@@ -31,6 +31,7 @@ KNOWN_COMMANDS = {
     "start_auto",        # resume auto-processing
     "override_auto",     # force a fresh auto-processing run now
     "remove_duplicates", # run the duplicate-removal pass now
+    "delete_all",        # delete every current Facebook listing (destructive)
     "delete_listing",    # payload: { fb_listing_id | listing_id }
     "relist_listing",    # payload: { fb_listing_id | listing_id }
     "republish_listing", # payload: { listing_id }
