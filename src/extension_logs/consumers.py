@@ -36,6 +36,7 @@ KNOWN_COMMANDS = {
     "republish_listing", # payload: { listing_id }
     "report_status",     # ask the extension to emit its current status
     "set_log_stream",    # payload: { on: bool } — start/stop live log streaming
+    "refresh",           # re-push the FB + unpublished snapshot so the admin sees latest
 }
 
 
