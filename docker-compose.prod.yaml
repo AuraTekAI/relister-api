@@ -105,9 +105,14 @@ volumes:
   log_files:
 
 networks:
+  # The real running network is the compose-managed bridge
+  # `relister-api_internal_network`. The file previously mis-declared this as an
+  # external overlay named `internal_network`, which doesn't exist — so any
+  # `docker compose up` (recreate) failed with "network ... could not be found".
+  # Point it at the actual network so services attach to the existing one.
   internal_network:
-    driver: overlay
     external: true
+    name: relister-api_internal_network
   appnet:
     external: true
     name: relister-api_internal_network
