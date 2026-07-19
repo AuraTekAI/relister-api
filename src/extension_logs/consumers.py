@@ -39,7 +39,15 @@ KNOWN_COMMANDS = {
     "set_log_stream",    # payload: { on: bool } — start/stop live log streaming
     "refresh",           # re-push the FB + unpublished snapshot so the admin sees latest
     "cancel",            # abort the running remote action + pause auto-processing
+    "start_video",       # begin WebRTC screen capture of the working tab
+    "stop_video",        # stop WebRTC screen capture
 }
+
+# WebRTC signaling messages relayed between the admin (viewer) and the extension
+# (capturer). Direction is enforced by role: the admin's answer/ICE go to the
+# extension; the extension's offer/ICE go to the observers.
+ADMIN_TO_EXT_SIGNALS = ("webrtc_answer", "webrtc_ice", "webrtc_stop")
+EXT_TO_OBS_SIGNALS = ("webrtc_offer", "webrtc_ice", "webrtc_stop")
 
 
 class ExtensionControlConsumer(AsyncWebsocketConsumer):
@@ -99,7 +107,12 @@ class ExtensionControlConsumer(AsyncWebsocketConsumer):
             return
 
         if self.role == "admin":
-            if msg.get("type") != "command":
+            mtype = msg.get("type")
+            # WebRTC signaling from the viewer → forward straight to the extension.
+            if mtype in ADMIN_TO_EXT_SIGNALS:
+                await self._to_extension(msg)
+                return
+            if mtype != "command":
                 return
             command = msg.get("command")
             if command not in KNOWN_COMMANDS:
@@ -117,7 +130,8 @@ class ExtensionControlConsumer(AsyncWebsocketConsumer):
                 "by": getattr(self.user, "email", None),
             })
         else:  # extension → observers
-            if msg.get("type") in ("log", "ack", "status", "presence", "snapshot_pushed", "activity"):
+            mtype = msg.get("type")
+            if mtype in ("log", "ack", "status", "presence", "snapshot_pushed", "activity") or mtype in EXT_TO_OBS_SIGNALS:
                 await self._to_observers(msg)
 
     # ── group fan-out helpers ────────────────────────────────────────────────
