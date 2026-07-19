@@ -121,12 +121,26 @@ The prod box runs the stack in Docker (`~/relister-api`, `docker compose`), behi
 `web`/celery/beat/redis containers on the internal network and `web` published on
 `127.0.0.1:8000`. React app + extension are static under `/var/www/autorelister/`.
 
-**1. Redis must expose ≥4 databases.** The channel layer uses Redis DB index 3
-(`CHANNELS_REDIS_DB`, default 3). Redis was started with `--databases 2` (only DB
-0–1), which made every WS connect throw `redis.exceptions.ResponseError: DB index
-is out of range` and the socket fail. Fix: the redis `command:` in all three
-compose files now uses `--databases 16`. If you change `CHANNELS_REDIS_DB`, keep
-it `< --databases`.
+**1. Redis — three things had to be right (each caused every WS to fail):**
+
+  a. **≥4 databases.** The channel layer uses Redis DB index 3
+     (`CHANNELS_REDIS_DB`, default 3). Redis started with `--databases 2` (only DB
+     0–1) → `redis.exceptions.ResponseError: DB index is out of range`. Fixed: the
+     redis `command:` in all compose files uses `--databases 16`. Keep
+     `CHANNELS_REDIS_DB < --databases`.
+
+  b. **No AUTH.** The local redis has no password (cache/Celery connect via
+     `REDIS_URL`, not `REDIS_PASSWORD`). Passing `REDIS_PASSWORD` to the channel
+     layer → `AuthenticationError: AUTH called without any password configured`
+     and the connect 500'd. Fixed: `CHANNEL_LAYERS` connects via `REDIS_URL`
+     (`redis://redis:6379/<CHANNELS_REDIS_DB>`), exactly like the cache — no
+     password.
+
+  c. **redis-py must be 5.0.x.** `channels-redis==4.2.0` is incompatible with
+     redis-py 8.x (its async read-timeout cancels the channel layer's blocking
+     receive → each WS drops after ~5–10s with `CancelledError`/`TimeoutError`).
+     `requirements.txt` pins `redis==5.0.8`. Rebuild the image after changing it
+     (a hot `pip install` is lost on container recreate).
 
 **2. ASGI server.** All three compose files run
 `gunicorn --workers 2 -k uvicorn.workers.UvicornWorker relister.asgi:application`
