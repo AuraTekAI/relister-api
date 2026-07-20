@@ -12,7 +12,7 @@ services:
     env_file:
       - ./src/.env
     command: >
-      sh -c "python /app/src/manage.py runserver 0.0.0.0:8000"
+      sh -c "PYTHONPATH=/app/src gunicorn --workers 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 relister.asgi:application"
     networks:
       - internal_network
     depends_on:
@@ -24,7 +24,7 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
-    command: redis-server --databases 2 --replica-read-only no
+    command: redis-server --databases 16 --replica-read-only no
     healthcheck:
       test:
         - CMD

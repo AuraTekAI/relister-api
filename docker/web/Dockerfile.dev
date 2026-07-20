@@ -1,6 +1,8 @@
 # Use the official Python 3.12 slim image as the base image.
-# The slim version is a minimal Docker image that reduces the overall size of the container.
-FROM python:3.12-slim
+# Pinned to bookworm (Debian 12): the bare `slim` tag now floats to Debian trixie
+# (13), whose t64 library renames break the Chromium apt deps below. Bookworm is
+# stable, matches the currently-deployed image, and is officially Playwright-supported.
+FROM python:3.12-slim-bookworm
 
 # Set environment variables to control Python behavior inside the Docker container.
 # PYTHONDOWNWRITEBYTECODE=1 prevents Python from writing .pyc files, which can save space.
@@ -54,8 +56,24 @@ RUN python -m venv /py && \
 # Add the virtual environment's bin directory to the PATH environment variable.
 # This ensures that when you run Python or pip commands, they use the executables from the virtual environment.
 ENV PATH="/py/bin:$PATH"
-# Install Playwright & its dependencies
-RUN playwright install --with-deps
+
+# Install Playwright's Chromium (used by the buckinghamautos custom-domain adapter).
+# NOTE: `playwright install --with-deps` mis-detects this Debian-slim base as
+# Ubuntu 20.04 and tries to apt-get Ubuntu-only package names (libicu66, libvpx6,
+# libwebp6, libx264-155, …) that don't exist on Debian, which fails the build. So
+# we install the correct Debian deps ourselves, then fetch just the Chromium
+# binary. Browsers go to a shared path so the non-root 'user' can read them at
+# runtime (PLAYWRIGHT_BROWSERS_PATH persists into the running container).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+      libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+      libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+      libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 fonts-liberation && \
+    playwright install chromium && \
+    chmod -R a+rX /ms-playwright && \
+    rm -rf /var/lib/apt/lists/*
+
 # Switch to the 'user' account created earlier to run the application.
 # This enhances security by avoiding running the application as the root user.
 USER user

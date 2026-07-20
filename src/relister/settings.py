@@ -28,6 +28,10 @@ else:
 
 # Application definition
 INSTALLED_APPS = [
+    # Daphne must come first so `runserver` uses the ASGI/Channels server
+    # (enables websockets in development). Production runs daphne/uvicorn directly.
+    "daphne",
+
     # Pre installed apps
     "django.contrib.admin",
     "django.contrib.auth",
@@ -52,7 +56,8 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'django_filters',
-    
+    "channels",
+
 ]
 
 MIDDLEWARE = [
@@ -258,6 +263,26 @@ CORS_ALLOW_METHODS = [
     "PUT",
 ]
 
+# ── Channels (websocket real-time extension control) ──────────────────────────
+# The ASGI app (relister.asgi.application) wraps Django's HTTP handler with a
+# websocket router. The channel layer uses the same Redis that Celery/cache use,
+# on a dedicated DB index so control messages never collide with other keys.
+ASGI_APPLICATION = "relister.asgi.application"
+# Connect the channel layer EXACTLY like the cache does — via REDIS_URL, a plain
+# redis:// URL with NO auth. The local Redis has no password (cache/Celery use
+# REDIS_URL, not REDIS_PASSWORD); passing REDIS_PASSWORD here made every WS
+# connect fail with "AUTH called without any password configured". A dedicated DB
+# index (default 3) keeps control-channel keys isolated from cache/Celery.
+CHANNELS_REDIS_URL = REDIS_URL.rstrip("/") + "/" + str(env.int("CHANNELS_REDIS_DB", default=3))
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [CHANNELS_REDIS_URL],
+        },
+    },
+}
+
 # Optional: If you need to allow specific headers
 CORS_ALLOW_HEADERS = [
     "accept",
@@ -390,5 +415,11 @@ SIMPLE_DELAY_START_TIME = int(env('SIMPLE_DELAY_START_TIME'))
 SIMPLE_DELAY_END_TIME = int(env('SIMPLE_DELAY_END_TIME'))
 DELAY_START_TIME_FOR_LOADING_PAGE = int(env('DELAY_START_TIME_FOR_LOADING_PAGE'))
 DELAY_END_TIME_FOR_LOADING_PAGE = int(env('DELAY_END_TIME_FOR_LOADING_PAGE'))
+
+# ── Web Push (VAPID) ────────────────────────────────────────────────────────
+# Private key must never be committed — set both in .env on the server.
+VAPID_PUBLIC_KEY = env('VAPID_PUBLIC_KEY', default='')
+VAPID_PRIVATE_KEY = env('VAPID_PRIVATE_KEY', default='')
+VAPID_SUBJECT = env('VAPID_SUBJECT', default='mailto:support@autorelister.com.au')
 
 

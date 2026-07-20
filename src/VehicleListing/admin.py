@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
 from .utils import reactivate_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
@@ -70,3 +70,27 @@ admin.site.register(GumtreeProfileListing, GumtreeProfileListingAdmin)
 admin.site.register(CustomDomainProfileListing, CustomDomainProfileListingAdmin)
 admin.site.register(FacebookProfileListing, FacebookProfileListingAdmin)
 admin.site.register(RelistingFacebooklisting,RelistingFacebooklistingAdmin)
+
+
+class FacebookListingSnapshotAdmin(admin.ModelAdmin):
+    list_display = ('user', 'fb_listing_id', 'title', 'price', 'fb_published_at', 'days_on_facebook', 'is_aged', 'is_duplicate', 'duplicate_count', 'matched_listing', 'mode', 'synced_at')
+    search_fields = ('user__email', 'fb_listing_id', 'title')
+    list_filter = ('user', 'mode', 'is_aged', 'is_duplicate')
+
+admin.site.register(FacebookListingSnapshot, FacebookListingSnapshotAdmin)
+
+
+class UnpublishedListingSnapshotAdmin(admin.ModelAdmin):
+    list_display = ('user', 'listing', 'title', 'price', 'images_count', 'reason', 'reason_detail', 'mode', 'synced_at')
+    search_fields = ('user__email', 'title')
+    list_filter = ('user', 'mode', 'reason')
+
+admin.site.register(UnpublishedListingSnapshot, UnpublishedListingSnapshotAdmin)
+
+
+class ExtensionSyncStatusAdmin(admin.ModelAdmin):
+    list_display = ('user', 'status', 'status_detail', 'fb_count', 'unpublished_count', 'mode', 'extension_version', 'synced_at')
+    search_fields = ('user__email',)
+    list_filter = ('status', 'mode')
+
+admin.site.register(ExtensionSyncStatus, ExtensionSyncStatusAdmin)

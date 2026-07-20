@@ -152,7 +152,123 @@ class RelistingFacebooklisting(models.Model):
 
     def __str__(self):
         return f"{self.listing.make} {self.listing.model}"
-    
+
+
+class FacebookListingSnapshot(models.Model):
+    """
+    Latest snapshot of a user's LIVE Facebook Marketplace listings, pushed by the
+    browser extension roughly every hour while it is running (gumtree + custom-domain
+    modes). One row per (user, fb_listing_id); the whole set for a user is replaced
+    on each sync. Powers the admin dashboard: which FB listings exist, how long since
+    each was published on Facebook, which backend VehicleListing it matches, whether
+    it is aged (older than the relist threshold), and duplicates.
+    """
+    MODE_CHOICES = [
+        ('gumtree', 'Gumtree'),
+        ('customdomain', 'Custom Domain'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fb_snapshots')
+    fb_listing_id = models.CharField(max_length=64)
+    fb_url = models.URLField(max_length=500, null=True, blank=True)
+    title = models.CharField(max_length=500, null=True, blank=True)
+    price = models.CharField(max_length=64, null=True, blank=True)
+    # When the CURRENT Facebook listing was published (Facebook's own creationTime).
+    fb_published_at = models.DateTimeField(null=True, blank=True)
+    days_on_facebook = models.IntegerField(null=True, blank=True)
+    # The backend VehicleListing this FB listing is matched to (null if unmatched).
+    matched_listing = models.ForeignKey(
+        VehicleListing, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='fb_snapshots'
+    )
+    is_aged = models.BooleanField(default=False)      # older than the relist threshold
+    is_duplicate = models.BooleanField(default=False) # part of a same-title duplicate group
+    duplicate_count = models.IntegerField(default=1)  # how many FB listings share this title
+    mode = models.CharField(max_length=32, choices=MODE_CHOICES, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'fb_listing_id')
+        indexes = [
+            models.Index(fields=['user', 'synced_at']),
+            models.Index(fields=['user', 'is_aged']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.fb_listing_id} {self.title}"
+
+
+class UnpublishedListingSnapshot(models.Model):
+    """
+    Backend VehicleListings that are NOT currently on Facebook, together with the
+    EXACT reason the extension skipped or couldn't publish them, pushed by the
+    extension alongside the Facebook snapshot. Whole-set replace per user on each
+    sync (mirrors FacebookListingSnapshot). Powers the admin dashboard's
+    "which listings are not published — and why" view.
+    """
+    REASON_CHOICES = [
+        ('SOLD', 'Sold on source'),
+        ('INSUFFICIENT_IMAGES', 'Fewer than 2 images'),
+        ('LOCATION_MISSING', 'No dealer location'),
+        ('FAILED_HIDDEN', 'Failed repeatedly — hidden'),
+        ('FAILED_COOLDOWN', 'In failure cooldown'),
+        ('QUOTA_REACHED', 'Daily publish limit reached'),
+        ('PENDING', 'Queued — not yet published'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='unpublished_snapshots')
+    # The backend VehicleListing that isn't on Facebook. SET_NULL so a deleted
+    # listing doesn't drop the (already stale-by-next-sync) snapshot row mid-cycle.
+    listing = models.ForeignKey(
+        VehicleListing, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='unpublished_snapshots'
+    )
+    title = models.CharField(max_length=500, null=True, blank=True)
+    price = models.CharField(max_length=64, null=True, blank=True)
+    images_count = models.IntegerField(default=0)
+    # Machine reason code (see REASON_CHOICES) + a human-readable detail string.
+    reason = models.CharField(max_length=40, choices=REASON_CHOICES, null=True, blank=True)
+    reason_detail = models.CharField(max_length=255, null=True, blank=True)
+    mode = models.CharField(max_length=32, choices=FacebookListingSnapshot.MODE_CHOICES, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'synced_at']),
+            models.Index(fields=['user', 'reason']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.listing_id} {self.title} ({self.reason})"
+
+
+class ExtensionSyncStatus(models.Model):
+    """
+    One row per dealer, upserted by the extension on EVERY sync — including when
+    Facebook can't be loaded (verification wall, not logged in, rate limited).
+    This is what makes a dealer appear on the admin dashboard even when they have
+    zero Facebook listings, so operators can see WHICH dealers are broken and why.
+    """
+    STATUS_CHOICES = [
+        ('ok', 'OK'),
+        ('verification_required', 'Facebook verification required'),
+        ('fb_error', 'Facebook load error'),
+        ('rate_limited', 'Rate limited'),
+        ('no_facebook', 'Not logged in to Facebook'),
+    ]
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='ext_sync_status')
+    mode = models.CharField(max_length=32, choices=FacebookListingSnapshot.MODE_CHOICES, null=True, blank=True)
+    status = models.CharField(max_length=40, choices=STATUS_CHOICES, default='ok')
+    status_detail = models.CharField(max_length=255, null=True, blank=True)
+    fb_count = models.IntegerField(default=0)
+    unpublished_count = models.IntegerField(default=0)
+    extension_version = models.CharField(max_length=32, null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['status', 'synced_at'])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.status} @ {self.synced_at:%Y-%m-%d %H:%M}"
+
 
 class Invoice(models.Model):
     STATUS_CHOICES = [

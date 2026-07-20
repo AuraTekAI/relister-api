@@ -25,3 +25,13 @@ playwright==1.49.1
 openpyxl==3.1.5
 stripe>=8.0.0
 boto3>=1.34.0
+channels==4.1.0
+channels-redis==4.2.0
+daphne==4.1.2
+uvicorn[standard]==0.30.6
+# Pin redis-py: channels-redis 4.2.0 is incompatible with redis-py 8.x (its async
+# read-timeout cancels the channel layer's blocking receive → WS drops every few
+# seconds). 5.0.x is the known-good pairing (also fine for django-redis/celery).
+redis==5.0.8
+# Web Push (VAPID) sending
+pywebpush==2.0.0

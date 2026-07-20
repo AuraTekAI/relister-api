@@ -17,6 +17,8 @@ from .views import (
     get_popular_vehicles,
     search_products,
     get_top_dealers,
+    sync_facebook_listing_snapshot,
+    get_facebook_listing_snapshots,
 )
 
 urlpatterns = [
@@ -44,6 +46,8 @@ urlpatterns = [
     path('mark-changed/', update_vehicle_listing_is_changed, name='update_vehicle_listing_is_changed'),
     path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
+    path('fb-snapshot/', sync_facebook_listing_snapshot, name='sync_facebook_listing_snapshot'),
+    path('fb-snapshots/', get_facebook_listing_snapshots, name='get_facebook_listing_snapshots'),
     path('verify-active/', verify_listing_active, name='verify_listing_active'),
     path('products/', get_all_products, name='get_all_products'),
     path('categories/<str:category>/', get_products_by_category, name='get_products_by_category'),

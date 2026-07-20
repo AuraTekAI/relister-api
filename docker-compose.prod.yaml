@@ -8,12 +8,17 @@ services:
     env_file:
       - ./src/.env
     volumes:
+      # Mount the source so `git pull` + restart deploys code changes instantly —
+      # no image rebuild needed for Python changes (the image only needs rebuilding
+      # when requirements.txt / the Dockerfile change). staticfiles + .env stay as
+      # nested mounts on top.
+      - ./src:/app/src
       - staticfiles:/app/src/staticfiles
       - ./src/.env:/app/src/.env
     command: >
       sh -c "python /app/src/manage.py wait_for_db &&
              python /app/src/manage.py collectstatic --no-input &&
-             PYTHONPATH=/app/src gunicorn --workers 2 --bind 0.0.0.0:8000 relister.wsgi:application"
+             PYTHONPATH=/app/src gunicorn --workers 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 relister.asgi:application"
     networks:
       - internal_network
     depends_on:
@@ -25,7 +30,7 @@ services:
     image: redis:alpine
     ports:
       - "6379:6379"
-    command: redis-server --save 60 1 --appendonly yes --databases 2
+    command: redis-server --save 60 1 --appendonly yes --databases 16
     healthcheck:
       test:
         - CMD
@@ -76,12 +81,43 @@ services:
     depends_on:
       - web
 
+  # Hosted debug MCP server (remote/Streamable-HTTP + OAuth), fronted by the host
+  # nginx at https://mcp.autorelister.com.au. Talks to the API over the internal
+  # network and logs in with a service admin account.
+  mcp:
+    container_name: mcp
+    restart: unless-stopped
+    build:
+      context: ./mcp
+    environment:
+      - PORT=9090
+      - MCP_PUBLIC_URL=https://mcp.autorelister.com.au
+      - RELISTER_API_BASE=http://web:8000/api
+      - RELISTER_API_HOST=api.autorelister.com.au
+      - RELISTER_ADMIN_EMAIL=${MCP_ADMIN_EMAIL}
+      - RELISTER_ADMIN_PASSWORD=${MCP_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:9090:9090"
+    # Join the app's ACTUAL running network (by its real name) so it can reach the
+    # `web` service directly. The file's `internal_network` is mis-declared as an
+    # external overlay, so we reference the concrete bridge instead.
+    networks:
+      - appnet
+
 
 volumes:
   staticfiles:
   log_files:
 
 networks:
+  # The real running network is the compose-managed bridge
+  # `relister-api_internal_network`. The file previously mis-declared this as an
+  # external overlay named `internal_network`, which doesn't exist — so any
+  # `docker compose up` (recreate) failed with "network ... could not be found".
+  # Point it at the actual network so services attach to the existing one.
   internal_network:
-    driver: overlay
     external: true
+    name: relister-api_internal_network
+  appnet:
+    external: true
+    name: relister-api_internal_network
