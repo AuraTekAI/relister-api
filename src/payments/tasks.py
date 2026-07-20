@@ -685,3 +685,102 @@ def generate_listing_overage_invoice_from_webhook(subscription_id, stripe_invoic
         vehicle_listing_id=vehicle_listing_id,
         paid=paid,
     )
+
+
+@shared_task(bind=True, queue='scheduling_queue')
+def report_active_overage_usage(self, dry_run=None):
+    """
+    Overage billing — active-listings-over-quota, metered once per period.
+
+    For every active subscription, compute how many LIVE Facebook listings the
+    dealer currently has above their plan quota, and report that number to Stripe
+    as the metered usage on the subscription's overage item.
+
+    Anti-overcharge design (deliberate):
+      • Uses action='set' (ABSOLUTE) — re-running only overwrites the current
+        value, so it can never accumulate or double-charge. If a dealer drops back
+        under quota, we set 0 and they aren't billed.
+      • overage = max(0, active - quota) — never charges within quota.
+      • Only acts on a FRESH, status=='ok' extension snapshot — never bills off
+        stale/broken/zero Facebook data.
+      • Sanity cap — an absurd snapshot count can't trigger a runaway charge.
+      • Dry-run by default (OVERAGE_BILLING_DRYRUN): logs exactly what WOULD be
+        reported, makes no Stripe calls, until explicitly switched to live.
+    """
+    from payments.models import Subscription
+    from VehicleListing.models import ExtensionSyncStatus
+
+    if dry_run is None:
+        dry_run = getattr(settings, 'OVERAGE_BILLING_DRYRUN', True)
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    now = timezone.now()
+    FRESH_HOURS = 48
+    SANITY_MAX_OVERAGE = 2000  # no legitimate dealer is >2000 over quota
+
+    subs = (Subscription.objects
+            .select_related('plan', 'user')
+            .filter(status__in=['active', 'past_due']))
+
+    summary = {'checked': 0, 'reported': 0, 'zero_reported': 0,
+               'skipped_no_quota': 0, 'skipped_no_snapshot': 0, 'skipped_not_ok': 0,
+               'skipped_stale': 0, 'skipped_no_item': 0, 'skipped_absurd': 0, 'errors': 0}
+    lines = []
+    mode = 'DRY-RUN' if dry_run else 'LIVE'
+
+    for sub in subs:
+        summary['checked'] += 1
+        plan = sub.plan
+        if not plan or plan.listing_quota is None:
+            summary['skipped_no_quota'] += 1
+            continue
+
+        sync = ExtensionSyncStatus.objects.filter(user=sub.user).first()
+        if not sync:
+            summary['skipped_no_snapshot'] += 1
+            continue
+        if sync.status != 'ok':
+            summary['skipped_not_ok'] += 1
+            continue
+        if not sync.synced_at or sync.synced_at < now - timedelta(hours=FRESH_HOURS):
+            summary['skipped_stale'] += 1
+            continue
+
+        active = int(sync.fb_count or 0)
+        overage = max(0, active - int(plan.listing_quota))
+        if overage > SANITY_MAX_OVERAGE:
+            summary['skipped_absurd'] += 1
+            logger.warning(f"[overage] {mode} user={sub.user_id} absurd overage={overage} (active={active}) — skipping")
+            continue
+
+        lines.append(f"user={sub.user_id} email={sub.user.email} plan={plan.name!r} "
+                     f"active={active} quota={plan.listing_quota} overage={overage} "
+                     f"rate_aud={plan.overage_rate_aud}")
+
+        if dry_run:
+            continue
+
+        item = sub.stripe_overage_subscription_item_id
+        if not item:
+            # No metered item on the Stripe subscription → nothing to bill against.
+            if overage > 0:
+                summary['skipped_no_item'] += 1
+                logger.warning(f"[overage] LIVE user={sub.user_id} has overage={overage} but no metered subscription item — skipping (needs overage item on Stripe sub)")
+            continue
+
+        try:
+            stripe.SubscriptionItem.create_usage_record(
+                item,
+                quantity=int(overage),
+                timestamp=int(now.timestamp()),
+                action='set',   # ABSOLUTE — overwrites, never accumulates
+            )
+            summary['reported' if overage > 0 else 'zero_reported'] += 1
+        except Exception as e:  # noqa: BLE001
+            summary['errors'] += 1
+            logger.error(f"[overage] LIVE user={sub.user_id} usage report failed: {e}")
+
+    logger.info(f"[overage] {mode} run @ {now.isoformat()} summary={summary}")
+    for ln in lines:
+        logger.info(f"[overage] {mode} {ln}")
+    return {'mode': mode, 'summary': summary, 'lines': lines}

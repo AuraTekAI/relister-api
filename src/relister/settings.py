@@ -416,6 +416,11 @@ SIMPLE_DELAY_END_TIME = int(env('SIMPLE_DELAY_END_TIME'))
 DELAY_START_TIME_FOR_LOADING_PAGE = int(env('DELAY_START_TIME_FOR_LOADING_PAGE'))
 DELAY_END_TIME_FOR_LOADING_PAGE = int(env('DELAY_END_TIME_FOR_LOADING_PAGE'))
 
+# ── Overage billing ─────────────────────────────────────────────────────────
+# When True (default), the daily overage task only LOGS what it would charge and
+# makes NO Stripe calls. Set OVERAGE_BILLING_DRYRUN=False in .env to go live.
+OVERAGE_BILLING_DRYRUN = env.bool('OVERAGE_BILLING_DRYRUN', default=True)
+
 # ── Web Push (VAPID) ────────────────────────────────────────────────────────
 # Private key must never be committed — set both in .env on the server.
 VAPID_PUBLIC_KEY = env('VAPID_PUBLIC_KEY', default='')

@@ -1362,24 +1362,12 @@ def update_vehicle_listing_listed_on(request):
                 vehicle_listing.is_changed = bool(is_changed)
             vehicle_listing.save()
 
-        # Metered overage: first-time listing that exceeds plan quota → Stripe charge + invoice (async).
-        if was_first_listing:
-            try:
-                request.user.refresh_from_db()
-                listing_after = VehicleListing.objects.filter(pk=vehicle_listing_id).only('stripe_overage_reported').first()
-                if listing_after and not listing_after.stripe_overage_reported:
-                    from payments.models import Subscription
-                    sub = Subscription.objects.select_related('plan').filter(user=request.user).first()
-                    if (
-                        sub
-                        and sub.plan
-                        and sub.plan.listing_quota is not None
-                        and request.user.listing_count > sub.plan.listing_quota
-                    ):
-                        from payments.tasks import report_listing_overage_metered
-                        report_listing_overage_metered.delay(sub.id, vehicle_listing_id)
-            except Exception as exc:
-                logger.warning(f"update_vehicle_listing_listed_on: could not queue overage billing: {exc}")
+        # NOTE: per-listing overage billing has been RETIRED. Overage is now billed
+        # as an active-listings-over-quota metered quantity, reported to Stripe once
+        # per period by payments.tasks.report_active_overage_usage (daily beat task).
+        # Charging here per first-time publish as well would double-bill, so the old
+        # report_listing_overage_metered trigger is intentionally removed. The
+        # listing_count increment above is kept for analytics/quota display only.
 
         # Return success responsea
         return JsonResponse({
