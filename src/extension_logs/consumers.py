@@ -41,6 +41,15 @@ KNOWN_COMMANDS = {
     "cancel",            # abort the running remote action + pause auto-processing
     "start_video",       # begin WebRTC screen capture of the working tab
     "stop_video",        # stop WebRTC screen capture
+    "close_extension",   # close the side panel / dashboard tab (goes offline)
+    # Bulk / maintenance actions (extension registers handlers for all of these;
+    # they were previously missing here and so got rejected at the edge).
+    "reload_extension",  # chrome.runtime.reload()
+    "relist_all",        # relist every current Facebook listing
+    "relist_aged",       # relist only aged listings
+    "delete_aged",       # delete only aged listings
+    "delete_unmatched",  # delete FB listings with no backend match
+    "publish_unpublished",  # publish every backend listing not yet on FB
 }
 
 # WebRTC signaling messages relayed between the admin (viewer) and the extension
