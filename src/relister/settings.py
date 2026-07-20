@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'zip_manager',
     'extension_logs',
     'team_alerts',
+    'blog',
 
     # Third party apps
     "django_celery_beat",
