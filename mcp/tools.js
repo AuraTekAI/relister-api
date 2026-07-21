@@ -99,7 +99,7 @@ const dealerParam = (dealer) => {
 const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = (msg) => ({ isError: true, content: [{ type: 'text', text: `❌ ${msg}` }] });
 
-const COMMANDS = ['stop_auto', 'start_auto', 'override_auto', 'remove_duplicates', 'delete_all', 'delete_listing', 'relist_listing', 'republish_listing', 'report_status', 'refresh', 'cancel', 'start_video', 'stop_video'];
+const COMMANDS = ['stop_auto', 'start_auto', 'override_auto', 'remove_duplicates', 'delete_all', 'delete_listing', 'relist_listing', 'republish_listing', 'report_status', 'refresh', 'cancel', 'start_video', 'stop_video', 'close_extension', 'reload_extension', 'relist_all', 'relist_aged', 'delete_aged', 'delete_unmatched', 'publish_unpublished'];
 
 /** Register the debug tools on a McpServer instance. */
 export function registerTools(server) {

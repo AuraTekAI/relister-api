@@ -32,6 +32,7 @@ class VehiclelistingConfig(AppConfig):
                     "daily_5am": CrontabSchedule.objects.get_or_create(minute='0', hour='5')[0],
                     "daily_midnight_5": CrontabSchedule.objects.get_or_create(minute='5', hour='0')[0],
                     "daily_midnight_10": CrontabSchedule.objects.get_or_create(minute='10', hour='0')[0],
+                    "daily_6am": CrontabSchedule.objects.get_or_create(minute='0', hour='6')[0],
                 }
 
                 tasks = [
@@ -77,6 +78,13 @@ class VehiclelistingConfig(AppConfig):
                         "task": "payments.tasks.check_subscription_renewal_task",
                         # Runs every day at 00:10 UTC (just after trial check at 00:05)
                         "crontab": crontab_map["daily_midnight_10"],
+                    },
+                    {
+                        "name": "Report_Listing_Overage_Usage",
+                        "task": "payments.tasks.report_active_overage_usage",
+                        # Daily at 06:00 UTC — reports each dealer's active-over-quota
+                        # overage to Stripe (action='set'). Dry-run until OVERAGE_BILLING_DRYRUN=False.
+                        "crontab": crontab_map["daily_6am"],
                     },
                 ]
 
