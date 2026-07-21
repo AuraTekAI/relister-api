@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/extension-logs/', include('extension_logs.urls')),
     path('api/push/', include('extension_logs.push_urls')),
     path('api/team-alerts/', include('team_alerts.urls')),
+    path('api/blog/', include('blog.urls')),
 ]
 if settings.ENVIRONMENT == 'DEVELOPMENT' or settings.ENVIRONMENT == 'LOCAL':
     urlpatterns.append(path ('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),)
