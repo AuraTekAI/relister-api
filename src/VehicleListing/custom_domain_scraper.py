@@ -9,6 +9,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .custom_domain_adapters import resolve_for_url
+from .image_pipeline import sync_listing_images
 from .models import CustomDomainProfileListing, VehicleListing
 
 logger = logging.getLogger("custom_domain")
@@ -110,6 +111,7 @@ def _apply_listing_update(existing, result):
     existing.location = result.get("location")
     existing.is_changed = True
     existing.save()
+    sync_listing_images(existing, result.get("image"))
 
 
 def custom_domain_profile_listings_thread(stock_links, profile_instance, user, profile_id, adapter):
@@ -207,6 +209,7 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                         is_relist=False,
                         seller_profile_id=profile_id,
                     )
+                sync_listing_images(vehicle_listing, result.get("image"))
                 logger.info(f"Created custom domain vehicle_listing: {vehicle_listing}")
             except IntegrityError:
                 # Another concurrent thread won the create race. The row now

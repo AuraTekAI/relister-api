@@ -14,6 +14,8 @@ class VehiclelistingConfig(AppConfig):
         from django_celery_beat.models import PeriodicTask, CrontabSchedule
         import logging
 
+        from . import signals  # noqa: F401 — registers the HostedImage S3-cleanup receiver
+
         @receiver(post_migrate)
         def setup_periodic_tasks(sender, **kwargs):
             # post_migrate fires once per app_config; only run our setup when

@@ -113,6 +113,29 @@ services:
     networks:
       - internal_network
 
+  celery-worker-image-ingest:
+    container_name: celery-worker-image-ingest
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - redis
+      - web
+    # Dedicated queue for VehicleListing.image_pipeline downloads/uploads so a
+    # burst of new listings can't starve the scraping/relisting queues above —
+    # and so its own throughput to Gumtree/dealer sites stays bounded
+    # (concurrency here + VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT together control that).
+    command: >
+      sh -c "celery -A relister worker --loglevel=info --hostname=image-ingest@%h -Q image_ingest_queue -E --concurrency=2"
+    networks:
+      - internal_network
+
 
 
 

@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
 from .models import VehicleListing,GumtreeProfileListing
+from .image_pipeline import sync_listing_images
 import logging
 import time
 import random
@@ -597,6 +598,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.vin = result.get("vin")
                         already_exists.is_changed = True
                         already_exists.save()
+                        sync_listing_images(already_exists, result.get("image"))
                         logging.info(f"Updated listing {already_exists.list_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
@@ -629,6 +631,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.vin = result.get("vin")
                         already_exists.is_changed = True
                         already_exists.save()
+                        sync_listing_images(already_exists, result.get("image"))
                         logging.info(f"Updated listing {already_exists.list_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
@@ -666,6 +669,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     is_relist=False,
                     seller_profile_id=seller_id
                 )
+                sync_listing_images(vehicle_listing, result.get("image"))
                 logging.info(f"Created new vehicle_listing: {vehicle_listing}")
             else:
                 logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping")

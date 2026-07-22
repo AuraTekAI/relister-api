@@ -394,6 +394,26 @@ AWS_S3_ZIP_PREFIX = env('AWS_S3_ZIP_PREFIX', default='zip-files/')
 AWS_S3_PRESIGNED_URL_EXPIRY = env.int('AWS_S3_PRESIGNED_URL_EXPIRY', default=3600)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Vehicle image hosting pipeline (VehicleListing.image_pipeline) ─────────
+# Reuses the AWS credentials/bucket/region above — separate prefix so vehicle
+# photos and zip_manager's zip files don't collide.
+AWS_S3_VEHICLE_IMAGE_PREFIX = env('AWS_S3_VEHICLE_IMAGE_PREFIX', default='vehicle-images/')
+# CloudFront distribution domain fronting the bucket (e.g. d123abc.cloudfront.net
+# or a custom domain like images.autorelister.com.au). Left blank in dev to fall
+# back to a direct virtual-hosted S3 URL; set in production.
+AWS_CLOUDFRONT_DOMAIN = env('AWS_CLOUDFRONT_DOMAIN', default='')
+# Max width in px for each generated WebP variant. Keys must stay exactly
+# 'thumbnail'/'medium'/'large' — image_pipeline.get_or_create_ready_hosted_image
+# indexes the render result by these names.
+VEHICLE_IMAGE_SIZES = {'thumbnail': 320, 'medium': 800, 'large': 1600}
+VEHICLE_IMAGE_WEBP_QUALITY = env.int('VEHICLE_IMAGE_WEBP_QUALITY', default=82)
+VEHICLE_IMAGE_DOWNLOAD_TIMEOUT = env.int('VEHICLE_IMAGE_DOWNLOAD_TIMEOUT', default=20)
+# Celery per-task rate limit for process_vehicle_listing_image_task — throttles
+# how fast we hit Gumtree/dealer sites for image downloads regardless of how
+# many listings get scraped at once.
+VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', default='60/m')
+# ─────────────────────────────────────────────────────────────────────────────
+
 EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='hello@autorelister.com.au')
 FLASHPOST_API_URL = env('FLASHPOST_API_URL')
