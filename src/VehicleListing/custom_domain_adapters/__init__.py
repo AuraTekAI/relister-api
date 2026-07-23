@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 from .base import DomainAdapter
 from .buckinghamautos import BuckinghamAutosAdapter
 from .dnacarsales import DNACarSalesAdapter
+from .easyvehiclesaustralia import EasyVehiclesAustraliaAdapter
 from .generic_jsonld import GenericJsonLdAdapter
 
 _REGISTRY: dict[str, DomainAdapter] = {}
@@ -96,6 +97,14 @@ def any_needs_image_proxy(url: str) -> bool:
 
 register(DNACarSalesAdapter())
 register(BuckinghamAutosAdapter())
+
+# easyvehiclesaustralia.com.au (Teixeira Group, VirtualYard platform). Aliased
+# under both www and non-www so it resolves regardless of which form the user
+# entered at registration; both point at one instance so `seller_profile_id`
+# (== adapter.HOST) stays stable.
+_easyvehicles_adapter = EasyVehiclesAustraliaAdapter()
+register(_easyvehicles_adapter)
+_REGISTRY["www." + EasyVehiclesAustraliaAdapter.HOST.lower()] = _easyvehicles_adapter
 
 __all__ = [
     "DomainAdapter",
