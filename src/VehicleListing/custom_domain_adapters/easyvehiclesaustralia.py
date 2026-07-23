@@ -276,7 +276,23 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         """Collect real gallery image URLs. Prefer the storage.googleapis.com
         au-assets gallery (full set); fall back to virtualyard.com.au/photos
         only if the gallery isn't present. Excludes the theme no-photo
-        placeholder and site chrome."""
+        placeholder and site chrome.
+
+        Same sidebar hazard as _parse_price: this scans the page for image
+        URLs, so it must not reach into the "Recent vehicles" section. If the
+        platform ever renders real related-car gallery images there, they'd be
+        wrongly attached to THIS listing and would flicker as the sidebar
+        rotates between scrapes — tripping the change-detector into a needless
+        delete+republish. Cut the page at the earliest related-section marker
+        first (mirrors the guard in _parse_price)."""
+        lowered = html.lower()
+        cut = len(html)
+        for marker in ("recent vehicles", "similar vehicles",
+                       "you may also like", "recommended for you"):
+            idx = lowered.find(marker)
+            if idx != -1:
+                cut = min(cut, idx)
+        html = html[:cut]
         gallery = []
         seen = set()
         for m in re.finditer(
