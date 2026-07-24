@@ -1,6 +1,39 @@
 from django.db import models
+from django.db.models import Q
 from accounts.models import User
 from decimal import Decimal
+
+
+class Vehicle(models.Model):
+    """One record per physical vehicle, shared across every Auto Relister user's listings."""
+    vin = models.CharField(max_length=17, null=True, blank=True)
+    make = models.CharField(max_length=100, null=True, blank=True)
+    model = models.CharField(max_length=100, null=True, blank=True)
+    year = models.CharField(max_length=255, null=True, blank=True)
+    mileage = models.IntegerField(null=True, blank=True)
+    transmission = models.CharField(max_length=255, null=True, blank=True)
+    fuel_type = models.CharField(max_length=255, null=True, blank=True)
+    body_type = models.CharField(max_length=255, null=True, blank=True)
+    color = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['vin'], condition=Q(vin__isnull=False), name='uniq_vehicle_vin'),
+        ]
+
+    def __str__(self):
+        return f"{self.year} {self.make} {self.model}"
+
+
+class VehicleImage(models.Model):
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='images')
+    image_url = models.URLField(max_length=500)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.image_url
 
 class ListingUrl(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -60,77 +93,22 @@ class FacebookProfileListing(models.Model):
     def __str__(self):
         return f"{self.url}"
 class VehicleListing(models.Model):
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='listings')
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
-    gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
-    facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
-    custom_domain_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True,related_name='custom_domain_vehicle_listings')
-    custom_domain_profile = models.ForeignKey(CustomDomainProfileListing, on_delete=models.CASCADE,null=True,blank=True)
-    
-    list_id = models.CharField(max_length=255)
-    year = models.CharField(max_length=255,null=True,blank=True)
-    body_type = models.CharField(max_length=255,null=True,blank=True)
-    fuel_type = models.CharField(max_length=255,null=True,blank=True)
-    color = models.CharField(max_length=255,null=True,blank=True)
-    variant = models.CharField(max_length=255,null=True,blank=True)
-    make = models.CharField(max_length=100,null=True,blank=True)
-    model = models.CharField(max_length=100,null=True,blank=True)
     price = models.CharField(max_length=255,null=True,blank=True)
-    mileage = models.IntegerField(null=True,blank=True)
-    # True when a custom-domain scrape could not determine a usable odometer
-    # (missing or 0). Mileage is the tie-breaker the extension uses to tell
-    # apart several cars that share a title; this flag marks the rows where
-    # that signal isn't available so they aren't treated as distinguishable.
-    # Gumtree rows always carry a parsed odometer (the scrape drops a listing
-    # rather than store it blank), so this stays False for them.
-    mileage_unavailable = models.BooleanField(default=False)
-    # 17-character Vehicle Identification Number, captured from Gumtree's
-    # "VIN" category field when a dealer has filled it in — optional because
-    # not every Gumtree listing carries one. Needed for the separate VIN
-    # database project: only listings with a VIN are eligible to display in
-    # Google (per that project's requirement).
-    vin = models.CharField(max_length=17, null=True, blank=True)
-    exterior_colour = models.CharField(max_length=255,null=True,blank=True)
-    interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)
-    condition = models.CharField(max_length=255,null=True,blank=True)
-    transmission=models.CharField(max_length=255,null=True,blank=True)
-    images = models.JSONField(null=True,blank=True)  # Store image URLs as JSON
-    location = models.CharField(max_length=255,null=True,blank=True)
-    url = models.URLField(null=True,blank=True)
-    seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
-    # Facebook Marketplace listing ID — captured by the browser extension after publish,
-    # used for targeted deletes (replaces fragile title-search deletes). Overwritten on each call.
-    facebook_listing_id = models.CharField(max_length=128, null=True, blank=True)
     status = models.CharField(max_length=255, null=True)
-    is_relist = models.BooleanField(default=False)
-    is_changed = models.BooleanField(default=False)     # True when an existing listing's data was updated by the scraper
-    is_listed = models.BooleanField(default=False)      # True once listing has been counted (prevent double-count)
-    # True after Stripe metered overage for this listing was invoiced & recorded (idempotency).
-    stripe_overage_reported = models.BooleanField(default=False)
-    relist_count = models.IntegerField(default=0)       # how many times this specific listing has been relisted
-    # Set together with status="sold" by mark_listing_sold() — when the listing was
-    # last detected as removed/sold. Cleared (None) if it's ever reactivated or republished.
-    sold_at = models.DateTimeField(null=True, blank=True)
-    rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))
-    retry_count = models.IntegerField(default=0)
+    gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
+    facebook_url = models.URLField(max_length=500, null=True, blank=True)
+    seller_profile_id = models.CharField(max_length=255,null=True,blank=True)
     listed_on = models.DateTimeField(null=True,blank=True)
-    has_images=models.BooleanField(default=False)
-    sales = models.BooleanField(default=False)
-    total_view_count = models.PositiveIntegerField(default=0)
+    relist_count = models.IntegerField(default=0)       # how many times this specific listing has been relisted
+    retry_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        # Guard against race-condition duplicates from concurrent background
-        # scrapes (an initial POST overlapping with a cron-triggered re-scrape,
-        # or rapid repeated POSTs). The orchestrator wraps create in
-        # transaction.atomic and treats IntegrityError on this constraint as
-        # "another thread won the race" — see custom_domain_scraper.py.
-        unique_together = [("user", "list_id", "seller_profile_id")]
-
     def __str__(self):
-        return f"{self.year} {self.make} {self.model}"
+        return f"{self.vehicle} ({self.user_id})"
 class FacebookListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
@@ -139,8 +117,8 @@ class FacebookListing(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     def __str__(self):
-        return f"{self.listing.make} {self.listing.model}"
-    
+        return f"{self.listing.vehicle.make} {self.listing.vehicle.model}"
+
 class RelistingFacebooklisting(models.Model):
     listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -151,7 +129,7 @@ class RelistingFacebooklisting(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.listing.make} {self.listing.model}"
+        return f"{self.listing.vehicle.make} {self.listing.vehicle.model}"
 
 
 class FacebookListingSnapshot(models.Model):

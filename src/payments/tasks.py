@@ -412,13 +412,13 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
     Flow (synchronous — no webhook dependency):
       1. Create a Stripe InvoiceItem for the overage price.
       2. Create + finalize the invoice → Stripe charges the customer immediately.
-      3. On successful payment, create the local Invoice record and mark
-         VehicleListing.stripe_overage_reported = True.
+      3. On successful payment, create the local Invoice record.
       4. If the Stripe charge fails (payment_failed status), create a local Invoice
          with status='unpaid' and email the user.
 
-    Idempotent: guarded by stripe_overage_reported on the listing and Stripe
-    idempotency keys (idem_item / idem_inv).
+    Idempotent: guarded by Stripe idempotency keys (idem_item / idem_inv) —
+    stripe_overage_reported was dropped from VehicleListing in the
+    Vehicle/VehicleListing schema split.
     """
     from payments.models import Subscription
     from VehicleListing.models import Invoice, VehicleListing
@@ -431,9 +431,6 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
     listing = VehicleListing.objects.filter(pk=vehicle_listing_id, user_id=sub.user_id).first()
     if not listing:
         logger.warning(f"report_listing_overage_metered: listing {vehicle_listing_id} not found.")
-        return
-    if listing.stripe_overage_reported:
-        logger.info(f"report_listing_overage_metered: listing {vehicle_listing_id} already reported — skip.")
         return
 
     if sub.status not in ('active', 'past_due', 'trialing'):
@@ -589,10 +586,9 @@ def report_listing_overage_metered(self, subscription_id, vehicle_listing_id):
 def _create_overage_invoice_record(*, sub, plan, stripe_invoice_id, overage_rate, vehicle_listing_id, paid):
     """
     Create a local Invoice row for a listing overage charge and email the user.
-    Marks VehicleListing.stripe_overage_reported when paid=True.
     Idempotent: skips if a record for stripe_invoice_id already exists.
     """
-    from VehicleListing.models import Invoice, VehicleListing
+    from VehicleListing.models import Invoice
 
     if Invoice.objects.filter(stripe_invoice_id=stripe_invoice_id).exists():
         logger.info(f"_create_overage_invoice_record: invoice {stripe_invoice_id} already recorded — skip.")
@@ -630,11 +626,6 @@ def _create_overage_invoice_record(*, sub, plan, stripe_invoice_id, overage_rate
 
     if paid:
         _send_invoice_email(user, invoice)
-        try:
-            vid = int(vehicle_listing_id)
-            VehicleListing.objects.filter(pk=vid, user_id=user.id).update(stripe_overage_reported=True)
-        except (TypeError, ValueError):
-            pass
         logger.info(
             f"_create_overage_invoice_record: created {invoice.invoice_number} for listing {vehicle_listing_id} "
             f"— total={total_amount} status=paid."

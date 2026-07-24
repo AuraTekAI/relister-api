@@ -82,8 +82,6 @@ def send_user_approval_email(user):
 def create_or_update_relisting_entry(listing, user, relisting=None):
     now = timezone.now()
     if not relisting:
-        listing.has_images = False
-        listing.is_relist = True
         listing.retry_count = 0
         listing.save()
         relisting=RelistingFacebooklisting.objects.create(
@@ -94,11 +92,9 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
         status="completed"
     )
         relisting.save()
-        logger.info(f"Relisting created for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        logger.info(f"Relisting created for the user {user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
     else:
-        relisting.listing.has_images = False
         relisting.listing.retry_count = 0
-        relisting.listing.is_relist = True
         relisting.listing.save()
         relisting.updated_at = now
         relisting.last_relisting_status = True
@@ -111,16 +107,14 @@ def create_or_update_relisting_entry(listing, user, relisting=None):
         status="completed"
     )
         relisting.save()
-        logger.info(f"Relisting updated for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
-    
+        logger.info(f"Relisting updated for the user {user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
+
     return relisting
 
 def handle_failed_relisting(listing, user, relisting=None):
     now = timezone.now()
     if not relisting:
-        listing.is_relist = True
-        listing.save()
-        logger.info(f"Relisting failed for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        logger.info(f"Relisting failed for the user {user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
         RelistingFacebooklisting.objects.create(
             user=user,
             listing=listing,
@@ -134,7 +128,7 @@ def handle_failed_relisting(listing, user, relisting=None):
         relisting.updated_at = now
         relisting.save()
         #create new relisting entry
-        logger.info(f"Relisting failed for the user {user.email} and listing title {listing.year} {listing.make} {listing.model}")
+        logger.info(f"Relisting failed for the user {user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
         RelistingFacebooklisting.objects.create(
             user=user,
             listing=relisting.listing,
@@ -145,15 +139,12 @@ def handle_failed_relisting(listing, user, relisting=None):
 
 def mark_listing_sold(listing, relisting=None):
     now = timezone.now()
-    listing.is_relist = True
     listing.status = "sold"
-    listing.sales = True
-    listing.sold_at = now
     listing.updated_at = now
     listing.save()
-    logger.info(f"Listing sold for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
+    logger.info(f"Listing sold for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
     if relisting:
-        logger.info(f"Mark sold relisting as completed for the user {listing.user.email} and re-listing title {listing.year} {listing.make} {listing.model}")
+        logger.info(f"Mark sold relisting as completed for the user {listing.user.email} and re-listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
         relisting.status = "completed"
         relisting.last_relisting_status = True
         relisting.save()
@@ -162,10 +153,8 @@ def reactivate_listing(listing):
     """Manually undo mark_listing_sold — used when a listing was flagged sold in error
     (e.g. a transient Gumtree/scrape failure) and the dealer confirms it's still for sale."""
     listing.status = "completed"
-    listing.sales = False
-    listing.sold_at = None
     listing.save()
-    logger.info(f"Listing manually reactivated for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
+    logger.info(f"Listing manually reactivated for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
 
 def handle_retry_or_disable_credentials(credentials, user):
     if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:

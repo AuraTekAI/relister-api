@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here
-from .models import VehicleListing, ListingUrl
+from .models import VehicleListing, ListingUrl, Vehicle, VehicleImage
 from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
 from .utils import reactivate_listing
 
@@ -20,11 +20,32 @@ class ListingUrlAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'url','listing_id')
     list_filter = ('user',)
 
+class VehicleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'vin', 'year', 'make', 'model', 'transmission', 'fuel_type', 'body_type', 'color', 'created_at', 'updated_at')
+    search_fields = ('vin', 'year', 'make', 'model')
+    list_filter = ('make', 'fuel_type', 'body_type')
+
+class VehicleImageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'vehicle', 'image_url', 'created_at')
+    search_fields = ('vehicle__vin', 'vehicle__make', 'vehicle__model')
+
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
-    list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
+    list_display = ('id','user', 'vehicle_year', 'vehicle_make', 'vehicle_model', 'status', 'price', 'seller_profile_id', 'listed_on', 'relist_count', 'retry_count', 'created_at', 'updated_at')
+    search_fields = ('user__email', 'vehicle__year', 'vehicle__make', 'vehicle__model', 'status', 'seller_profile_id')
+    list_filter = ('user', 'status')
     actions = ['reactivate_sold_listings']
+
+    @admin.display(description='Year', ordering='vehicle__year')
+    def vehicle_year(self, obj):
+        return obj.vehicle.year
+
+    @admin.display(description='Make', ordering='vehicle__make')
+    def vehicle_make(self, obj):
+        return obj.vehicle.make
+
+    @admin.display(description='Model', ordering='vehicle__model')
+    def vehicle_model(self, obj):
+        return obj.vehicle.model
 
     @admin.action(description="Reactivate selected listings (undo sold — dealer confirmed still for sale)")
     def reactivate_sold_listings(self, request, queryset):
@@ -51,7 +72,7 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
-    search_fields = ('user__email',"listing__year","listing__make","listing__model",)
+    search_fields = ('user__email',"listing__vehicle__year","listing__vehicle__make","listing__vehicle__model",)
     list_filter = ('user',"listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):
@@ -62,6 +83,8 @@ class InvoiceAdmin(admin.ModelAdmin):
     ordering = ('-created_at',)
 
 admin.site.register(Invoice, InvoiceAdmin)
+admin.site.register(Vehicle, VehicleAdmin)
+admin.site.register(VehicleImage, VehicleImageAdmin)
 admin.site.register(VehicleListing, VehicleListingAdmin)
 admin.site.register(ListingUrl, ListingUrlAdmin)
 admin.site.register(FacebookListing, FacebookListingAdmin)

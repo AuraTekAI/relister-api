@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
-from .models import VehicleListing,GumtreeProfileListing
+from .models import VehicleListing,GumtreeProfileListing,Vehicle,VehicleImage,ListingUrl
 import logging
 import time
 import random
@@ -553,6 +553,33 @@ def get_gumtree_listings(profile_url,user):
 #             return False,"No credentials found for user"
         
 
+def _sync_vehicle_from_result(vehicle, result):
+    """Overwrite a Vehicle's attributes + image set from a freshly scraped result dict."""
+    vehicle.year = result.get("year")
+    vehicle.make = result.get("make")
+    vehicle.model = result.get("model")
+    vehicle.body_type = result.get("body_type")
+    vehicle.fuel_type = result.get("fuel_type")
+    vehicle.color = result.get("color")
+    vehicle.mileage = result.get("mileage")
+    vehicle.transmission = result.get("transmission")
+    vehicle.save()
+    vehicle.images.all().delete()
+    for image_url in (result.get("image") or []):
+        if image_url:
+            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
+
+
+def _get_or_create_vehicle(result):
+    vin = (result.get("vin") or "").strip() or None
+    if vin:
+        vehicle, _ = Vehicle.objects.get_or_create(vin=vin)
+    else:
+        vehicle = Vehicle.objects.create()
+    _sync_vehicle_from_result(vehicle, result)
+    return vehicle
+
+
 def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, user, seller_id):
     logging.info("Starting gumtree_profile_listings_thread execution")
     count = 0
@@ -562,79 +589,58 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         if not listing_id:
             logging.warning("Listing ID is missing, skipping entry")
             continue
-        incoming_list_ids.add(str(listing_id))
+        listing_id = str(listing_id)
+        incoming_list_ids.add(listing_id)
         logging.info(f"Fetching details for listing ID: {listing_id}")
-        already_exists = VehicleListing.objects.filter(list_id=listing_id, user=user, seller_profile_id=seller_id).first()
+        already_exists = VehicleListing.objects.filter(
+            gumtree_url__listing_id=listing_id, user=user, seller_profile_id=seller_id
+        ).first()
         if already_exists:
             count+=1
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
             if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=1)):
-                logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.year} {already_exists.make} {already_exists.model} and price is {already_exists.price} and mileage is {already_exists.mileage} and location is {already_exists.location}")
+                logging.info(f"Listing ID {listing_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.vehicle.year} {already_exists.vehicle.make} {already_exists.vehicle.model} and price is {already_exists.price}")
                 result = get_gumtree_listing_details(listing_id)
                 logging.info(f"result: {result}")
-                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and set(already_exists.images) == set(result.get("image") or []) and already_exists.description == result.get("description"):
-                    logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
-                    logging.info(f"No need to update the listing {already_exists.list_id} details")
+                vehicle = already_exists.vehicle
+                if result and vehicle.year == result.get("year") and vehicle.make == result.get("make") and vehicle.model == result.get("model") and already_exists.price == str(result.get("price")) and set(vehicle.images.values_list('image_url', flat=True)) == set(result.get("image") or []) and already_exists.description == result.get("description"):
+                    logging.info(f"Listing ID {listing_id} is already exit and marked as {already_exists.status} and the required details are matched")
+                    logging.info(f"No need to update the listing {listing_id} details")
                     continue
                 else:
-                    logging.info(f"Listing ID {already_exists.list_id} is already exit but the details are not matching")
-                    logging.info(f"update the listing {already_exists.list_id} details")
+                    logging.info(f"Listing ID {listing_id} is already exit but the details are not matching")
+                    logging.info(f"update the listing {listing_id} details")
                     if result:
-                        already_exists.year = result.get("year")
-                        already_exists.make = result.get("make")
-                        already_exists.model = result.get("model")
-                        already_exists.body_type = result.get("body_type")
-                        already_exists.fuel_type = result.get("fuel_type")
-                        already_exists.color = result.get("color")
-                        already_exists.variant = result.get("variant")
+                        _sync_vehicle_from_result(vehicle, result)
                         already_exists.price = str(result.get("price"))
-                        already_exists.mileage = result.get("mileage")
-                        already_exists.mileage_unavailable = result.get("mileage_unavailable", False)
-                        already_exists.transmission = result.get("transmission")
                         already_exists.description = result.get("description")
-                        already_exists.images = result.get("image")
-                        already_exists.location = result.get("location")
-                        already_exists.vin = result.get("vin")
-                        already_exists.is_changed = True
                         already_exists.save()
-                        logging.info(f"Updated listing {already_exists.list_id} with new details")
+                        logging.info(f"Updated listing {listing_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
             elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=1):
-                logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
+                logging.info(f"Listing ID {listing_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
-                if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and set(already_exists.images) == set(result.get("image") or []) and already_exists.description == result.get("description"):
-                    logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the required details are matched")
-                    logging.info(f"No need to update the listing {already_exists.list_id} details")
+                vehicle = already_exists.vehicle
+                if result and vehicle.year == result.get("year") and vehicle.make == result.get("make") and vehicle.model == result.get("model") and already_exists.price == str(result.get("price")) and set(vehicle.images.values_list('image_url', flat=True)) == set(result.get("image") or []) and already_exists.description == result.get("description"):
+                    logging.info(f"Listing ID {listing_id} is already exit and marked as {already_exists.status} and the required details are matched")
+                    logging.info(f"No need to update the listing {listing_id} details")
                     continue
                 else:
-                    logging.info(f"Listing ID {already_exists.list_id} is already exit but the details are not matching")
-                    logging.info(f"update the listing {already_exists.list_id} details")
+                    logging.info(f"Listing ID {listing_id} is already exit but the details are not matching")
+                    logging.info(f"update the listing {listing_id} details")
                     if result:
-                        already_exists.year = result.get("year")
-                        already_exists.make = result.get("make")
-                        already_exists.model = result.get("model")
-                        already_exists.body_type = result.get("body_type")
-                        already_exists.fuel_type = result.get("fuel_type")
-                        already_exists.color = result.get("color")
-                        already_exists.variant = result.get("variant")
+                        _sync_vehicle_from_result(vehicle, result)
                         already_exists.price = str(result.get("price"))
-                        already_exists.mileage = result.get("mileage")
-                        already_exists.mileage_unavailable = result.get("mileage_unavailable", False)
-                        already_exists.transmission = result.get("transmission")
                         already_exists.description = result.get("description")
-                        already_exists.images = result.get("image")
-                        already_exists.location = result.get("location")
-                        already_exists.vin = result.get("vin")
-                        already_exists.is_changed = True
                         already_exists.save()
-                        logging.info(f"Updated listing {already_exists.list_id} with new details")
+                        logging.info(f"Updated listing {listing_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
             else:
-                logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and the listing is not eligible for update")
+                logging.info(f"Listing ID {listing_id} is already exit and marked as {already_exists.status} and the listing is not eligible for update")
                 continue
         else:
             logging.info(f"Listing ID {listing_id} does not exist, fetching details")
@@ -642,28 +648,17 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             result = get_gumtree_listing_details(listing_id)
             if result and not already_exists:
                 count += 1
+                vehicle = _get_or_create_vehicle(result)
+                listing_url, _ = ListingUrl.objects.get_or_create(
+                    user=user, listing_id=listing_id, defaults={"url": result.get("url") or ""}
+                )
                 vehicle_listing = VehicleListing.objects.create(
                     user=user,
-                    gumtree_profile=gumtree_profile_listing_instance,
-                    list_id=listing_id,
-                    year=result.get("year"),
-                    body_type=result.get("body_type"),
-                    fuel_type=result.get("fuel_type"),
-                    color=result.get("color"),
-                    variant=result.get("variant"),
-                    make=result.get("make"),
-                    mileage=result.get("mileage"),
-                    mileage_unavailable=result.get("mileage_unavailable", False),
-                    model=result.get("model"),
+                    vehicle=vehicle,
+                    gumtree_url=listing_url,
                     price=str(result.get("price")),
-                    transmission=result.get("transmission"),
                     description=result.get("description"),
-                    images=result.get("image"),
-                    url=result.get("url"),
-                    location=result.get("location"),
-                    vin=result.get("vin"),
                     status="pending",
-                    is_relist=False,
                     seller_profile_id=seller_id
                 )
                 logging.info(f"Created new vehicle_listing: {vehicle_listing}")
@@ -675,14 +670,6 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
     gumtree_profile_listing_instance.status = "completed"
     gumtree_profile_listing_instance.save()
 
-    # Listings that came back in this API call are still live on the seller's profile,
-    # so clear any stale sales=True flag in bulk.
-    existing_listings_which_sale_on_list_api_call = VehicleListing.objects.filter(
-        user=user, seller_profile_id=seller_id, list_id__in=incoming_list_ids
-    )
-    updated_sales_count = existing_listings_which_sale_on_list_api_call.update(sales=False)
-    logging.info(f"Reset sales=False on {updated_sales_count} listings still present on the seller's profile")
-
     # Mark already exist listing who are not present in profile listings as sold.
     # Skip this block if the incoming API call returned no listings — otherwise we'd
     # treat every existing listing as "missing" and wipe them all.
@@ -692,7 +679,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         logging.info("Checking for existing listings not present in incoming listings to mark as sold")
         missing_listings = VehicleListing.objects.filter(
             user=user, seller_profile_id=seller_id
-        ).exclude(list_id__in=incoming_list_ids)
+        ).exclude(gumtree_url__listing_id__in=incoming_list_ids)
 
         if not missing_listings.exists():
             logging.info("No old listings found which not exist in the profile listings")
@@ -703,14 +690,13 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             logging.info(f"Bulk deleted {deleted_count} pending/failed/sold listings missing from profile")
 
             # Mark completed listings as sold. Goes through mark_listing_sold() (not a bulk
-            # .update()) so status flips to "sold" and sold_at is stamped, not just the
-            # sales=True flag — the relist-queue endpoint (get_old_vehicle_listings) and the
-            # extension's publish guard both need status=="sold" to reliably exclude these,
-            # since a stale sales flag alone was previously being missed downstream.
+            # .update()) so status flips to "sold" — the relist-queue endpoint
+            # (get_old_vehicle_listings) and the extension's publish guard both need
+            # status=="sold" to reliably exclude these.
             completed_missing = list(missing_listings.filter(status="completed"))
             for listing in completed_missing:
                 mark_listing_sold(listing)
-            logging.info(f"Marked {len(completed_missing)} completed listings as sold (status=sold, sales=True)")
+            logging.info(f"Marked {len(completed_missing)} completed listings as sold (status=sold)")
 
     # Best-effort, read-only, non-blocking: back-fill dealership_suburb/state
     # for Gumtree-only dealers from their just-scraped listings. Never

@@ -9,7 +9,8 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .custom_domain_adapters import resolve_for_url
-from .models import CustomDomainProfileListing, VehicleListing
+from .models import CustomDomainProfileListing, VehicleListing, Vehicle, VehicleImage, ListingUrl
+from .utils import mark_listing_sold
 
 logger = logging.getLogger("custom_domain")
 
@@ -92,23 +93,22 @@ def get_custom_domain_listings(profile_url, user):
 
 
 def _apply_listing_update(existing, result):
-    existing.year = result.get("year")
-    existing.make = result.get("make")
-    existing.model = result.get("model")
-    existing.body_type = result.get("body_type")
-    existing.fuel_type = result.get("fuel_type")
-    existing.color = result.get("color")
-    existing.variant = result.get("variant")
+    vehicle = existing.vehicle
+    vehicle.year = result.get("year")
+    vehicle.make = result.get("make")
+    vehicle.model = result.get("model")
+    vehicle.body_type = result.get("body_type")
+    vehicle.fuel_type = result.get("fuel_type")
+    vehicle.color = result.get("color")
+    vehicle.mileage = result.get("mileage")
+    vehicle.transmission = result.get("transmission")
+    vehicle.save()
+    vehicle.images.all().delete()
+    for image_url in (result.get("image") or []):
+        if image_url:
+            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
     existing.price = str(result.get("price")) if result.get("price") is not None else existing.price
-    existing.mileage = result.get("mileage")
-    # Flag rows with no usable odometer (None/0) so the duplicate-matcher
-    # knows mileage can't be used as a tie-breaker for this listing.
-    existing.mileage_unavailable = result.get("mileage") in (None, 0)
-    existing.transmission = result.get("transmission")
     existing.description = result.get("description")
-    existing.images = result.get("image")
-    existing.location = result.get("location")
-    existing.is_changed = True
     existing.save()
 
 
@@ -122,10 +122,11 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
         if not listing_id:
             logger.warning(f"Skipping URL without listing id: {stock_url}")
             continue
-        incoming_list_ids.add(str(listing_id))
+        listing_id = str(listing_id)
+        incoming_list_ids.add(listing_id)
 
         already_exists = VehicleListing.objects.filter(
-            list_id=listing_id, user=user, seller_profile_id=profile_id
+            gumtree_url__listing_id=listing_id, user=user, seller_profile_id=profile_id
         ).first()
 
         if already_exists:
@@ -147,16 +148,17 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                 if not result:
                     logger.error(f"Failed to refetch custom domain listing {listing_id}")
                     continue
+                vehicle = already_exists.vehicle
                 price_match = (
                     already_exists.price == str(result.get("price"))
                     if result.get("price") is not None
                     else True
                 )
-                images_match = set(already_exists.images or []) == set(result.get("image") or [])
+                images_match = set(vehicle.images.values_list('image_url', flat=True)) == set(result.get("image") or [])
                 if (
-                    already_exists.year == result.get("year")
-                    and already_exists.make == result.get("make")
-                    and already_exists.model == result.get("model")
+                    vehicle.year == result.get("year")
+                    and vehicle.make == result.get("make")
+                    and vehicle.model == result.get("model")
                     and price_match
                     and images_match
                     and already_exists.description == result.get("description")
@@ -179,32 +181,37 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
             count += 1
             # Atomic create: a concurrent scrape thread (e.g. cron firing
             # during an in-progress POST scrape) racing on the same listing
-            # gets the unique-together constraint to raise IntegrityError;
-            # we catch it and apply the freshly-parsed data as an update
-            # instead of inserting a duplicate row.
+            # gets the ListingUrl(user, listing_id) unique lookup below to
+            # find the just-created row; we catch the create race and apply
+            # the freshly-parsed data as an update instead of inserting a
+            # duplicate row.
             try:
                 with transaction.atomic():
+                    listing_url, created_url = ListingUrl.objects.get_or_create(
+                        user=user, listing_id=listing_id, defaults={"url": result.get("url") or stock_url}
+                    )
+                    if not created_url:
+                        raise IntegrityError("listing_url already exists")
+                    vehicle = Vehicle.objects.create(
+                        make=result.get("make"),
+                        model=result.get("model"),
+                        year=result.get("year"),
+                        mileage=result.get("mileage"),
+                        transmission=result.get("transmission"),
+                        fuel_type=result.get("fuel_type"),
+                        body_type=result.get("body_type"),
+                        color=result.get("color"),
+                    )
+                    for image_url in (result.get("image") or []):
+                        if image_url:
+                            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
                     vehicle_listing = VehicleListing.objects.create(
                         user=user,
-                        custom_domain_profile=profile_instance,
-                        list_id=listing_id,
-                        year=result.get("year"),
-                        body_type=result.get("body_type"),
-                        fuel_type=result.get("fuel_type"),
-                        color=result.get("color"),
-                        variant=result.get("variant"),
-                        make=result.get("make"),
-                        mileage=result.get("mileage"),
-                        mileage_unavailable=result.get("mileage") in (None, 0),
-                        model=result.get("model"),
+                        vehicle=vehicle,
+                        gumtree_url=listing_url,
                         price=str(result.get("price")) if result.get("price") is not None else None,
-                        transmission=result.get("transmission"),
                         description=result.get("description"),
-                        images=result.get("image"),
-                        url=result.get("url"),
-                        location=result.get("location"),
                         status="pending",
-                        is_relist=False,
                         seller_profile_id=profile_id,
                     )
                 logger.info(f"Created custom domain vehicle_listing: {vehicle_listing}")
@@ -215,7 +222,7 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                     f"Create race lost for listing {listing_id} — another thread created it; applying parsed data as update"
                 )
                 raced_row = VehicleListing.objects.filter(
-                    user=user, list_id=listing_id, seller_profile_id=profile_id
+                    user=user, gumtree_url__listing_id=listing_id, seller_profile_id=profile_id
                 ).first()
                 if raced_row is not None:
                     _apply_listing_update(raced_row, result)
@@ -227,19 +234,18 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
     logger.info("Reconciling custom domain listings absent from incoming stock")
     existing_listings = VehicleListing.objects.filter(
         user=user, seller_profile_id=profile_id
-    ).exclude(list_id__in=incoming_list_ids)
+    ).exclude(gumtree_url__listing_id__in=incoming_list_ids)
     for listing in existing_listings:
         if listing.status in ["pending", "failed", "sold"]:
             logger.info(
-                f"Deleting absent custom domain listing {listing.list_id} (status={listing.status})"
+                f"Deleting absent custom domain listing {listing.id} (status={listing.status})"
             )
             listing.delete()
         elif listing.status == "completed":
-            listing.sales = True
-            listing.save()
+            mark_listing_sold(listing)
         else:
             logger.info(
-                f"Custom domain listing {listing.list_id} unknown status {listing.status} — leaving as is"
+                f"Custom domain listing {listing.id} unknown status {listing.status} — leaving as is"
             )
 
     logger.info("Completed custom_domain_profile_listings_thread execution")

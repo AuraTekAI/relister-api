@@ -7,7 +7,6 @@ determine the address (network error, site has no schema.org markup, etc.) the
 user is left with null suburb/state and an admin can fill them in manually.
 """
 import logging
-from collections import Counter
 
 logger = logging.getLogger('accounts')
 
@@ -100,43 +99,11 @@ def derive_and_save_gumtree_dealer_location(user) -> None:
     Called once at the end of gumtree_profile_listings_thread, after that
     batch's listings are saved. Must never raise into that thread — this is a
     read of already-persisted data, not part of the scrape/relist logic.
+
+    NOTE: `location` was dropped from VehicleListing in the Vehicle/VehicleListing
+    schema split (it wasn't carried over onto Vehicle either), so there's no
+    longer any per-listing location data to derive a dealer's suburb/state
+    from. This is now a no-op kept in place so the try/except call site in
+    gumtree_scraper.py doesn't need touching.
     """
-    if user.dealership_suburb or user.dealership_state:
-        return
-    try:
-        # Imported lazily — same reasoning as the import in
-        # discover_and_save_dealer_location: avoid load-order coupling
-        # between accounts and VehicleListing.
-        from VehicleListing.custom_domain_adapters.base import normalize_au_state
-        from VehicleListing.models import VehicleListing
-
-        locations = (
-            VehicleListing.objects
-            .filter(user=user, gumtree_profile__isnull=False)
-            .exclude(location__isnull=True)
-            .exclude(location='')
-            .values_list('location', flat=True)
-        )
-        counts = Counter(locations)
-        if not counts:
-            return
-        top_location, _ = counts.most_common(1)[0]
-        if ',' not in top_location:
-            return
-        suburb_part, state_part = top_location.rsplit(',', 1)
-        suburb = suburb_part.strip()
-        state_code = normalize_au_state(state_part.strip())
-        if not suburb or not state_code:
-            return
-
-        user.dealership_suburb = suburb
-        user.dealership_state = state_code
-        user.save(update_fields=['dealership_suburb', 'dealership_state'])
-        logger.info(
-            f"gumtree dealer-location: saved {suburb}, {state_code} for user {user.pk}"
-        )
-    except Exception as exc:
-        logger.warning(
-            f"gumtree dealer-location derivation failed for user "
-            f"{getattr(user, 'pk', None)}: {exc}"
-        )
+    return
