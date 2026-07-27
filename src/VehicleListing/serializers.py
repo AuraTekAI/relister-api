@@ -26,24 +26,36 @@ def _rewrite_proxy_url(url, request):
 
 def _resolve_storefront_images(listing, size, request):
     """
-    Ordered image URLs for the public storefront: prefer our own S3/CDN URL
-    for whichever photos have finished processing, and fall back to the raw
+    Ordered images for the public storefront: prefer our own S3/CDN URL for
+    whichever photos have finished processing, and fall back to the raw
     (proxied-if-needed) source URL for anything still pending/failed or for
     rows that predate this pipeline and have no image_slots yet at all — so
     the storefront never shows a broken image while the async pipeline (or a
     backfill) catches up.
+
+    Returns a list of {'url': str, 'is_hosted': bool} — is_hosted is True only
+    for images actually served from our own AWS (S3/CloudFront) copy; False
+    means it's still the raw/proxied external source URL.
     """
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
-        return [url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or [])) if u]
+        return [
+            {'url': url, 'is_hosted': False}
+            for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
 
     resolved = []
     for slot in slots:
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
-            resolved.append(slot.hosted_image.url_for(size))
+            url = slot.hosted_image.url_for(size)
+            is_hosted = True
         else:
-            resolved.append(_rewrite_proxy_url(slot.source_url, request))
-    return [url for url in resolved if url]
+            url = _rewrite_proxy_url(slot.source_url, request)
+            is_hosted = False
+        if url:
+            resolved.append({'url': url, 'is_hosted': is_hosted})
+    return resolved
 
 
 # State-code → full-name mapping used when assembling a fallback `location`
@@ -165,7 +177,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_image(self, obj):
         images = _resolve_storefront_images(obj, 'medium', self.context.get('request'))
-        return images[0] if images else None
+        return images[0]['url'] if images else None
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):

@@ -105,7 +105,7 @@ def upload_variant(key, webp_bytes):
 
 
 def delete_variants_from_s3(hosted_image):
-    keys = [k for k in (hosted_image.s3_key_thumbnail, hosted_image.s3_key_medium, hosted_image.s3_key_large) if k]
+    keys = [k for k in (hosted_image.thumbnail_image, hosted_image.medium_image, hosted_image.large_image) if k]
     if not keys:
         return
     try:
@@ -147,9 +147,9 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):
     large_key, large_width, large_height = keys['large']
     defaults = {
         'source_url': source_url,
-        's3_key_thumbnail': keys['thumbnail'][0],
-        's3_key_medium': keys['medium'][0],
-        's3_key_large': large_key,
+        'thumbnail_image': keys['thumbnail'][0],
+        'medium_image': keys['medium'][0],
+        'large_image': large_key,
         'width': large_width,
         'height': large_height,
         'file_size_bytes': len(image_bytes),

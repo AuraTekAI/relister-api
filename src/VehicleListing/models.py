@@ -357,9 +357,9 @@ class HostedImage(models.Model):
     content_hash = models.CharField(max_length=64, unique=True, db_index=True)
     # First source URL this content was ever seen at — kept for audit/debugging only.
     source_url = models.URLField(max_length=1000, null=True, blank=True)
-    s3_key_thumbnail = models.CharField(max_length=512, blank=True, default='')
-    s3_key_medium = models.CharField(max_length=512, blank=True, default='')
-    s3_key_large = models.CharField(max_length=512, blank=True, default='')
+    thumbnail_image = models.CharField(max_length=512, blank=True, default='')
+    medium_image = models.CharField(max_length=512, blank=True, default='')
+    large_image = models.CharField(max_length=512, blank=True, default='')
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
     file_size_bytes = models.PositiveIntegerField(null=True, blank=True)
@@ -376,9 +376,9 @@ class HostedImage(models.Model):
         models <-> image_pipeline circular import."""
         from .image_pipeline import public_url_for
         key = {
-            'thumbnail': self.s3_key_thumbnail,
-            'medium': self.s3_key_medium,
-            'large': self.s3_key_large,
+            'thumbnail': self.thumbnail_image,
+            'medium': self.medium_image,
+            'large': self.large_image,
         }.get(size)
         return public_url_for(key)
 

@@ -100,7 +100,7 @@ class HostedImageAdmin(admin.ModelAdmin):
     list_display = ('id', 'content_hash', 'status', 'width', 'height', 'file_size_bytes', 'created_at')
     search_fields = ('content_hash', 'source_url')
     list_filter = ('status',)
-    readonly_fields = ('content_hash', 's3_key_thumbnail', 's3_key_medium', 's3_key_large', 'created_at', 'updated_at')
+    readonly_fields = ('content_hash', 'thumbnail_image', 'medium_image', 'large_image', 'created_at', 'updated_at')
 
 admin.site.register(HostedImage, HostedImageAdmin)
 
