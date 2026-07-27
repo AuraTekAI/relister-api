@@ -434,6 +434,17 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         return False
 
     def discover_dealer_location(self, profile_url: str) -> dict | None:
-        # Location comes from the dealer's registration (suburb/state), so no
-        # site-level discovery is attempted here.
-        return None
+        # Easy Vehicles Australia (Teixeira Group) trades from a single physical
+        # location — 5 Old Aberdeen Pl, West Perth WA 6005 (per their /contact
+        # page). Per-listing location isn't exposed on the detail pages, so
+        # (mirroring the DNA / Buckingham adapters) we return the dealership's
+        # own suburb/state here. discover_and_save_dealer_location() stamps this
+        # onto User.dealership_suburb/_state at signup, and the listing
+        # serializer builds each row's `location` from it. A reseller feeding
+        # off this site who isn't in West Perth can be overridden per-user in
+        # the admin.
+        return {
+            "suburb": "West Perth",
+            "state": "WA",
+            "address": "5 Old Aberdeen Pl, West Perth WA 6005",
+        }
