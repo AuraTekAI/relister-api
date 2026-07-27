@@ -9,8 +9,9 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .custom_domain_adapters import resolve_for_url
-from .models import CustomDomainProfileListing, VehicleListing, Vehicle, VehicleImage, ListingUrl
+from .models import CustomDomainProfileListing, VehicleListing, ListingUrl
 from .utils import mark_listing_sold
+from .vehicle_matching import get_or_create_vehicle, sync_vehicle_from_result
 
 logger = logging.getLogger("custom_domain")
 
@@ -93,20 +94,10 @@ def get_custom_domain_listings(profile_url, user):
 
 
 def _apply_listing_update(existing, result):
-    vehicle = existing.vehicle
-    vehicle.year = result.get("year")
-    vehicle.make = result.get("make")
-    vehicle.model = result.get("model")
-    vehicle.body_type = result.get("body_type")
-    vehicle.fuel_type = result.get("fuel_type")
-    vehicle.color = result.get("color")
-    vehicle.mileage = result.get("mileage")
-    vehicle.transmission = result.get("transmission")
-    vehicle.save()
-    vehicle.images.all().delete()
-    for image_url in (result.get("image") or []):
-        if image_url:
-            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
+    # Updates the Vehicle row already linked to THIS listing — not a fresh
+    # VIN lookup, so no identity-conflict check needed here (see
+    # vehicle_matching.get_or_create_vehicle, used only at first-create time).
+    sync_vehicle_from_result(existing.vehicle, result)
     existing.price = str(result.get("price")) if result.get("price") is not None else existing.price
     existing.description = result.get("description")
     existing.save()
@@ -192,19 +183,12 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                     )
                     if not created_url:
                         raise IntegrityError("listing_url already exists")
-                    vehicle = Vehicle.objects.create(
-                        make=result.get("make"),
-                        model=result.get("model"),
-                        year=result.get("year"),
-                        mileage=result.get("mileage"),
-                        transmission=result.get("transmission"),
-                        fuel_type=result.get("fuel_type"),
-                        body_type=result.get("body_type"),
-                        color=result.get("color"),
-                    )
-                    for image_url in (result.get("image") or []):
-                        if image_url:
-                            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
+                    # Dedupes by VIN when the adapter provides one (none currently
+                    # do, but this keeps behavior consistent with the Gumtree path
+                    # and future-proofs adapters that add VIN extraction later) —
+                    # see vehicle_matching.get_or_create_vehicle for the matching
+                    # and identity-conflict rules.
+                    vehicle = get_or_create_vehicle(result)
                     vehicle_listing = VehicleListing.objects.create(
                         user=user,
                         vehicle=vehicle,

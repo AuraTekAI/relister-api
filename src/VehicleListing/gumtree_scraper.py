@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
-from .models import VehicleListing,GumtreeProfileListing,Vehicle,VehicleImage,ListingUrl
+from .models import VehicleListing,GumtreeProfileListing,ListingUrl
 import logging
 import time
 import random
@@ -9,6 +9,7 @@ from django.conf import settings
 from bs4 import BeautifulSoup
 import re
 from .utils import get_full_state_name, mark_listing_sold
+from .vehicle_matching import get_or_create_vehicle, sync_vehicle_from_result
 # from .models import RelistingFacebooklisting
 from django.utils import timezone
 from datetime import timedelta
@@ -553,33 +554,6 @@ def get_gumtree_listings(profile_url,user):
 #             return False,"No credentials found for user"
         
 
-def _sync_vehicle_from_result(vehicle, result):
-    """Overwrite a Vehicle's attributes + image set from a freshly scraped result dict."""
-    vehicle.year = result.get("year")
-    vehicle.make = result.get("make")
-    vehicle.model = result.get("model")
-    vehicle.body_type = result.get("body_type")
-    vehicle.fuel_type = result.get("fuel_type")
-    vehicle.color = result.get("color")
-    vehicle.mileage = result.get("mileage")
-    vehicle.transmission = result.get("transmission")
-    vehicle.save()
-    vehicle.images.all().delete()
-    for image_url in (result.get("image") or []):
-        if image_url:
-            VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
-
-
-def _get_or_create_vehicle(result):
-    vin = (result.get("vin") or "").strip() or None
-    if vin:
-        vehicle, _ = Vehicle.objects.get_or_create(vin=vin)
-    else:
-        vehicle = Vehicle.objects.create()
-    _sync_vehicle_from_result(vehicle, result)
-    return vehicle
-
-
 def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, user, seller_id):
     logging.info("Starting gumtree_profile_listings_thread execution")
     count = 0
@@ -611,7 +585,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     logging.info(f"Listing ID {listing_id} is already exit but the details are not matching")
                     logging.info(f"update the listing {listing_id} details")
                     if result:
-                        _sync_vehicle_from_result(vehicle, result)
+                        sync_vehicle_from_result(vehicle, result)
                         already_exists.price = str(result.get("price"))
                         already_exists.description = result.get("description")
                         already_exists.save()
@@ -631,7 +605,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     logging.info(f"Listing ID {listing_id} is already exit but the details are not matching")
                     logging.info(f"update the listing {listing_id} details")
                     if result:
-                        _sync_vehicle_from_result(vehicle, result)
+                        sync_vehicle_from_result(vehicle, result)
                         already_exists.price = str(result.get("price"))
                         already_exists.description = result.get("description")
                         already_exists.save()
@@ -648,7 +622,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             result = get_gumtree_listing_details(listing_id)
             if result and not already_exists:
                 count += 1
-                vehicle = _get_or_create_vehicle(result)
+                vehicle = get_or_create_vehicle(result)
                 listing_url, _ = ListingUrl.objects.get_or_create(
                     user=user, listing_id=listing_id, defaults={"url": result.get("url") or ""}
                 )

@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from .models import Vehicle, VehicleListing
 from .utils import mark_listing_sold, reactivate_listing, withdraw_listing
+from .vehicle_matching import get_or_create_vehicle
 
 
 def _make_listing(user, **overrides):
@@ -187,3 +188,80 @@ class WithdrawEndpointTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+
+class VehicleMatchingTests(TestCase):
+    """Confirms Vehicle dedup-by-VIN and the identity-conflict handling
+    described in vehicle_matching.py."""
+
+    def test_no_vin_always_creates_a_new_vehicle(self):
+        result = {"make": "Toyota", "model": "Corolla", "year": "2020"}
+        v1 = get_or_create_vehicle(result)
+        v2 = get_or_create_vehicle(result)
+        self.assertNotEqual(v1.id, v2.id)
+
+    def test_same_vin_same_details_reuses_the_row(self):
+        result = {"vin": "1HGCM82633A123456", "make": "Toyota", "model": "Corolla", "year": "2020", "color": "Red"}
+        v1 = get_or_create_vehicle(result)
+        v2 = get_or_create_vehicle(result)
+        self.assertEqual(v1.id, v2.id)
+        self.assertEqual(Vehicle.objects.filter(vin=result["vin"]).count(), 1)
+
+    def test_same_vin_filling_in_previously_blank_fields_reuses_the_row(self):
+        # First sight of this VIN has no color yet; a later scrape adds one —
+        # filling a blank isn't a conflict.
+        first = {"vin": "1HGCM82633A999999", "make": "Toyota", "model": "Corolla", "year": "2020"}
+        v1 = get_or_create_vehicle(first)
+        second = {**first, "color": "Blue"}
+        v2 = get_or_create_vehicle(second)
+        self.assertEqual(v1.id, v2.id)
+        v1.refresh_from_db()
+        self.assertEqual(v1.color, "Blue")
+
+    def test_same_vin_conflicting_make_creates_a_new_unvinned_vehicle(self):
+        # Real cars can't change make/model — a VIN match with a genuinely
+        # different make is treated as a data anomaly, not the same car.
+        first = {"vin": "1HGCM82633A555555", "make": "Toyota", "model": "Corolla", "year": "2020"}
+        v1 = get_or_create_vehicle(first)
+
+        conflicting = {"vin": "1HGCM82633A555555", "make": "Honda", "model": "Civic", "year": "2020"}
+        v2 = get_or_create_vehicle(conflicting)
+
+        self.assertNotEqual(v1.id, v2.id)
+        self.assertIsNone(v2.vin)  # can't share the VIN — column is unique
+        self.assertEqual(v2.make, "Honda")
+        # The original VIN-holding row is untouched, not corrupted.
+        v1.refresh_from_db()
+        self.assertEqual(v1.make, "Toyota")
+
+    def test_same_vin_conflicting_color_only_still_creates_a_new_vehicle(self):
+        # Proves the check isn't just "make" — ANY single identity column
+        # disagreeing is enough, even with make/model/year all matching.
+        first = {
+            "vin": "1HGCM82633A777777", "make": "Toyota", "model": "Corolla",
+            "year": "2020", "color": "White", "body_type": "Sedan",
+            "fuel_type": "Petrol", "transmission": "Automatic",
+        }
+        v1 = get_or_create_vehicle(first)
+
+        color_conflict = {**first, "color": "Black"}
+        v2 = get_or_create_vehicle(color_conflict)
+
+        self.assertNotEqual(v1.id, v2.id)
+        v1.refresh_from_db()
+        self.assertEqual(v1.color, "White")  # untouched
+        self.assertEqual(v2.color, "Black")
+
+    def test_same_vin_differing_mileage_only_still_reuses_the_row(self):
+        # Mileage is the one deliberate exception — an odometer reading is
+        # SUPPOSED to change every time the same real car is rescraped, so it
+        # must never be treated as "a different car".
+        first = {"vin": "1HGCM82633A888888", "make": "Toyota", "model": "Corolla", "year": "2020", "mileage": 40000}
+        v1 = get_or_create_vehicle(first)
+
+        later = {**first, "mileage": 45000}
+        v2 = get_or_create_vehicle(later)
+
+        self.assertEqual(v1.id, v2.id)
+        v1.refresh_from_db()
+        self.assertEqual(v1.mileage, 45000)
