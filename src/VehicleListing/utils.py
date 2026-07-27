@@ -137,22 +137,57 @@ def handle_failed_relisting(listing, user, relisting=None):
             status="failed"
         )
 
+def _delist_listing(listing, *, lifecycle_status, now=None):
+    """Shared bookkeeping for a listing leaving active sale — sold or
+    withdrawn. `timezone.now()` is always UTC here since USE_TZ=True (see
+    relister/settings.py), so delisted_at/days_to_sell need no explicit
+    timezone conversion.
+
+    days_to_sell is only meaningful for an actual sale — a withdrawn listing
+    wasn't sold, so it's left None rather than measuring "days to withdrawal".
+    """
+    now = now or timezone.now()
+    listing.delisted_at = now
+    listing.lifecycle_status = lifecycle_status
+    if lifecycle_status == listing.LIFECYCLE_SOLD and listing.first_listed_at:
+        listing.days_to_sell = (now.date() - listing.first_listed_at.date()).days
+    else:
+        listing.days_to_sell = None
+
+
 def mark_listing_sold(listing, relisting=None):
     now = timezone.now()
     listing.status = "sold"
+    _delist_listing(listing, lifecycle_status=listing.LIFECYCLE_SOLD, now=now)
     listing.updated_at = now
     listing.save()
-    logger.info(f"Listing sold for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
+    logger.info(f"Listing sold for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model} (days_to_sell={listing.days_to_sell})")
     if relisting:
         logger.info(f"Mark sold relisting as completed for the user {listing.user.email} and re-listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
         relisting.status = "completed"
         relisting.last_relisting_status = True
         relisting.save()
 
+def withdraw_listing(listing):
+    """Manually remove a listing from sale without it having been detected as
+    sold by a scrape — e.g. a dealer pulls a car for reasons unrelated to a
+    sale. Distinct from mark_listing_sold() so days_to_sell (a sale-time
+    metric) is never computed for a withdrawal."""
+    now = timezone.now()
+    listing.status = "withdrawn"
+    _delist_listing(listing, lifecycle_status=listing.LIFECYCLE_WITHDRAWN, now=now)
+    listing.updated_at = now
+    listing.save()
+    logger.info(f"Listing withdrawn for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
+
 def reactivate_listing(listing):
-    """Manually undo mark_listing_sold — used when a listing was flagged sold in error
-    (e.g. a transient Gumtree/scrape failure) and the dealer confirms it's still for sale."""
+    """Manually undo mark_listing_sold/withdraw_listing — used when a listing was flagged
+    sold/withdrawn in error (e.g. a transient Gumtree/scrape failure) and the dealer
+    confirms it's still for sale."""
     listing.status = "completed"
+    listing.lifecycle_status = listing.LIFECYCLE_ACTIVE
+    listing.delisted_at = None
+    listing.days_to_sell = None
     listing.save()
     logger.info(f"Listing manually reactivated for the user {listing.user.email} and listing title {listing.vehicle.year} {listing.vehicle.make} {listing.vehicle.model}")
 

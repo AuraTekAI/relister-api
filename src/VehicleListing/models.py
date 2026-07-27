@@ -93,6 +93,22 @@ class FacebookProfileListing(models.Model):
     def __str__(self):
         return f"{self.url}"
 class VehicleListing(models.Model):
+    # Lifecycle status (separate from the `status` field below, which is the
+    # pre-existing pending/failed/completed/sold scrape-and-publish state
+    # machine relied on throughout the scrapers/admin/extension). This is a
+    # purpose-built, business-facing "is this car for sale right now" field
+    # that never changes meaning and is kept in sync automatically wherever
+    # `status` already transitions — see utils.mark_listing_sold /
+    # utils.withdraw_listing / utils.reactivate_listing.
+    LIFECYCLE_ACTIVE = 'active'
+    LIFECYCLE_SOLD = 'sold'
+    LIFECYCLE_WITHDRAWN = 'withdrawn'
+    LIFECYCLE_STATUS_CHOICES = [
+        (LIFECYCLE_ACTIVE, 'Active'),
+        (LIFECYCLE_SOLD, 'Sold'),
+        (LIFECYCLE_WITHDRAWN, 'Withdrawn'),
+    ]
+
     vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='listings')
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     price = models.CharField(max_length=255,null=True,blank=True)
@@ -104,6 +120,20 @@ class VehicleListing(models.Model):
     listed_on = models.DateTimeField(null=True,blank=True)
     relist_count = models.IntegerField(default=0)       # how many times this specific listing has been relisted
     retry_count = models.IntegerField(default=0)
+    # Set once, the first time this listing is ever published (mirrors the
+    # existing `listed_on is None` first-publish check in
+    # update_vehicle_listing_listed_on) — and never touched again after that,
+    # unlike `listed_on` which is overwritten on every relist.
+    first_listed_at = models.DateTimeField(null=True, blank=True)
+    # Set when the listing stops being for sale (sold or withdrawn); cleared
+    # back to None if it's later reactivated/relisted.
+    delisted_at = models.DateTimeField(null=True, blank=True)
+    # (delisted_at - first_listed_at) in whole days, computed only when the
+    # listing is actually sold (not withdrawn). Cleared on reactivation.
+    days_to_sell = models.PositiveIntegerField(null=True, blank=True)
+    lifecycle_status = models.CharField(
+        max_length=20, choices=LIFECYCLE_STATUS_CHOICES, default=LIFECYCLE_ACTIVE
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

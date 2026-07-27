@@ -3,7 +3,7 @@ from django.contrib import admin
 # Register your models here
 from .models import VehicleListing, ListingUrl, Vehicle, VehicleImage
 from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
-from .utils import reactivate_listing
+from .utils import reactivate_listing, withdraw_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'listing', 'status', 'error_message', 'created_at', 'updated_at')
@@ -30,10 +30,10 @@ class VehicleImageAdmin(admin.ModelAdmin):
     search_fields = ('vehicle__vin', 'vehicle__make', 'vehicle__model')
 
 class VehicleListingAdmin(admin.ModelAdmin):
-    list_display = ('id','user', 'vehicle_year', 'vehicle_make', 'vehicle_model', 'status', 'price', 'seller_profile_id', 'listed_on', 'relist_count', 'retry_count', 'created_at', 'updated_at')
+    list_display = ('id','user', 'vehicle_year', 'vehicle_make', 'vehicle_model', 'status', 'lifecycle_status', 'price', 'seller_profile_id', 'listed_on', 'first_listed_at', 'delisted_at', 'days_to_sell', 'relist_count', 'retry_count', 'created_at', 'updated_at')
     search_fields = ('user__email', 'vehicle__year', 'vehicle__make', 'vehicle__model', 'status', 'seller_profile_id')
-    list_filter = ('user', 'status')
-    actions = ['reactivate_sold_listings']
+    list_filter = ('user', 'status', 'lifecycle_status')
+    actions = ['reactivate_sold_listings', 'withdraw_listings']
 
     @admin.display(description='Year', ordering='vehicle__year')
     def vehicle_year(self, obj):
@@ -54,6 +54,14 @@ class VehicleListingAdmin(admin.ModelAdmin):
             reactivate_listing(listing)
             count += 1
         self.message_user(request, f"Reactivated {count} listing(s).")
+
+    @admin.action(description="Withdraw selected listings (manual removal — not a detected sale)")
+    def withdraw_listings(self, request, queryset):
+        count = 0
+        for listing in queryset.exclude(lifecycle_status=VehicleListing.LIFECYCLE_WITHDRAWN):
+            withdraw_listing(listing)
+            count += 1
+        self.message_user(request, f"Withdrew {count} listing(s).")
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')

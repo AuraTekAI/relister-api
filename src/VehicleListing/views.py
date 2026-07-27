@@ -10,7 +10,7 @@ from accounts.models import User
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
-from .utils import send_status_reminder_email, mark_listing_sold
+from .utils import send_status_reminder_email, mark_listing_sold, withdraw_listing
 from django.http import JsonResponse, StreamingHttpResponse, HttpResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
 import requests as _http_requests
@@ -1315,6 +1315,10 @@ def update_vehicle_listing_listed_on(request):
             # No listed_on yet == first time this listing is being marked live.
             if vehicle_listing.listed_on is None:
                 vehicle_listing.relist_count = 0
+                # Set once, ever — unlike listed_on (below), this is never
+                # touched again on subsequent relists.
+                if vehicle_listing.first_listed_at is None:
+                    vehicle_listing.first_listed_at = listed_on_datetime
 
                 # Increment user listing_count
                 user = request.user
@@ -1347,9 +1351,22 @@ def update_vehicle_listing_listed_on(request):
                 user.relist_cycles = F('relist_cycles') + 1
                 user.save(update_fields=['relist_cycles', 'updated_at'])
 
+                # A relist of a previously sold/withdrawn listing implicitly
+                # reactivates it — mirrors utils.reactivate_listing's field
+                # resets so lifecycle_status/delisted_at/days_to_sell don't
+                # keep stale "sold" data around for a car that's back on sale.
+                if vehicle_listing.lifecycle_status != VehicleListing.LIFECYCLE_ACTIVE:
+                    vehicle_listing.lifecycle_status = VehicleListing.LIFECYCLE_ACTIVE
+                    vehicle_listing.delisted_at = None
+                    vehicle_listing.days_to_sell = None
+
             vehicle_listing.listed_on = listed_on_datetime
             vehicle_listing.status = "completed"
             vehicle_listing.save()
+            # relist_count may still be an unresolved F('relist_count') + 1
+            # expression in memory (not a plain int) after save() — refresh
+            # just that field so the response below can serialize it.
+            vehicle_listing.refresh_from_db(fields=['relist_count'])
 
         # NOTE: per-listing overage billing has been RETIRED. Overage is now billed
         # as an active-listings-over-quota metered quantity, reported to Stripe once
@@ -1365,6 +1382,9 @@ def update_vehicle_listing_listed_on(request):
             'data': {
                 'id': vehicle_listing.id,
                 'listed_on': vehicle_listing.listed_on.isoformat() if vehicle_listing.listed_on else None,
+                'first_listed_at': vehicle_listing.first_listed_at.isoformat() if vehicle_listing.first_listed_at else None,
+                'relist_count': vehicle_listing.relist_count,
+                'lifecycle_status': vehicle_listing.lifecycle_status,
                 'updated_at': vehicle_listing.updated_at.isoformat()
             }
         }, status=200)
@@ -1478,6 +1498,85 @@ def update_vehicle_listing_is_changed(request):
         return JsonResponse({
             'success': False,
             'error': 'An unexpected error occurred while updating the vehicle listing'
+        }, status=500)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def withdraw_vehicle_listing(request):
+    """
+    Manually mark a listing as withdrawn (removed from sale for a reason
+    other than a detected sale — e.g. the dealer pulls it). Mirrors the admin
+    "reactivate_sold_listings" action's shape but for the opposite direction;
+    see utils.withdraw_listing for the field-level effects (lifecycle_status,
+    delisted_at — days_to_sell is deliberately left untouched/None, since a
+    withdrawal isn't a sale).
+
+    Request Body:
+    {
+        "id": 123
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "id": 123,
+            "lifecycle_status": "withdrawn",
+            "delisted_at": "2026-07-27T03:00:00+00:00"
+        }
+    }
+    """
+    try:
+        data = json.loads(request.body)
+
+        if 'id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing ID is required'
+            }, status=400)
+
+        try:
+            vehicle_listing_id = int(data['id'])
+            if vehicle_listing_id <= 0:
+                raise ValueError("ID must be positive")
+        except (ValueError, TypeError):
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid vehicle listing ID format'
+            }, status=400)
+
+        vehicle_listing = VehicleListing.objects.filter(
+            id=vehicle_listing_id, user=request.user
+        ).first()
+        if vehicle_listing is None:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing not found or you do not have permission to update it'
+            }, status=404)
+
+        withdraw_listing(vehicle_listing)
+
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'id': vehicle_listing.id,
+                'lifecycle_status': vehicle_listing.lifecycle_status,
+                'delisted_at': vehicle_listing.delisted_at.isoformat() if vehicle_listing.delisted_at else None,
+            }
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON format in request body'
+        }, status=400)
+
+    except Exception as e:
+        logger.error(f"Error withdrawing vehicle listing: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while withdrawing the vehicle listing'
         }, status=500)
 
 
