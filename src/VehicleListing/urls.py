@@ -21,6 +21,7 @@ from .views import (
     sync_facebook_listing_snapshot,
     get_facebook_listing_snapshots,
 )
+from .vehicle_export import export_vehicle_data
 
 urlpatterns = [
     # path('import/', import_url_from_gumtree, name='import_url_from_gumtree'),
@@ -59,4 +60,5 @@ urlpatterns = [
     path('popular-vehicles/', get_popular_vehicles, name='get_popular_vehicles'),
     path('search/', search_products, name='search_products'),
     path('top-dealers/', get_top_dealers, name='get_top_dealers'),
+    path('export/', export_vehicle_data, name='export_vehicle_data'),
 ]

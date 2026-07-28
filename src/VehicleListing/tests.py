@@ -1,4 +1,6 @@
+import io
 import json
+from datetime import datetime
 
 from django.test import TestCase
 from django.urls import reverse
@@ -9,6 +11,7 @@ from accounts.models import User
 from .models import Vehicle, VehicleListing
 from .utils import mark_listing_sold, reactivate_listing, withdraw_listing
 from .vehicle_matching import get_or_create_vehicle
+from .export_utils import quarter_date_range, days_to_sell_percentiles
 
 
 def _make_listing(user, **overrides):
@@ -265,3 +268,139 @@ class VehicleMatchingTests(TestCase):
         self.assertEqual(v1.id, v2.id)
         v1.refresh_from_db()
         self.assertEqual(v1.mileage, 45000)
+
+
+class VehicleExportTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(email="admin@example.com", password="pw")
+        self.admin.is_staff = True
+        self.admin.save()
+        self.dealer = User.objects.create_user(email="dealer@example.com", password="pw")
+        self.dealer.dealership_name = "Best Cars Perth"
+        self.dealer.save()
+
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin)
+        self.url = reverse("export_vehicle_data")
+
+    def _make_sold_listing(self, days_to_sell, created_at=None):
+        vehicle = Vehicle.objects.create(make="Toyota", model="Corolla", year="2020")
+        listing = VehicleListing.objects.create(
+            user=self.dealer, vehicle=vehicle, price="15000", status="sold",
+            lifecycle_status=VehicleListing.LIFECYCLE_SOLD, days_to_sell=days_to_sell,
+        )
+        if created_at:
+            VehicleListing.objects.filter(pk=listing.pk).update(created_at=created_at)
+        return listing
+
+    def test_non_admin_is_forbidden(self):
+        self.client.force_authenticate(user=self.dealer)
+        response = self.client.get(self.url, {"export_format": "json"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_json_export_includes_dealer_join_and_stats(self):
+        self._make_sold_listing(10)
+        self._make_sold_listing(20)
+        self._make_sold_listing(30)
+
+        response = self.client.get(self.url, {"export_format": "json"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+
+        self.assertEqual(body["count"], 3)
+        self.assertEqual(body["sold_count"], 3)
+        self.assertEqual(body["stats"]["median_days_to_sell"], 20)
+
+        row = body["results"][0]
+        self.assertEqual(row["dealership_name"], "Best Cars Perth")
+        self.assertEqual(row["dealer_email"], "dealer@example.com")
+        self.assertEqual(row["make"], "Toyota")
+        # The aggregate stat is repeated on every row.
+        self.assertEqual(row["median_days_to_sell"], 20)
+
+    def test_non_sold_listings_excluded_from_stats(self):
+        self._make_sold_listing(10)
+        active_vehicle = Vehicle.objects.create(make="Honda", model="Civic", year="2021")
+        VehicleListing.objects.create(
+            user=self.dealer, vehicle=active_vehicle, price="20000", status="completed",
+            lifecycle_status=VehicleListing.LIFECYCLE_ACTIVE,
+        )
+
+        response = self.client.get(self.url, {"export_format": "json"})
+        body = response.json()
+        self.assertEqual(body["count"], 2)       # both rows exported
+        self.assertEqual(body["sold_count"], 1)  # only the sold one counted for stats
+
+    def test_custom_date_range_filters_rows(self):
+        in_range = timezone.make_aware(datetime(2025, 8, 15))
+        out_of_range = timezone.make_aware(datetime(2025, 1, 1))
+        self._make_sold_listing(5, created_at=in_range)
+        self._make_sold_listing(5, created_at=out_of_range)
+
+        response = self.client.get(self.url, {
+            "export_format": "json", "start_date": "2025-07-01", "end_date": "2025-09-30",
+        })
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+
+    def test_quarter_preset_matches_custom_range(self):
+        in_q1 = timezone.make_aware(datetime(2025, 8, 1))
+        self._make_sold_listing(5, created_at=in_q1)
+
+        response = self.client.get(self.url, {
+            "export_format": "json", "quarter": "Q1", "year": "2025", "year_type": "financial",
+        })
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["start_date"], "2025-07-01")
+        self.assertEqual(body["end_date"], "2025-09-30")
+
+    def test_xlsx_format_returns_a_real_spreadsheet(self):
+        self._make_sold_listing(15)
+        response = self.client.get(self.url, {"export_format": "xlsx"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("attachment; filename=", response["Content-Disposition"])
+
+        from openpyxl import load_workbook
+        workbook = load_workbook(io.BytesIO(response.content))
+        sheet = workbook.active
+        self.assertEqual(sheet.cell(row=1, column=1).value, "Listing ID")
+        self.assertEqual(sheet.max_row, 2)  # header + 1 data row
+
+    def test_csv_format_returns_correct_headers(self):
+        self._make_sold_listing(15)
+        response = self.client.get(self.url, {"export_format": "csv"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+        first_line = response.content.decode().splitlines()[0]
+        self.assertIn("Listing ID", first_line)
+        self.assertIn("Dealership Name", first_line)
+
+    def test_bad_format_is_rejected(self):
+        response = self.client.get(self.url, {"export_format": "pdf"})
+        self.assertEqual(response.status_code, 400)
+
+
+class ExportUtilsTests(TestCase):
+    def test_australian_fy_q1_is_july_to_september(self):
+        start, end = quarter_date_range("Q1", 2025, "financial")
+        self.assertEqual(start.isoformat(), "2025-07-01")
+        self.assertEqual(end.isoformat(), "2025-09-30")
+
+    def test_australian_fy_q3_rolls_into_next_calendar_year(self):
+        start, end = quarter_date_range("Q3", 2025, "financial")
+        self.assertEqual(start.isoformat(), "2026-01-01")
+        self.assertEqual(end.isoformat(), "2026-03-31")
+
+    def test_calendar_year_q1_is_january_to_march(self):
+        start, end = quarter_date_range("Q1", 2025, "calendar")
+        self.assertEqual(start.isoformat(), "2025-01-01")
+        self.assertEqual(end.isoformat(), "2025-03-31")
+
+    def test_percentiles_empty_input_returns_none_not_zero(self):
+        stats = days_to_sell_percentiles([])
+        self.assertIsNone(stats["median_days_to_sell"])
