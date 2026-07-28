@@ -25,7 +25,7 @@ from .models import Vehicle, VehicleImage
 
 logger = logging.getLogger('vehicle_matching')
 
-IDENTITY_FIELDS = ("make", "model", "year", "color", "body_type", "fuel_type", "transmission")
+IDENTITY_FIELDS = ("make", "model", "variant", "year", "color", "body_type", "fuel_type", "transmission")
 
 
 def _identity_conflicts(vehicle, result):
@@ -43,6 +43,7 @@ def sync_vehicle_from_result(vehicle, result):
     vehicle.year = result.get("year")
     vehicle.make = result.get("make")
     vehicle.model = result.get("model")
+    vehicle.variant = result.get("variant")
     vehicle.body_type = result.get("body_type")
     vehicle.fuel_type = result.get("fuel_type")
     vehicle.color = result.get("color")

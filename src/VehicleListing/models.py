@@ -9,6 +9,10 @@ class Vehicle(models.Model):
     vin = models.CharField(max_length=17, null=True, blank=True)
     make = models.CharField(max_length=100, null=True, blank=True)
     model = models.CharField(max_length=100, null=True, blank=True)
+    # Trim/spec level (e.g. "Ascent Sport", "SX"). Every scraper/adapter already
+    # extracts this into its result dict — it just wasn't persisted anywhere
+    # until the price-estimation feature needed it for like-for-like matching.
+    variant = models.CharField(max_length=255, null=True, blank=True)
     year = models.CharField(max_length=255, null=True, blank=True)
     mileage = models.IntegerField(null=True, blank=True)
     transmission = models.CharField(max_length=255, null=True, blank=True)

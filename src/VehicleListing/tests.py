@@ -12,6 +12,7 @@ from .models import Vehicle, VehicleListing
 from .utils import mark_listing_sold, reactivate_listing, withdraw_listing
 from .vehicle_matching import get_or_create_vehicle
 from .export_utils import quarter_date_range, days_to_sell_percentiles
+from .price_estimation import estimate_price, _parse_price, _mileage_band_index
 
 
 def _make_listing(user, **overrides):
@@ -404,3 +405,182 @@ class ExportUtilsTests(TestCase):
     def test_percentiles_empty_input_returns_none_not_zero(self):
         stats = days_to_sell_percentiles([])
         self.assertIsNone(stats["median_days_to_sell"])
+
+
+def _sold_listing(user, price, make="Toyota", model="Corolla", variant="Ascent Sport",
+                   transmission="Automatic", year="2020", mileage=40000):
+    vehicle = Vehicle.objects.create(
+        make=make, model=model, variant=variant, transmission=transmission, year=year, mileage=mileage,
+    )
+    return VehicleListing.objects.create(
+        user=user, vehicle=vehicle, price=price, status="sold",
+        lifecycle_status=VehicleListing.LIFECYCLE_SOLD,
+    )
+
+
+class PriceEstimationUtilsTests(TestCase):
+    def test_parse_price_handles_currency_formatting(self):
+        self.assertEqual(_parse_price("$18,500"), 18500.0)
+        self.assertEqual(_parse_price("18500"), 18500.0)
+
+    def test_parse_price_rejects_unparsable_values(self):
+        self.assertIsNone(_parse_price("POA"))
+        self.assertIsNone(_parse_price(None))
+        self.assertIsNone(_parse_price(""))
+        self.assertIsNone(_parse_price("$0"))
+
+    def test_mileage_band_index_groups_correctly(self):
+        self.assertEqual(_mileage_band_index(5000), 0)
+        self.assertEqual(_mileage_band_index(45000), 2)
+        self.assertEqual(_mileage_band_index(39999), 1)
+
+
+class PriceEstimationAlgorithmTests(TestCase):
+    def setUp(self):
+        self.dealer = User.objects.create_user(email="pricedealer@example.com", password="pw")
+
+    def _criteria(self, **overrides):
+        base = {
+            "make": "Toyota", "model": "Corolla", "variant": "Ascent Sport",
+            "transmission": "Automatic", "year": 2020, "mileage": 42000,
+        }
+        base.update(overrides)
+        return base
+
+    def test_exact_tier_used_when_enough_matches(self):
+        prices = [15000, 16000, 17000, 18000, 19000]
+        for price in prices:
+            _sold_listing(self.dealer, str(price))
+
+        result = estimate_price(self._criteria())
+
+        self.assertFalse(result["insufficient_data"])
+        self.assertEqual(result["tier"], "exact")
+        self.assertFalse(result["widened"])
+        self.assertEqual(result["sample_size"], 5)
+        self.assertEqual(result["estimated_price"], 17000.0)
+        self.assertEqual(result["price_range"], {"low": 15500.0, "high": 18500.0})
+
+    def test_widens_when_variant_does_not_match_enough_listings(self):
+        # Only 2 sold with the exact variant — not enough on its own.
+        _sold_listing(self.dealer, "17000", variant="Ascent Sport")
+        _sold_listing(self.dealer, "17500", variant="Ascent Sport")
+        # 3 more of the same car but a different (or unlabeled) variant —
+        # only enough once variant is dropped from the match.
+        _sold_listing(self.dealer, "16000", variant="SX")
+        _sold_listing(self.dealer, "18000", variant="SX")
+        _sold_listing(self.dealer, "19000", variant=None)
+
+        result = estimate_price(self._criteria())
+
+        self.assertFalse(result["insufficient_data"])
+        self.assertEqual(result["tier"], "drop_variant")
+        self.assertTrue(result["widened"])
+        self.assertEqual(result["sample_size"], 5)
+
+    def test_only_sold_listings_are_used(self):
+        for price, status, lifecycle in [
+            ("15000", "sold", VehicleListing.LIFECYCLE_SOLD),
+            ("16000", "sold", VehicleListing.LIFECYCLE_SOLD),
+            ("17000", "sold", VehicleListing.LIFECYCLE_SOLD),
+            ("18000", "sold", VehicleListing.LIFECYCLE_SOLD),
+            ("999999", "completed", VehicleListing.LIFECYCLE_ACTIVE),   # active — must be ignored
+            ("1", "withdrawn", VehicleListing.LIFECYCLE_WITHDRAWN),      # withdrawn — must be ignored
+            ("2", "pending", VehicleListing.LIFECYCLE_ACTIVE),           # pending — must be ignored
+        ]:
+            vehicle = Vehicle.objects.create(
+                make="Toyota", model="Corolla", variant="Ascent Sport",
+                transmission="Automatic", year="2020", mileage=42000,
+            )
+            VehicleListing.objects.create(
+                user=self.dealer, vehicle=vehicle, price=price, status=status, lifecycle_status=lifecycle,
+            )
+
+        # Only 4 genuinely sold — one short of the minimum, so even after
+        # full widening this must report insufficient data, proving the
+        # non-sold rows (which would otherwise push the count to 7) were
+        # correctly excluded throughout every tier.
+        result = estimate_price(self._criteria())
+        self.assertTrue(result["insufficient_data"])
+        self.assertEqual(result["sample_size"], 4)
+
+    def test_insufficient_data_when_fewer_than_minimum_even_at_loosest_tier(self):
+        _sold_listing(self.dealer, "15000")
+        _sold_listing(self.dealer, "16000")
+
+        result = estimate_price(self._criteria())
+
+        self.assertTrue(result["insufficient_data"])
+        self.assertIsNone(result["estimated_price"])
+        self.assertIsNone(result["price_range"])
+        self.assertEqual(result["sample_size"], 2)
+        self.assertIn("2 matching sold vehicle", result["message"])
+
+    def test_unparsable_prices_are_excluded_from_the_sample(self):
+        _sold_listing(self.dealer, "15000")
+        _sold_listing(self.dealer, "16000")
+        _sold_listing(self.dealer, "17000")
+        _sold_listing(self.dealer, "18000")
+        _sold_listing(self.dealer, "19000")
+        _sold_listing(self.dealer, "POA")  # unparsable — must not count toward sample_size
+
+        result = estimate_price(self._criteria())
+
+        self.assertEqual(result["sample_size"], 5)
+
+    def test_make_and_model_are_never_relaxed(self):
+        _sold_listing(self.dealer, "15000", make="Honda", model="Civic")
+        _sold_listing(self.dealer, "16000", make="Honda", model="Civic")
+        _sold_listing(self.dealer, "17000", make="Honda", model="Civic")
+        _sold_listing(self.dealer, "18000", make="Honda", model="Civic")
+        _sold_listing(self.dealer, "19000", make="Honda", model="Civic")
+
+        # Asking for a Toyota Corolla must never fall back to Honda Civic
+        # sales, no matter how loose the other criteria get.
+        result = estimate_price(self._criteria(make="Toyota", model="Corolla"))
+        self.assertTrue(result["insufficient_data"])
+
+
+class PriceEstimationEndpointTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(email="priceadmin@example.com", password="pw")
+        self.admin.is_staff = True
+        self.admin.save()
+        self.dealer = User.objects.create_user(email="pricedealer2@example.com", password="pw")
+        self.client = APIClient()
+        self.url = reverse("estimate_vehicle_price")
+
+        for price in [15000, 16000, 17000, 18000, 19000]:
+            _sold_listing(self.dealer, str(price))
+
+    def _post(self, payload, user=None):
+        self.client.force_authenticate(user=user or self.admin)
+        return self.client.post(self.url, data=json.dumps(payload), content_type="application/json")
+
+    def test_returns_estimate_for_admin(self):
+        response = self._post({
+            "make": "Toyota", "model": "Corolla", "variant": "Ascent Sport",
+            "transmission": "Automatic", "year": 2020, "mileage": 42000,
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["insufficient_data"])
+        self.assertEqual(body["estimated_price"], 17000.0)
+
+    def test_rejects_non_admin(self):
+        response = self._post(
+            {"make": "Toyota", "model": "Corolla", "year": 2020, "mileage": 42000},
+            user=self.dealer,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_requires_make_and_model(self):
+        response = self._post({"year": 2020, "mileage": 42000})
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_valid_year_and_mileage(self):
+        response = self._post({"make": "Toyota", "model": "Corolla", "year": "not-a-year", "mileage": 42000})
+        self.assertEqual(response.status_code, 400)
+
+        response = self._post({"make": "Toyota", "model": "Corolla", "year": 2020, "mileage": -5})
+        self.assertEqual(response.status_code, 400)

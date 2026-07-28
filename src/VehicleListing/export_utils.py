@@ -69,25 +69,36 @@ def quarter_date_range(quarter, year, year_type='financial'):
     return start, end
 
 
+def median_p25_p75(values):
+    """
+    Generic median / 25th / 75th percentile over a list of numbers (ints or
+    floats), used by both the days-to-sell export analytics and vehicle price
+    estimation. Returns (median, p25, p75) — all None for an empty list (a
+    median of nothing is undefined, not zero); all equal to the single value
+    for a one-item list.
+    """
+    values = [v for v in values if v is not None]
+    if not values:
+        return None, None, None
+    if len(values) == 1:
+        return values[0], values[0], values[0]
+    # statistics.quantiles(n=4) with the default 'exclusive' method needs at
+    # least 2 data points; returns [Q1, Q2(median), Q3].
+    q1, q2, q3 = quantiles(values, n=4)
+    return q2, q1, q3
+
+
 def days_to_sell_percentiles(days_to_sell_values):
     """
     Median / 25th / 75th percentile of a list of integer day counts.
     Returns a dict with None values (not zeros) when there's no data to
     compute from — a median of an empty set isn't "0 days", it's undefined.
     """
-    values = [v for v in days_to_sell_values if v is not None]
-    if not values:
+    median, p25, p75 = median_p25_p75(days_to_sell_values)
+    if median is None:
         return {'median_days_to_sell': None, 'p25_days_to_sell': None, 'p75_days_to_sell': None}
-
-    if len(values) == 1:
-        only = values[0]
-        return {'median_days_to_sell': only, 'p25_days_to_sell': only, 'p75_days_to_sell': only}
-
-    # statistics.quantiles(n=4) with the default 'exclusive' method needs at
-    # least 2 data points; returns [Q1, Q2(median), Q3].
-    q1, q2, q3 = quantiles(values, n=4)
     return {
-        'median_days_to_sell': round(q2, 1),
-        'p25_days_to_sell': round(q1, 1),
-        'p75_days_to_sell': round(q3, 1),
+        'median_days_to_sell': round(median, 1),
+        'p25_days_to_sell': round(p25, 1),
+        'p75_days_to_sell': round(p75, 1),
     }

@@ -21,8 +21,8 @@ class ListingUrlAdmin(admin.ModelAdmin):
     list_filter = ('user',)
 
 class VehicleAdmin(admin.ModelAdmin):
-    list_display = ('id', 'vin', 'year', 'make', 'model', 'transmission', 'fuel_type', 'body_type', 'color', 'created_at', 'updated_at')
-    search_fields = ('vin', 'year', 'make', 'model')
+    list_display = ('id', 'vin', 'year', 'make', 'model', 'variant', 'transmission', 'fuel_type', 'body_type', 'color', 'created_at', 'updated_at')
+    search_fields = ('vin', 'year', 'make', 'model', 'variant')
     list_filter = ('make', 'fuel_type', 'body_type')
 
 class VehicleImageAdmin(admin.ModelAdmin):

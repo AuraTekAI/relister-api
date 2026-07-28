@@ -22,6 +22,7 @@ from .views import (
     get_facebook_listing_snapshots,
 )
 from .vehicle_export import export_vehicle_data
+from .price_estimation import estimate_vehicle_price
 
 urlpatterns = [
     # path('import/', import_url_from_gumtree, name='import_url_from_gumtree'),
@@ -61,4 +62,5 @@ urlpatterns = [
     path('search/', search_products, name='search_products'),
     path('top-dealers/', get_top_dealers, name='get_top_dealers'),
     path('export/', export_vehicle_data, name='export_vehicle_data'),
+    path('estimate-price/', estimate_vehicle_price, name='estimate_vehicle_price'),
 ]
