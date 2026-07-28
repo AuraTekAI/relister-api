@@ -88,15 +88,15 @@ def s3_key_for(content_hash, size):
 def _s3_client():
     return boto3.client(
         's3',
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_S3_REGION_NAME,
+        aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_VEHICLE_IMAGE_REGION,
     )
 
 
 def upload_variant(key, webp_bytes):
     _s3_client().put_object(
-        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+        Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
         Key=key,
         Body=webp_bytes,
         ContentType='image/webp',
@@ -110,7 +110,7 @@ def delete_variants_from_s3(hosted_image):
         return
     try:
         _s3_client().delete_objects(
-            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
             Delete={'Objects': [{'Key': key} for key in keys]},
         )
     except (BotoCoreError, ClientError) as exc:
@@ -123,7 +123,7 @@ def public_url_for(key):
         return None
     if settings.AWS_CLOUDFRONT_DOMAIN:
         return f"https://{settings.AWS_CLOUDFRONT_DOMAIN}/{key}"
-    return f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.{settings.AWS_S3_REGION_NAME}.amazonaws.com/{key}"
+    return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
 
 
 def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):

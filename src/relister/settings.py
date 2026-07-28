@@ -395,8 +395,18 @@ AWS_S3_PRESIGNED_URL_EXPIRY = env.int('AWS_S3_PRESIGNED_URL_EXPIRY', default=360
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Vehicle image hosting pipeline (VehicleListing.image_pipeline) ─────────
-# Reuses the AWS credentials/bucket/region above — separate prefix so vehicle
-# photos and zip_manager's zip files don't collide.
+# Its own bucket/credentials, each defaulting to the shared AWS settings above
+# so nothing changes for a deployment that doesn't set them.
+#
+# These exist because the pipeline originally read AWS_STORAGE_BUCKET_NAME
+# directly — the same variable zip_manager serves the browser-extension zips
+# from. Pointing that at an image bucket would have made every extension
+# download 404, so the two subsystems get independent config instead of being
+# separated only by an S3 prefix.
+AWS_VEHICLE_IMAGE_BUCKET = env('AWS_VEHICLE_IMAGE_BUCKET', default=AWS_STORAGE_BUCKET_NAME)
+AWS_VEHICLE_IMAGE_ACCESS_KEY_ID = env('AWS_VEHICLE_IMAGE_ACCESS_KEY_ID', default=AWS_ACCESS_KEY_ID)
+AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY = env('AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY', default=AWS_SECRET_ACCESS_KEY)
+AWS_VEHICLE_IMAGE_REGION = env('AWS_VEHICLE_IMAGE_REGION', default=AWS_S3_REGION_NAME)
 AWS_S3_VEHICLE_IMAGE_PREFIX = env('AWS_S3_VEHICLE_IMAGE_PREFIX', default='vehicle-images/')
 # CloudFront distribution domain fronting the bucket (e.g. d123abc.cloudfront.net
 # or a custom domain like images.autorelister.com.au). Left blank in dev to fall
