@@ -50,6 +50,7 @@ KNOWN_COMMANDS = {
     "delete_aged",       # delete only aged listings
     "delete_unmatched",  # delete FB listings with no backend match
     "publish_unpublished",  # publish every backend listing not yet on FB
+    "delete_orphans",    # delete orphaned duplicate copies (keep newest per car)
 }
 
 # WebRTC signaling messages relayed between the admin (viewer) and the extension
