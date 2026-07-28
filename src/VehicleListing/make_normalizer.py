@@ -54,6 +54,15 @@ VALID_MAKES = {
 # is NOT a leading prefix of the canonical name (e.g. "Range" for "Land Rover",
 # "VW" for "Volkswagen"); plain multi-word brands are handled by the canonical
 # list above.
+#
+# Do NOT add an alias whose first token is already a canonical make — it would
+# be matched by the combined-token lookup in ``resolve_make`` and eat the real
+# model name. That is what 'mini cooper' -> 'MINI' did: a source that split the
+# fields correctly (make="MINI", model="COOPER") had "mini cooper" matched
+# across both, so "COOPER" was consumed into the make and the model was left
+# empty. "MINI" is already in VALID_MAKES, so the alias was redundant as well
+# as harmful — both "MINI"/"COOPER" and a single-field "Mini Cooper" now
+# resolve to make="MINI", model="Cooper" without it.
 ALIASES = {
     'vw': 'Volkswagen',
     'chevy': 'Chevrolet',
@@ -63,7 +72,6 @@ ALIASES = {
     'range': 'Land Rover',
     'range rover': 'Land Rover',
     'rolls royce': 'Rolls-Royce',
-    'mini cooper': 'MINI',
     'citroen': 'Citroën',
     'skoda': 'Škoda',
     'great wall motors': 'Great Wall',
