@@ -535,7 +535,12 @@ def get_custom_domain_profile_listings(request):
         if success:
             return JsonResponse({'message': message}, status=200)
         else:
-            return JsonResponse({'error': message}, status=200)
+            # Discovery failed / found no stock, so no CustomDomainProfileListing
+            # row was created. Returning 200 here made the extension believe
+            # registration succeeded and start polling the GET, which then 404s
+            # forever (no row exists). Return 422 so the extension surfaces the
+            # failure instead of entering a silent retry loop.
+            return JsonResponse({'error': message}, status=422)
 
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
