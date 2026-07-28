@@ -31,12 +31,19 @@ def _http_get(url):
 
 
 def _base_url_from(profile_url):
-    """Derive scheme+host from whatever the user registered, falling back to the
-    canonical host. Keeps us faithful to what they typed while guaranteeing a
-    usable base even if they entered just the bare domain."""
+    """Derive the scheme+host to scrape from.
+
+    We only trust the host the user registered when it's the canonical dealer
+    host (or its www form) — for those, staying faithful to what they typed is
+    fine. Any other host (e.g. the marketing domain easyvehicles.com.au, which
+    only 301-redirects to the canonical host at the *root* — deeper paths like
+    /stock return an empty page) is normalised to CANONICAL_BASE_URL so the
+    stock index and detail pages actually resolve. Also falls back to the
+    canonical base if the URL is unparseable or host-less."""
     try:
         parsed = urlparse(profile_url)
-        if parsed.scheme and parsed.netloc:
+        host = (parsed.netloc or "").lower()
+        if parsed.scheme and host in (HOST, f"www.{HOST}"):
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
         pass
