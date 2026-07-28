@@ -334,3 +334,94 @@ class Invoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_number or self.invoice_id}"
+
+
+class HostedImage(models.Model):
+    """
+    One physical photo, permanently stored in our own S3 bucket in three WebP
+    sizes, keyed by the sha256 of the originally-downloaded bytes. Content-hash
+    keying means the same photo — e.g. a relisted car whose Gumtree/dealer CDN
+    URL rotated but the pixels didn't, or a stock photo reused across listings —
+    is only ever downloaded, converted and uploaded once, no matter how many
+    VehicleListingImage rows end up pointing at it.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_READY = 'ready'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_READY, 'Ready'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    content_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    # First source URL this content was ever seen at — kept for audit/debugging only.
+    source_url = models.URLField(max_length=1000, null=True, blank=True)
+    thumbnail_image = models.CharField(max_length=512, blank=True, default='')
+    medium_image = models.CharField(max_length=512, blank=True, default='')
+    large_image = models.CharField(max_length=512, blank=True, default='')
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    file_size_bytes = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.content_hash
+
+    def url_for(self, size):
+        """Public URL (CloudFront if configured, else direct S3) for one of
+        'thumbnail' / 'medium' / 'large'. Deferred import to avoid a
+        models <-> image_pipeline circular import."""
+        from .image_pipeline import public_url_for
+        key = {
+            'thumbnail': self.thumbnail_image,
+            'medium': self.medium_image,
+            'large': self.large_image,
+        }.get(size)
+        return public_url_for(key)
+
+
+class VehicleListingImage(models.Model):
+    """
+    Ordered slot for one of a listing's photos, tracking ingestion from the raw
+    scraped source_url through to the shared HostedImage it resolves to.
+    One row per (listing, source_url) so a relist that reports the same source
+    URL again is a no-op here — sync_listing_images() (see image_pipeline.py)
+    only creates rows for URLs it hasn't seen before on this listing, which is
+    what guarantees an unchanged photo is never re-downloaded or re-enqueued.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_PROCESSING = 'processing'
+    STATUS_READY = 'ready'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PROCESSING, 'Processing'),
+        (STATUS_READY, 'Ready'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE, related_name='image_slots')
+    source_url = models.URLField(max_length=1000)
+    position = models.PositiveIntegerField(default=0)
+    hosted_image = models.ForeignKey(
+        HostedImage, on_delete=models.SET_NULL, null=True, blank=True, related_name='listing_links'
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(null=True, blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('listing', 'source_url')]
+        ordering = ['position']
+        indexes = [
+            models.Index(fields=['listing', 'position'], name='vl_vli_listing_position_idx'),
+            models.Index(fields=['status'], name='vl_vli_status_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.listing_id}:{self.position} ({self.status})"

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from zenrows import ZenRowsClient
 
 from .base import DomainAdapter
 from ..make_normalizer import normalize_make
@@ -26,17 +27,142 @@ USER_AGENT = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Fetch layer: bot-protection detection + ZenRows fallback.
+#
+# VirtualYard rate-limits repeated hits from one IP. Once tripped it 302s to
+# /security.php?err=<code> and serves a "prove you're human" page — crucially
+# with HTTP *200*, so a status-code check alone treats it as success. Parsing
+# that page yields no specs, which is how hollow listings (no year/make/model,
+# no price, no images) got written to the DB.
+#
+# So: detect the challenge explicitly, and on a block retry the same URL through
+# ZenRows (rotating premium AU proxies) so the request arrives from a different
+# IP. If both attempts fail the caller gets None and SKIPS the listing — never
+# a half-empty row. ZenRows is a fallback rather than the default path so we
+# only spend credits on requests the direct fetch actually lost (~8 of 28 per
+# run at time of writing) and behaviour stays unchanged when the site is happy.
+# ---------------------------------------------------------------------------
+
+# Bot-challenge fingerprints. The redirect target is the strongest signal; the
+# <title> catches the case where a proxy already followed the redirect for us
+# (ZenRows returns the final page, so response.url is the ZenRows API URL and
+# can't be inspected). Deliberately NOT size-based — a small-but-legitimate
+# page must not be mistaken for a block.
+_BLOCK_URL_MARKER = "security.php"
+_BLOCK_TITLE_RE = re.compile(r"<title>\s*security\s*</title>", re.IGNORECASE)
+
+# ZenRows knobs. premium_proxy + AU geo because the block is IP-reputation
+# based (the site is AU-only and datacentre ranges are the first to be
+# throttled). No JS rendering: the site is fully server-rendered, so paying for
+# js_render would be wasted credits.
+_ZENROWS_PARAMS = {"premium_proxy": "true", "proxy_country": "au"}
+
+# Transport/throttle failures worth a second attempt through the proxy. 404/410
+# are deliberately absent — a genuinely missing page shouldn't burn credits.
+_RETRYABLE_STATUSES = frozenset({403, 408, 429, 500, 502, 503, 504})
+
+FETCH_OK = "ok"
+FETCH_BLOCKED = "blocked"
+FETCH_ERROR = "error"
+
+
 def _http_get(url):
+    """Plain direct fetch — the un-proxied primitive used by _fetch()."""
     return requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
 
 
+def _looks_blocked(response):
+    """True when `response` is the bot-challenge page rather than real content."""
+    if _BLOCK_URL_MARKER in (getattr(response, "url", "") or "").lower():
+        return True
+    for prior in getattr(response, "history", None) or []:
+        location = (prior.headers.get("location") or "").lower()
+        if _BLOCK_URL_MARKER in location:
+            return True
+    try:
+        return bool(_BLOCK_TITLE_RE.search(response.text or ""))
+    except Exception:
+        return False
+
+
+def _zenrows_get(url):
+    """Re-fetch `url` through ZenRows. Returns a response or None."""
+    if not settings.ZENROWS_API_KEY:
+        logger.error(
+            "ZENROWS_API_KEY is not configured — cannot retry blocked "
+            f"EasyVehicles fetch for {url}"
+        )
+        return None
+    try:
+        client = ZenRowsClient(settings.ZENROWS_API_KEY)
+        response = client.get(url, params=_ZENROWS_PARAMS)
+    except Exception as exc:
+        logger.error(f"ZenRows request errored for {url}: {exc}")
+        return None
+    if response.status_code == 402:
+        logger.error(
+            f"ZenRows returned 402 (out of credits / check API key) for {url}"
+        )
+        return None
+    return response
+
+
+def _fetch(url):
+    """Fetch `url`, retrying through ZenRows if the direct hit is blocked.
+
+    Returns ``(html, status)`` where status is FETCH_OK / FETCH_BLOCKED /
+    FETCH_ERROR. ``html`` is None unless the status is FETCH_OK, so callers can
+    never accidentally parse a challenge page.
+    """
+    response = None
+    try:
+        response = _http_get(url)
+    except Exception as exc:
+        logger.error(f"Direct fetch failed for {url}: {exc}")
+
+    if response is not None:
+        blocked = _looks_blocked(response)
+        if response.status_code == 200 and not blocked:
+            return response.text, FETCH_OK
+        if not blocked and response.status_code not in _RETRYABLE_STATUSES:
+            logger.error(f"Non-200 ({response.status_code}) for {url}")
+            return None, FETCH_ERROR
+        logger.warning(
+            f"EasyVehicles fetch obstructed for {url} "
+            f"(status={response.status_code}, bot_challenge={blocked}) — "
+            "retrying via ZenRows"
+        )
+    else:
+        logger.warning(f"Retrying {url} via ZenRows after transport failure")
+
+    proxied = _zenrows_get(url)
+    if proxied is None:
+        return None, FETCH_BLOCKED if response is not None else FETCH_ERROR
+    if proxied.status_code != 200:
+        logger.error(f"ZenRows non-200 ({proxied.status_code}) for {url}")
+        return None, FETCH_ERROR
+    if _looks_blocked(proxied):
+        logger.error(f"Still bot-challenged via ZenRows for {url} — giving up this run")
+        return None, FETCH_BLOCKED
+    logger.info(f"ZenRows fallback succeeded for {url}")
+    return proxied.text, FETCH_OK
+
+
 def _base_url_from(profile_url):
-    """Derive scheme+host from whatever the user registered, falling back to the
-    canonical host. Keeps us faithful to what they typed while guaranteeing a
-    usable base even if they entered just the bare domain."""
+    """Derive the scheme+host to scrape from.
+
+    We only trust the host the user registered when it's the canonical dealer
+    host (or its www form) — for those, staying faithful to what they typed is
+    fine. Any other host (e.g. the marketing domain easyvehicles.com.au, which
+    only 301-redirects to the canonical host at the *root* — deeper paths like
+    /stock return an empty page) is normalised to CANONICAL_BASE_URL so the
+    stock index and detail pages actually resolve. Also falls back to the
+    canonical base if the URL is unparseable or host-less."""
     try:
         parsed = urlparse(profile_url)
-        if parsed.scheme and parsed.netloc:
+        host = (parsed.netloc or "").lower()
+        if parsed.scheme and host in (HOST, f"www.{HOST}"):
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
         pass
@@ -160,8 +286,11 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
     """Adapter for easyvehiclesaustralia.com.au (Teixeira Group), a dealer site
     on the VirtualYard / carsforsale.com.au platform.
 
-    The site is fully server-rendered HTML (no JS / bot protection), so a plain
-    requests + BeautifulSoup scrape works — no Playwright needed. Detail pages
+    The site is fully server-rendered HTML, so a plain requests +
+    BeautifulSoup scrape works — no Playwright needed. It *does* however
+    rate-limit repeated hits from one IP behind a /security.php bot challenge
+    served with HTTP 200; see the fetch layer above, which detects that and
+    retries through ZenRows. Detail pages
     expose a clean "Vehicle specifics" table plus schema/OpenGraph meta tags,
     and gallery images on storage.googleapis.com. This adapter deliberately
     parses by table-label and meta tag rather than fragile CSS classes so a
@@ -204,13 +333,25 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
                 # is a safe, self-terminating probe for larger inventories.
                 page_url = f"{base_url}{STOCK_PATH}?page={page}"
             logger.info(f"Fetching EasyVehicles stock index: {page_url}")
-            try:
-                response = _http_get(page_url)
-            except Exception as exc:
-                logger.error(f"Failed to fetch {page_url}: {exc}")
-                break
-            if response.status_code != 200:
-                logger.error(f"Non-200 ({response.status_code}) for {page_url}")
+            html, status = _fetch(page_url)
+            if status == FETCH_BLOCKED:
+                # Abandon the whole run rather than hand back what we scraped so
+                # far. A short list is worse than an empty one: the caller's
+                # reconcile step deletes/marks-sold every listing missing from
+                # the batch, and its cascade guard only trips below 50% of the
+                # existing count — so a block on page 2 of 2 could silently bin
+                # the listings that live on that page. Returning [] makes the
+                # caller bail with "No listings found" and leave the DB alone;
+                # the next scheduled run retries.
+                logger.error(
+                    f"Bot-protection block on stock index {page_url} — abandoning "
+                    "discovery for this run to avoid a partial-list reconcile"
+                )
+                return []
+            if html is None:
+                # Genuine error (404 = we walked past the last page). Keep the
+                # links gathered so far, as before.
+                logger.error(f"Failed to fetch stock index {page_url}")
                 break
 
             # Match detail links only: exactly /buy/<slug>/<token> (two path
@@ -218,7 +359,7 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
             # finance/enquiry links, which have extra path segments.
             page_hrefs = re.findall(
                 r"""href=['"]((?:https?://[^'"/]+)?/buy/[^'"/]+/[A-Za-z0-9_\-]+)['"]""",
-                response.text,
+                html,
             )
             new_count = 0
             for href in page_hrefs:
@@ -350,16 +491,18 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         if not listing_id:
             logger.error(f"Could not extract listing id from {stock_url}")
             return None
-        try:
-            response = _http_get(stock_url)
-        except Exception as exc:
-            logger.error(f"Failed to fetch {stock_url}: {exc}")
-            return None
-        if response.status_code != 200:
-            logger.error(f"Non-200 ({response.status_code}) for {stock_url}")
+        html, status = _fetch(stock_url)
+        if html is None:
+            # Blocked or errored. Returning None makes the orchestrator skip
+            # this listing entirely — no create, no update — so a transient
+            # block can never overwrite good data with blanks. The listing is
+            # still counted as "seen" by the caller, so it won't be reconciled
+            # away either; the next run picks it up.
+            logger.error(
+                f"Skipping EasyVehicles listing {listing_id} — fetch {status} for {stock_url}"
+            )
             return None
 
-        html = response.text
         soup = BeautifulSoup(html, "html.parser")
         spec = self._parse_specs(soup)
 
@@ -404,6 +547,36 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
 
         images = self._parse_images(html)
 
+        # Last line of defence against writing an empty listing. Even with the
+        # block detection above, any future change that leaves the specs table
+        # unparseable would otherwise produce a row with every field None — the
+        # exact hollow listings this guard exists to prevent. Year+make is the
+        # minimum identity a listing needs to be publishable; without it we'd
+        # rather have no row than a blank one, so skip and retry next run.
+        # (Deliberately not gated on `model`: the make-normalizer legitimately
+        # empties it for two-token brands such as MINI Cooper, and that listing
+        # is otherwise complete.)
+        if not year or not make:
+            logger.error(
+                f"Discarding EasyVehicles listing {listing_id} — no vehicle data "
+                f"parsed (year={year!r} make={make!r} model={model!r}). "
+                f"Page fetched OK ({len(html)} bytes) but specs were unreadable."
+            )
+            return None
+
+        # Non-fatal completeness warning: worth surfacing because a listing
+        # published without these looks broken to buyers, but not worth dropping
+        # an otherwise-identifiable vehicle over.
+        missing = [
+            name for name, value in (("price", price), ("images", images))
+            if not value
+        ]
+        if missing:
+            logger.warning(
+                f"EasyVehicles listing {listing_id} parsed with missing "
+                f"{', '.join(missing)} — saving anyway"
+            )
+
         title = " ".join(str(p) for p in [year, make, model, variant] if p)
 
         listing_details = {
@@ -434,6 +607,17 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         return False
 
     def discover_dealer_location(self, profile_url: str) -> dict | None:
-        # Location comes from the dealer's registration (suburb/state), so no
-        # site-level discovery is attempted here.
-        return None
+        # Easy Vehicles Australia (Teixeira Group) trades from a single physical
+        # location — 5 Old Aberdeen Pl, West Perth WA 6005 (per their /contact
+        # page). Per-listing location isn't exposed on the detail pages, so
+        # (mirroring the DNA / Buckingham adapters) we return the dealership's
+        # own suburb/state here. discover_and_save_dealer_location() stamps this
+        # onto User.dealership_suburb/_state at signup, and the listing
+        # serializer builds each row's `location` from it. A reseller feeding
+        # off this site who isn't in West Perth can be overridden per-user in
+        # the admin.
+        return {
+            "suburb": "West Perth",
+            "state": "WA",
+            "address": "5 Old Aberdeen Pl, West Perth WA 6005",
+        }

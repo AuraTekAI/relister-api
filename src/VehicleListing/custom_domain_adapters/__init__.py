@@ -102,9 +102,22 @@ register(BuckinghamAutosAdapter())
 # under both www and non-www so it resolves regardless of which form the user
 # entered at registration; both point at one instance so `seller_profile_id`
 # (== adapter.HOST) stays stable.
+#
+# easyvehicles.com.au is the dealer's marketing domain that 301-redirects to
+# easyvehiclesaustralia.com.au (same Teixeira Group site). Users who register
+# the short form must resolve to this same adapter instance — otherwise the
+# URL falls through to the generic JSON-LD adapter, which can't find the
+# VirtualYard /stock index and returns zero listings. All four host forms
+# point at one instance so `seller_profile_id` (== adapter.HOST) stays the
+# canonical easyvehiclesaustralia.com.au regardless of which the user entered.
 _easyvehicles_adapter = EasyVehiclesAustraliaAdapter()
 register(_easyvehicles_adapter)
-_REGISTRY["www." + EasyVehiclesAustraliaAdapter.HOST.lower()] = _easyvehicles_adapter
+for _alias_host in (
+    "www." + EasyVehiclesAustraliaAdapter.HOST.lower(),
+    "easyvehicles.com.au",
+    "www.easyvehicles.com.au",
+):
+    _REGISTRY[_alias_host] = _easyvehicles_adapter
 
 __all__ = [
     "DomainAdapter",

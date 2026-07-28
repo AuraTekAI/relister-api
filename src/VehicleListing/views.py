@@ -535,7 +535,12 @@ def get_custom_domain_profile_listings(request):
         if success:
             return JsonResponse({'message': message}, status=200)
         else:
-            return JsonResponse({'error': message}, status=200)
+            # Discovery failed / found no stock, so no CustomDomainProfileListing
+            # row was created. Returning 200 here made the extension believe
+            # registration succeeded and start polling the GET, which then 404s
+            # forever (no row exists). Return 422 so the extension surfaces the
+            # failure instead of entering a silent retry loop.
+            return JsonResponse({'error': message}, status=422)
 
     except Exception as e:
         return JsonResponse({'message': str(e)}, status=500)
@@ -1131,42 +1136,92 @@ def custom_domain_image_proxy(request):
         return HttpResponseBadRequest("Invalid or missing url parameter")
 
     proxy_logger = logging.getLogger('custom_domain')
-    try:
-        upstream = _http_requests.get(
-            target_url,
-            timeout=30,
-            stream=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-                ),
-            },
-        )
-    except _http_requests.RequestException as exc:
-        proxy_logger.warning("Custom domain image proxy upstream error for %s: %s", target_url, exc)
-        return HttpResponse(status=502)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+    }
+    # The extension rejects images >8MB anyway, so cap buffering a little above that.
+    MAX_BYTES = 12 * 1024 * 1024
 
-    if upstream.status_code != 200:
-        proxy_logger.warning("Custom domain image proxy non-200 (%s) for %s", upstream.status_code, target_url)
-        upstream.close()
-        return HttpResponse(status=502)
+    # Retry a few times. Under the dashboard's concurrent image grid + a publish,
+    # a subset of these proxy fetches intermittently fail (transient googleapis
+    # error/non-200, or a saturated worker) — the extension then drops that photo
+    # and can trip its "partial images" guard. A couple of quick retries recover them.
+    for attempt in range(3):
+        try:
+            upstream = _http_requests.get(
+                target_url, timeout=(5, 30), stream=True, headers=headers,
+            )
+        except _http_requests.RequestException as exc:
+            proxy_logger.warning(
+                "Custom domain image proxy upstream error (attempt %s/3) for %s: %s",
+                attempt + 1, target_url, exc,
+            )
+            time.sleep(0.4 * (attempt + 1))
+            continue
 
-    content_type = upstream.headers.get("Content-Type", "image/jpeg")
-    if not content_type.lower().startswith("image/"):
-        proxy_logger.warning("Custom domain image proxy non-image Content-Type %s for %s", content_type, target_url)
-        upstream.close()
-        return HttpResponse(status=502)
+        if upstream.status_code != 200:
+            status = upstream.status_code
+            upstream.close()
+            proxy_logger.warning(
+                "Custom domain image proxy non-200 (%s, attempt %s/3) for %s",
+                status, attempt + 1, target_url,
+            )
+            if status in (403, 404, 410):  # not transient — don't waste retries
+                return HttpResponse(status=502)
+            time.sleep(0.4 * (attempt + 1))
+            continue
 
-    response = StreamingHttpResponse(
-        upstream.iter_content(chunk_size=8192),
-        content_type=content_type,
-    )
-    if upstream.headers.get("Content-Length"):
-        response["Content-Length"] = upstream.headers["Content-Length"]
-    response["Access-Control-Allow-Origin"] = "*"
-    response["Cache-Control"] = "public, max-age=86400"
-    return response
+        content_type = upstream.headers.get("Content-Type", "image/jpeg")
+        if not content_type.lower().startswith("image/"):
+            proxy_logger.warning(
+                "Custom domain image proxy non-image Content-Type %s for %s",
+                content_type, target_url,
+            )
+            upstream.close()
+            return HttpResponse(status=502)
+
+        # Buffer the image (with a cap) instead of streaming it. A streamed
+        # response pins a gunicorn worker for the whole browser-side read; under
+        # concurrency that worker starvation is exactly what surfaces as nginx
+        # 502s. Reading it here (fast server->GCS) frees the worker promptly and
+        # lets nginx buffer the bytes out to the client.
+        chunks, total, oversize = [], 0, False
+        try:
+            for chunk in upstream.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_BYTES:
+                    oversize = True
+                    break
+                chunks.append(chunk)
+        except _http_requests.RequestException as exc:
+            proxy_logger.warning(
+                "Custom domain image proxy read error (attempt %s/3) for %s: %s",
+                attempt + 1, target_url, exc,
+            )
+            upstream.close()
+            time.sleep(0.4 * (attempt + 1))
+            continue
+        finally:
+            upstream.close()
+
+        if oversize:
+            proxy_logger.warning(
+                "Custom domain image proxy image exceeds %s bytes for %s",
+                MAX_BYTES, target_url,
+            )
+            return HttpResponse(status=502)
+
+        response = HttpResponse(b"".join(chunks), content_type=content_type)
+        response["Access-Control-Allow-Origin"] = "*"
+        response["Cache-Control"] = "public, max-age=86400"
+        return response
+
+    return HttpResponse(status=502)  # all retries exhausted
 
 
 
