@@ -167,6 +167,27 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):
 
 
 def sync_listing_images(listing, image_urls):
+    """Fail-safe wrapper around _sync_listing_images.
+
+    This runs inline inside the Gumtree and custom-domain scrape loops, right
+    after the listing row has already been saved. Image hosting is a
+    presentation nicety; scraping is the revenue path. An exception escaping
+    here would abort the rest of the scrape loop and leave a profile
+    half-processed, so anything that goes wrong is logged and swallowed —
+    the listing itself is already safely persisted, and the next scrape
+    re-attempts the slot reconciliation.
+    """
+    try:
+        _sync_listing_images(listing, image_urls)
+    except Exception:
+        logger.exception(
+            "sync_listing_images failed for listing id=%s — listing data is saved; "
+            "image slots will be retried on the next scrape",
+            getattr(listing, "pk", None),
+        )
+
+
+def _sync_listing_images(listing, image_urls):
     """
     Reconcile listing.image_slots against a freshly-scraped list of source
     URLs. Called every time a scraper sets/updates VehicleListing.images.
