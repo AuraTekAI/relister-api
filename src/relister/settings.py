@@ -439,20 +439,21 @@ VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', def
 # EXTENSION_USE_HOSTED_IMAGES=True in the env (no code deploy needed) to turn the
 # fix on. Flip back to False to instantly revert to the old proxy-everything path.
 EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
-# When True, the EasyVehicles adapter HEADs each gallery photo while parsing and
-# substitutes the slide's own virtualyard.com.au fallback (data-src-error) for
-# any storage.googleapis.com URL that isn't serving.
+# When True, the EasyVehicles adapter checks each gallery photo while parsing
+# and, for any full-size URL that isn't serving, stores the slide's displayed
+# (640x480) rendition instead.
 #
-# Default False, on measurement: those 404s are transient, not permanent. A
-# window on 2026-07-29 had 6 of 20 and 11 of 21 photos 404ing across two
-# listings; every one of them served normally ~30 minutes later, and 100
-# consecutive requests afterwards were clean. Since process_vehicle_listing_image_task
-# already retries a failed download with backoff, the hosting pipeline recovers
-# those photos on its own — whereas the check costs ~1.4s per photo (~30s per
-# listing, ~13 min on a 28-listing profile scrape) on every parse and can pin a
-# photo to the fallback host over a momentary blip. Turn on only if photos are
-# ever found to be permanently missing from the googleapis bucket.
-EASYVEHICLES_VERIFY_IMAGE_URLS = env.bool('EASYVEHICLES_VERIFY_IMAGE_URLS', default=False)
+# On by default because the dealer's full-size bucket is unreliable in a way
+# that stops listings publishing at all: measured 2026-07-29, 5 of 23 full-size
+# photos serving on one listing, 7 of 20 and 8 of 17 on others — while the
+# displayed rendition was 20 of 20 and 17 of 17 on those same pages. Below 15
+# fetchable photos the extension aborts the publish outright, so a lower-
+# resolution photo is strictly better than no listing.
+#
+# The cost is one request per photo at parse time (~1.4s each against this
+# dealer's CDN). Set False to skip the check and store whatever the page lists,
+# accepting that some listings will not publish.
+EASYVEHICLES_VERIFY_IMAGE_URLS = env.bool('EASYVEHICLES_VERIFY_IMAGE_URLS', default=True)
 # ─────────────────────────────────────────────────────────────────────────────
 
 EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'

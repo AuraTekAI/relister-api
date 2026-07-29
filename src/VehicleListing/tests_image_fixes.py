@@ -203,96 +203,151 @@ class EasyVehiclesGalleryParseTests(SimpleTestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 1 (root cause) — photos whose googleapis copy is a 404
 # ─────────────────────────────────────────────────────────────────────────────
-class DeadPrimaryImageUrlTests(SimpleTestCase):
-    """Live evidence this guards: on the two reported i30s, 6 of 20 and 11 of 21
-    `data-src` URLs answered 404 on storage.googleapis.com while every one of
-    their `data-src-error` twins served 200. Storing the dead primary is what
-    left the extension with 14 usable photos out of 20.
+class DeadImageUrlFallbackTests(SimpleTestCase):
+    """VirtualYard publishes each photo at up to four addresses and which ones
+    serve varies per photo, per listing and over time. Measured 2026-07-29 on
+    the Suzuki Swift, slide 3: li.data-src 404, li.data-src-error 200/364KB,
+    img.src 200/49KB — the same photo, one address dead and three alive. Storing
+    only the dead one is what aborts the publish.
+
+    The size floor matters just as much: on the Kizashi, data-src-error resolves
+    to a single ~8KB placeholder shared by every slide, so "answers 200" is not
+    sufficient to accept a URL.
 
     _url_is_live is mocked throughout — the suite must not hit the network.
     """
 
-    PRIMARY = 'https://storage.googleapis.com/au-assets/photo_full.jpg'
-    FALLBACK = 'https://virtualyard.com.au/photos/photo_full.jpg'
+    FULL = 'https://storage.googleapis.com/au-assets/full.jpg'
+    MIRROR = 'https://virtualyard.com.au/photos/full.jpg?w=2048'
+    SHOWN = 'https://storage.googleapis.com/au-assets/shown.jpg'
+    THUMB_MIRROR = 'https://virtualyard.com.au/photos/shown.jpg?w=640&h=480'
 
-    def _html(self, primary=None, fallback=None):
-        primary = self.PRIMARY if primary is None else primary
-        fallback = self.FALLBACK if fallback is None else fallback
-        error_attr = f'data-src-error="{fallback}"' if fallback else ''
-        return f"""
+    def _html(self, full=None, mirror=None, shown=None, thumb_mirror=None):
+        full = self.FULL if full is None else full
+        mirror = self.MIRROR if mirror is None else mirror
+        shown = self.SHOWN if shown is None else shown
+        thumb_mirror = self.THUMB_MIRROR if thumb_mirror is None else thumb_mirror
+        attrs = f'data-src="{full}"'
+        if mirror:
+            attrs += f' data-src-error="{mirror}"'
+        if thumb_mirror:
+            attrs += f' data-thumb-error="{thumb_mirror}"'
+        img = f'<img src="{shown}">' if shown else ''
+        return f'''
         <ul class="vehicle-photo-carousel">
-          <li data-src="{primary}" {error_attr}><img src="{primary}"></li>
+          <li {attrs}>{img}</li>
         </ul>
-        """
+        '''
 
     def _parse(self, html, live):
-        """`live` maps URL -> bool for the availability check."""
         with mock.patch.object(EasyVehiclesAustraliaAdapter, '_url_is_live',
-                               side_effect=lambda url: live[url]) as probe:
+                               side_effect=lambda url: live.get(url, False)) as probe:
             return EasyVehiclesAustraliaAdapter()._parse_images(html), probe
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
-    def test_dead_primary_is_replaced_by_the_slides_own_fallback(self):
-        images, _ = self._parse(self._html(), {self.PRIMARY: False, self.FALLBACK: True})
-        self.assertEqual(images, [self.FALLBACK])
+    def test_prefers_the_full_size_mirror_over_the_smaller_rendition(self):
+        """The Swift's slide 3 exactly: primary dead, full-size mirror alive.
+        Must take the mirror (364KB) rather than dropping to 640x480."""
+        images, _ = self._parse(
+            self._html(), {self.FULL: False, self.MIRROR: True, self.SHOWN: True},
+        )
+        self.assertEqual(images, [self.MIRROR])
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
-    def test_live_primary_is_kept_and_fallback_never_probed(self):
-        images, probe = self._parse(self._html(), {self.PRIMARY: True})
-        self.assertEqual(images, [self.PRIMARY])
-        self.assertEqual(probe.call_count, 1, 'probed the fallback despite a healthy primary')
+    def test_falls_through_to_the_displayed_rendition_when_full_size_is_gone(self):
+        images, _ = self._parse(
+            self._html(), {self.FULL: False, self.MIRROR: False, self.SHOWN: True},
+        )
+        self.assertEqual(images, [self.SHOWN])
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
-    def test_both_dead_keeps_the_primary(self):
-        images, _ = self._parse(self._html(), {self.PRIMARY: False, self.FALLBACK: False})
-        self.assertEqual(images, [self.PRIMARY])
+    def test_falls_through_to_the_thumbnail_mirror_as_a_last_resort(self):
+        images, _ = self._parse(
+            self._html(),
+            {self.FULL: False, self.MIRROR: False, self.SHOWN: False, self.THUMB_MIRROR: True},
+        )
+        self.assertEqual(images, [self.THUMB_MIRROR])
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
-    def test_slide_without_a_fallback_is_not_probed_at_all(self):
-        images, probe = self._parse(self._html(fallback=''), {})
-        self.assertEqual(images, [self.PRIMARY])
-        self.assertEqual(probe.call_count, 0)
+    def test_live_full_size_is_kept_and_nothing_else_is_probed(self):
+        images, probe = self._parse(self._html(), {self.FULL: True})
+        self.assertEqual(images, [self.FULL], 'downgraded a photo that was serving fine')
+        self.assertEqual(probe.call_count, 1)
+
+    @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
+    def test_all_renditions_dead_keeps_the_original(self):
+        images, _ = self._parse(self._html(), {})
+        self.assertEqual(images, [self.FULL])
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=False)
     def test_kill_switch_skips_verification_entirely(self):
         images, probe = self._parse(self._html(), {})
-        self.assertEqual(images, [self.PRIMARY])
+        self.assertEqual(images, [self.FULL])
         self.assertEqual(probe.call_count, 0)
 
     @override_settings(EASYVEHICLES_VERIFY_IMAGE_URLS=True)
-    def test_recovered_photo_keeps_the_gallery_whole(self):
-        """The end state that matters: a gallery with dead primaries still
-        yields one working URL per photo, not a short list."""
+    def test_mixed_gallery_recovers_every_photo(self):
+        """Listing 9701's shape: 5 of 23 full-size alive, the rest recoverable
+        from another rendition. All 23 must come back, distinct."""
         slides = ''.join(
-            f'<li data-src="https://storage.googleapis.com/au-assets/p{i}.jpg"'
-            f'    data-src-error="https://virtualyard.com.au/photos/p{i}.jpg">'
-            f'  <img src="https://storage.googleapis.com/au-assets/p{i}.jpg"></li>'
-            for i in range(20)
+            f'<li data-src="https://storage.googleapis.com/au-assets/full{i}.jpg"'
+            f'    data-src-error="https://virtualyard.com.au/photos/full{i}.jpg?w=2048">'
+            f'  <img src="https://storage.googleapis.com/au-assets/shown{i}.jpg"></li>'
+            for i in range(23)
         )
-        # Photos 14-19 are 404 on googleapis, mirroring listing 9688.
         live = {}
-        for i in range(20):
-            live[f'https://storage.googleapis.com/au-assets/p{i}.jpg'] = i < 14
-            live[f'https://virtualyard.com.au/photos/p{i}.jpg'] = True
+        for i in range(23):
+            live[f'https://storage.googleapis.com/au-assets/full{i}.jpg'] = i < 5
+            live[f'https://virtualyard.com.au/photos/full{i}.jpg?w=2048'] = 5 <= i < 15
+            live[f'https://storage.googleapis.com/au-assets/shown{i}.jpg'] = True
 
         images, _ = self._parse(f'<ul class="vehicle-photo-carousel">{slides}</ul>', live)
 
-        self.assertEqual(len(images), 20)
-        self.assertEqual(len(set(images)), 20)
-        self.assertEqual(sum(1 for u in images if 'virtualyard' in u), 6)
+        self.assertEqual(len(images), 23)
+        self.assertEqual(len(set(images)), 23, 'duplicate URLs returned')
+        self.assertEqual(sum(1 for u in images if '/full' in u), 15, 'lost a full-resolution photo')
+        self.assertEqual(sum(1 for u in images if 'shown' in u), 8)
 
-    def test_url_is_live_treats_unverifiable_as_live(self):
-        """A transport error or a HEAD-hostile status must not push a healthy
-        photo onto the fallback host."""
-        with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.head',
-                        side_effect=Exception('connection reset')):
-            self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.PRIMARY))
 
+class UrlIsLiveTests(SimpleTestCase):
+    """The probe itself — this is what keeps the placeholder out."""
+
+    URL = 'https://storage.googleapis.com/au-assets/photo.jpg'
+
+    def _head(self, status, length=None):
+        headers = {} if length is None else {'Content-Length': str(length)}
+        return mock.patch(
+            'VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.head',
+            return_value=mock.Mock(status_code=status, headers=headers),
+        )
+
+    def test_placeholder_sized_response_is_rejected(self):
+        """~8KB is the shared 'no photo' image, not a vehicle photo."""
+        with self._head(200, 8_192):
+            self.assertFalse(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+
+    def test_real_photo_sizes_are_accepted(self):
+        for length in (45_000, 364_000, 489_000):
+            with self.subTest(bytes=length):
+                with self._head(200, length):
+                    self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+
+    def test_missing_content_length_is_not_held_against_the_url(self):
+        with self._head(200):
+            self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+
+    def test_status_codes(self):
         for status, expected in ((200, True), (405, True), (501, True), (404, False), (403, False)):
             with self.subTest(status=status):
-                with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.head',
-                                return_value=mock.Mock(status_code=status)):
-                    self.assertIs(EasyVehiclesAustraliaAdapter._url_is_live(self.PRIMARY), expected)
+                with self._head(status, 400_000):
+                    self.assertIs(EasyVehiclesAustraliaAdapter._url_is_live(self.URL), expected)
+
+    def test_transport_error_treated_as_live(self):
+        """A flaky request must not downgrade a healthy photo."""
+        with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.head',
+                        side_effect=Exception('connection reset')):
+            self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+
 
 
 class ImageProxyRetryTests(SimpleTestCase):
