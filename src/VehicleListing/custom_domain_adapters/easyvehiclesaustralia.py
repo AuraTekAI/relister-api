@@ -470,11 +470,42 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         try:
             length = int(response.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
-            return True  # unparseable header — don't reject on that alone
-        if 0 < length < _MIN_REAL_IMAGE_BYTES:
-            logger.info(f"Ignoring {url}: {length} bytes, too small to be a real photo")
-            return False
-        return True
+            length = 0
+        if length:
+            if length < _MIN_REAL_IMAGE_BYTES:
+                logger.info(f"Ignoring {url}: {length} bytes, too small to be a real photo")
+                return False
+            return True
+        # No Content-Length on the HEAD. The mirror host answers exactly this
+        # way *and* serves the placeholder, so trusting the 200 here is what
+        # let 53 placeholder URLs get stored — measure the body instead.
+        return EasyVehiclesAustraliaAdapter._body_is_big_enough(url)
+
+    @staticmethod
+    def _body_is_big_enough(url):
+        """Stream just enough of the body to tell a photo from the placeholder.
+
+        Reads at most _MIN_REAL_IMAGE_BYTES and stops, so the cost is a few KB
+        rather than a full-size download. Unreachable → True, same
+        can't-prove-it's-dead rule as the HEAD path.
+        """
+        try:
+            with requests.get(
+                url, headers={"User-Agent": USER_AGENT},
+                timeout=_IMAGE_CHECK_TIMEOUT, stream=True, allow_redirects=True,
+            ) as response:
+                if response.status_code != 200:
+                    return False
+                read = 0
+                for chunk in response.iter_content(8192):
+                    read += len(chunk)
+                    if read >= _MIN_REAL_IMAGE_BYTES:
+                        return True
+        except Exception as exc:
+            logger.warning(f"Could not size-check gallery image {url}: {exc}")
+            return True
+        logger.info(f"Ignoring {url}: {read} bytes, too small to be a real photo")
+        return False
 
     @staticmethod
     def _slide_image_candidates(li):

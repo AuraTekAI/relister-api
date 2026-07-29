@@ -332,9 +332,48 @@ class UrlIsLiveTests(SimpleTestCase):
                 with self._head(200, length):
                     self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
 
-    def test_missing_content_length_is_not_held_against_the_url(self):
-        with self._head(200):
+    def test_missing_content_length_falls_back_to_measuring_the_body(self):
+        """The mirror host answers HEAD 200 with no Content-Length AND serves
+        the ~9KB placeholder. Trusting that 200 is what put 53 placeholder URLs
+        into production, so the body has to be measured."""
+        with self._head(200), mock.patch.object(
+            EasyVehiclesAustraliaAdapter, '_body_is_big_enough', return_value=False,
+        ) as sized:
+            self.assertFalse(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+        sized.assert_called_once_with(self.URL)
+
+        with self._head(200), mock.patch.object(
+            EasyVehiclesAustraliaAdapter, '_body_is_big_enough', return_value=True,
+        ):
             self.assertTrue(EasyVehiclesAustraliaAdapter._url_is_live(self.URL))
+
+    def test_body_measurement_rejects_the_placeholder(self):
+        """9,158 bytes — the real placeholder size observed in production."""
+        response = mock.MagicMock()
+        response.status_code = 200
+        response.iter_content = lambda size: [b'x' * 9158]
+        response.__enter__ = lambda s: s
+        response.__exit__ = lambda *a: False
+        with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.get',
+                        return_value=response):
+            self.assertFalse(EasyVehiclesAustraliaAdapter._body_is_big_enough(self.URL))
+
+    def test_body_measurement_accepts_a_real_photo_and_stops_early(self):
+        """Must not download the whole 400KB file just to size-check it."""
+        chunks = [b'x' * 8192] * 50
+        response = mock.MagicMock()
+        response.status_code = 200
+        response.iter_content = lambda size: iter(chunks)
+        response.__enter__ = lambda s: s
+        response.__exit__ = lambda *a: False
+        with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.get',
+                        return_value=response):
+            self.assertTrue(EasyVehiclesAustraliaAdapter._body_is_big_enough(self.URL))
+
+    def test_body_measurement_treats_errors_as_live(self):
+        with mock.patch('VehicleListing.custom_domain_adapters.easyvehiclesaustralia.requests.get',
+                        side_effect=Exception('reset')):
+            self.assertTrue(EasyVehiclesAustraliaAdapter._body_is_big_enough(self.URL))
 
     def test_status_codes(self):
         for status, expected in ((200, True), (405, True), (501, True), (404, False), (403, False)):
