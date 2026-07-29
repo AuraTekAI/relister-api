@@ -62,6 +62,11 @@ _ZENROWS_PARAMS = {"premium_proxy": "true", "proxy_country": "au"}
 # are deliberately absent — a genuinely missing page shouldn't burn credits.
 _RETRYABLE_STATUSES = frozenset({403, 408, 429, 500, 502, 503, 504})
 
+# (connect, read) timeout for the per-photo availability HEAD in _parse_images.
+# Deliberately short: the check is a best-effort guard, not something a scrape
+# should stall on.
+_IMAGE_CHECK_TIMEOUT = (5, 10)
+
 FETCH_OK = "ok"
 FETCH_BLOCKED = "blocked"
 FETCH_ERROR = "error"
@@ -413,19 +418,132 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
                     spec[label.strip().lower()] = value
         return spec
 
-    def _parse_images(self, html):
-        """Collect real gallery image URLs. Prefer the storage.googleapis.com
-        au-assets gallery (full set); fall back to virtualyard.com.au/photos
-        only if the gallery isn't present. Excludes the theme no-photo
-        placeholder and site chrome.
+    # Recognises a real full-size gallery photo URL (either host), excluding the
+    # theme no-photo placeholder and site chrome. Query strings (e.g. ?w=2048 on
+    # the VirtualYard-hosted variants) are tolerated.
+    _IMG_EXT_RE = re.compile(r"\.(?:jpe?g|png|webp)(?:$|\?)", re.IGNORECASE)
 
-        Same sidebar hazard as _parse_price: this scans the page for image
-        URLs, so it must not reach into the "Recent vehicles" section. If the
-        platform ever renders real related-car gallery images there, they'd be
-        wrongly attached to THIS listing and would flicker as the sidebar
-        rotates between scrapes — tripping the change-detector into a needless
-        delete+republish. Cut the page at the earliest related-section marker
-        first (mirrors the guard in _parse_price)."""
+    @staticmethod
+    def _is_gallery_image(url):
+        if not url:
+            return False
+        if "storage.googleapis.com/au-assets/" not in url and \
+                "virtualyard.com.au/photos/" not in url:
+            return False
+        return bool(EasyVehiclesAustraliaAdapter._IMG_EXT_RE.search(url))
+
+    @staticmethod
+    def _url_is_live(url):
+        """True unless the URL definitively answers with a non-200.
+
+        A transport error or a HEAD-hostile status (405/501) returns True: we
+        can't prove the URL is dead, and keeping the primary preserves existing
+        behaviour rather than churning every photo onto the fallback host
+        because of one flaky request.
+        """
+        try:
+            response = requests.head(
+                url, headers={"User-Agent": USER_AGENT},
+                timeout=_IMAGE_CHECK_TIMEOUT, allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.warning(f"Could not verify gallery image {url}: {exc}")
+            return True
+        if response.status_code in (405, 501):
+            return True
+        return response.status_code == 200
+
+    def _parse_images(self, html):
+        """Collect exactly one URL per real gallery photo.
+
+        The VirtualYard lightSlider gallery renders EACH photo several times at
+        different sizes, and — crucially — every rendition is a *different*
+        signed URL with its own opaque token:
+
+          * the fullscreen image on the slide's own ``<li data-src=...>``
+          * a carousel-sized copy on the inner ``<img src>/<img data-src>``
+          * a thumbnail on ``data-thumb``
+          * plus lightSlider's loop ``<li class="clone">`` copies
+
+        The previous implementation regex-scanned the whole page for
+        au-assets URLs and de-duplicated by *exact string*. Because the
+        full-size and carousel-sized renditions of one photo are distinct
+        strings, that dedup couldn't pair them, so every photo was collected
+        twice (25 photos → 50 URLs) and published 2× on Facebook — the
+        "duplicate images" bug.
+
+        Fix: parse the gallery structurally and take a single canonical URL per
+        real slide — the fullscreen ``<li data-src>`` (falling back to the
+        inner ``<img>`` if a slide lacks it) — skipping ``li.clone`` loop
+        copies. Selecting only the ``vehicle-photo-carousel`` list also keeps us
+        out of the "Recent vehicles" sidebar for free (no page-cut needed on
+        this path). If the gallery markup can't be found (template change), fall
+        back to the old whole-page scan so we degrade to "some duplicates"
+        rather than "no images at all".
+
+        Dead-primary handling: a slide's ``data-src`` (the storage.googleapis.com
+        copy) is frequently a 404 — 6 of 20 photos on one reported listing, 11 of
+        21 on another. The dealer's own page still looks complete because each
+        slide carries a ``data-src-error`` twin on virtualyard.com.au that the
+        markup's ``onerror`` swaps in; we stored only the dead primary, so the
+        extension fetched a 404 per affected photo, dropped it, and tripped its
+        PARTIAL_IMAGE_UPLOAD guard. So — when EASYVEHICLES_VERIFY_IMAGE_URLS is
+        on — verify each primary and substitute the slide's own fallback if it
+        isn't serving. It defaults to OFF because those 404s were subsequently
+        measured to be transient and the ingest task's own retries recover them;
+        see the setting's comment for the numbers."""
+        soup = BeautifulSoup(html, "html.parser")
+        gallery = []
+        seen = set()
+        verify = getattr(settings, "EASYVEHICLES_VERIFY_IMAGE_URLS", True)
+
+        carousel = soup.find("ul", class_="vehicle-photo-carousel")
+        if carousel:
+            for li in carousel.find_all("li", recursive=False):
+                if "clone" in (li.get("class") or []):
+                    continue  # lightSlider loop duplicate
+                # Prefer the slide's own fullscreen image; fall back to the
+                # inner <img>'s data-src / src if the slide lacks data-src.
+                url = li.get("data-src")
+                if not self._is_gallery_image(url):
+                    img = li.find("img")
+                    if img is not None:
+                        url = img.get("data-src") or img.get("src")
+                if not self._is_gallery_image(url):
+                    continue
+                # Only pay for the check when there's something to switch to,
+                # and only accept the fallback if it's actually serving —
+                # otherwise keep the primary and let the pipeline's retries and
+                # the proxy deal with it, exactly as before.
+                fallback = li.get("data-src-error")
+                if (
+                    verify
+                    and self._is_gallery_image(fallback)
+                    and fallback != url
+                    and not self._url_is_live(url)
+                ):
+                    if self._url_is_live(fallback):
+                        logger.info(
+                            f"Gallery image {url} is not serving — using the "
+                            f"slide's fallback {fallback}"
+                        )
+                        url = fallback
+                    else:
+                        logger.warning(
+                            f"Gallery image {url} is not serving and its "
+                            f"fallback {fallback} isn't either — keeping the primary"
+                        )
+                if url not in seen:
+                    seen.add(url)
+                    gallery.append(url)
+            if gallery:
+                return gallery
+
+        # --- Fallback: gallery markup not found (e.g. template change). ---
+        # Old behaviour: whole-page scan, cut at the related-vehicles section so
+        # a sidebar car's photos can't attach to this listing. Exact-string
+        # dedup only — may keep same-photo size variants, but that's strictly
+        # better than returning no images.
         lowered = html.lower()
         cut = len(html)
         for marker in ("recent vehicles", "similar vehicles",
@@ -433,28 +551,18 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
             idx = lowered.find(marker)
             if idx != -1:
                 cut = min(cut, idx)
-        html = html[:cut]
-        gallery = []
-        seen = set()
-        for m in re.finditer(
+        scan = html[:cut]
+        for host_re in (
             r"https://storage\.googleapis\.com/au-assets/[A-Za-z0-9_\-./]+\.(?:jpe?g|png|webp)",
-            html,
-        ):
-            url = m.group(0)
-            if url not in seen:
-                seen.add(url)
-                gallery.append(url)
-        if gallery:
-            return gallery
-        # Fallback: VirtualYard-hosted photos (used in og:image / comments).
-        for m in re.finditer(
             r"https://virtualyard\.com\.au/photos/[A-Za-z0-9_\-./]+\.(?:jpe?g|png|webp)",
-            html,
         ):
-            url = m.group(0)
-            if url not in seen:
-                seen.add(url)
-                gallery.append(url)
+            for m in re.finditer(host_re, scan):
+                url = m.group(0)
+                if url not in seen:
+                    seen.add(url)
+                    gallery.append(url)
+            if gallery:
+                break
         return gallery
 
     def _parse_price(self, soup, spec):

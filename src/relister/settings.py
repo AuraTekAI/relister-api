@@ -417,11 +417,42 @@ AWS_CLOUDFRONT_DOMAIN = env('AWS_CLOUDFRONT_DOMAIN', default='')
 # indexes the render result by these names.
 VEHICLE_IMAGE_SIZES = {'thumbnail': 320, 'medium': 800, 'large': 1600}
 VEHICLE_IMAGE_WEBP_QUALITY = env.int('VEHICLE_IMAGE_WEBP_QUALITY', default=82)
+# Quality for the FB-safe JPEG upload variant the extension re-uploads to
+# Facebook Marketplace (WebP is rejected there). Slightly higher than the WebP
+# quality since JPEG is less efficient at the same perceptual quality.
+VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY = env.int('VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY', default=85)
 VEHICLE_IMAGE_DOWNLOAD_TIMEOUT = env.int('VEHICLE_IMAGE_DOWNLOAD_TIMEOUT', default=20)
 # Celery per-task rate limit for process_vehicle_listing_image_task — throttles
 # how fast we hit Gumtree/dealer sites for image downloads regardless of how
 # many listings get scraped at once.
 VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', default='60/m')
+# When True, the Chrome extension's publish payload serves our own
+# S3/CloudFront-hosted copy of each processed photo instead of proxying the
+# full-size dealer original through custom_domain_image_proxy — this keeps the
+# worker-pinning proxy off the publish hot path and fixes PARTIAL_IMAGE_UPLOAD
+# drops for custom-domain dealers.
+#
+# The pipeline now stores an FB-safe JPEG upload variant (HostedImage.upload_image)
+# that _resolve_extension_images serves; images without it yet fall back to the
+# proxy automatically. DEFAULT FALSE for a controlled rollout: apply the
+# migration and run `manage.py backfill_upload_variants` first, then set
+# EXTENSION_USE_HOSTED_IMAGES=True in the env (no code deploy needed) to turn the
+# fix on. Flip back to False to instantly revert to the old proxy-everything path.
+EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
+# When True, the EasyVehicles adapter HEADs each gallery photo while parsing and
+# substitutes the slide's own virtualyard.com.au fallback (data-src-error) for
+# any storage.googleapis.com URL that isn't serving.
+#
+# Default False, on measurement: those 404s are transient, not permanent. A
+# window on 2026-07-29 had 6 of 20 and 11 of 21 photos 404ing across two
+# listings; every one of them served normally ~30 minutes later, and 100
+# consecutive requests afterwards were clean. Since process_vehicle_listing_image_task
+# already retries a failed download with backoff, the hosting pipeline recovers
+# those photos on its own — whereas the check costs ~1.4s per photo (~30s per
+# listing, ~13 min on a 28-listing profile scrape) on every parse and can pin a
+# photo to the fallback host over a momentary blip. Turn on only if photos are
+# ever found to be permanently missing from the googleapis bucket.
+EASYVEHICLES_VERIFY_IMAGE_URLS = env.bool('EASYVEHICLES_VERIFY_IMAGE_URLS', default=False)
 # ─────────────────────────────────────────────────────────────────────────────
 
 EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'
