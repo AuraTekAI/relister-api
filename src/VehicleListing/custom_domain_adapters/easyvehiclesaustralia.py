@@ -67,6 +67,12 @@ _RETRYABLE_STATUSES = frozenset({403, 408, 429, 500, 502, 503, 504})
 # should stall on.
 _IMAGE_CHECK_TIMEOUT = (5, 10)
 
+# Anything smaller than this is the platform's shared "no photo" placeholder
+# (~8KB), not a vehicle photo. The smallest real rendition (640x480) is 40KB+,
+# and the full-size ones run 250-500KB, so this floor separates them with a wide
+# margin. See _url_is_live.
+_MIN_REAL_IMAGE_BYTES = 15_000
+
 FETCH_OK = "ok"
 FETCH_BLOCKED = "blocked"
 FETCH_ERROR = "error"
@@ -434,12 +440,20 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
 
     @staticmethod
     def _url_is_live(url):
-        """True unless the URL definitively answers with a non-200.
+        """True unless the URL definitively answers with a non-200, or serves
+        the platform's "no photo" placeholder.
 
         A transport error or a HEAD-hostile status (405/501) returns True: we
-        can't prove the URL is dead, and keeping the primary preserves existing
-        behaviour rather than churning every photo onto the fallback host
-        because of one flaky request.
+        can't prove the URL is dead, and treating an unverifiable URL as usable
+        preserves existing behaviour rather than churning photos onto another
+        rendition because of one flaky request.
+
+        The size floor is what stops the placeholder getting published. Some
+        listings' data-src-error resolves to a single generic ~8KB image shared
+        by every slide (identical sha256), while on other listings the same
+        attribute is the full-resolution photo at 300-500KB. Both answer 200, so
+        status alone can't tell them apart — but no real gallery photo, even the
+        640x480 rendition (40KB+), is anywhere near this small.
         """
         try:
             response = requests.head(
@@ -451,7 +465,37 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
             return True
         if response.status_code in (405, 501):
             return True
-        return response.status_code == 200
+        if response.status_code != 200:
+            return False
+        try:
+            length = int(response.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return True  # unparseable header — don't reject on that alone
+        if 0 < length < _MIN_REAL_IMAGE_BYTES:
+            logger.info(f"Ignoring {url}: {length} bytes, too small to be a real photo")
+            return False
+        return True
+
+    @staticmethod
+    def _slide_image_candidates(li):
+        """Every URL this slide offers for its photo, best quality first.
+
+        VirtualYard publishes each photo at up to four addresses — full-size on
+        storage.googleapis.com, a full-size mirror (``?w=2048``), the displayed
+        640x480 rendition, and a 640x480 mirror — and which of them are actually
+        serving varies per photo, per listing and over time. The page itself
+        falls through them via its onerror handlers, which is why a gallery looks
+        complete in a browser while the single URL we used to store 404s.
+        """
+        img = li.find("img")
+        return [
+            li.get("data-src"),                              # full-size
+            img.get("data-src") if img is not None else None,  # full-size (same, usually)
+            li.get("data-src-error"),                        # full-size mirror
+            img.get("src") if img is not None else None,     # displayed 640x480
+            li.get("data-thumb"),                            # 640x480 (same, usually)
+            li.get("data-thumb-error"),                      # 640x480 mirror
+        ]
 
     def _parse_images(self, html):
         """Collect exactly one URL per real gallery photo.
@@ -511,27 +555,33 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
                         url = img.get("data-src") or img.get("src")
                 if not self._is_gallery_image(url):
                     continue
-                # Only pay for the check when there's something to switch to,
-                # and only accept the fallback if it's actually serving —
-                # otherwise keep the primary and let the pipeline's retries and
-                # the proxy deal with it, exactly as before.
-                fallback = li.get("data-src-error")
-                if (
-                    verify
-                    and self._is_gallery_image(fallback)
-                    and fallback != url
-                    and not self._url_is_live(url)
-                ):
-                    if self._url_is_live(fallback):
+                # The full-size URL is frequently missing from the dealer's
+                # bucket (measured on one listing: 5 of 23 serving; on others 7
+                # of 20 and 8 of 17) while other renditions of the same photo
+                # serve fine. Storing only the dead one is what reaches the
+                # extension as a 404 and aborts the publish with
+                # PARTIAL_IMAGE_UPLOAD. So walk the slide's renditions in
+                # quality order and keep the first that actually serves.
+                if verify and not self._url_is_live(url):
+                    replacement = next(
+                        (
+                            candidate for candidate in self._slide_image_candidates(li)
+                            if candidate and candidate != url
+                            and self._is_gallery_image(candidate)
+                            and self._url_is_live(candidate)
+                        ),
+                        None,
+                    )
+                    if replacement:
                         logger.info(
                             f"Gallery image {url} is not serving — using the "
-                            f"slide's fallback {fallback}"
+                            f"slide's next working rendition {replacement}"
                         )
-                        url = fallback
+                        url = replacement
                     else:
                         logger.warning(
-                            f"Gallery image {url} is not serving and its "
-                            f"fallback {fallback} isn't either — keeping the primary"
+                            f"Gallery image {url} is not serving and no rendition "
+                            "on the slide is either — keeping the original"
                         )
                 if url not in seen:
                     seen.add(url)
