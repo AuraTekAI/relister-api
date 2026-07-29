@@ -1169,7 +1169,13 @@ def custom_domain_image_proxy(request):
                 "Custom domain image proxy non-200 (%s, attempt %s/3) for %s",
                 status, attempt + 1, target_url,
             )
-            if status in (403, 404, 410):  # not transient — don't waste retries
+            # 403/410 are settled answers; retrying only wastes a worker.
+            # 404 deliberately is NOT in that list: storage.googleapis.com has
+            # been observed 404ing a subset of a dealer's photos for a period
+            # and serving them normally afterwards, and bailing on the first
+            # 404 turned that blip into a dropped photo — i.e. a
+            # PARTIAL_IMAGE_UPLOAD — for every publish in the window.
+            if status in (403, 410):
                 return HttpResponse(status=502)
             time.sleep(0.4 * (attempt + 1))
             continue
