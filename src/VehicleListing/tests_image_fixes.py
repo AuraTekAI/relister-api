@@ -645,6 +645,38 @@ class DownloadImageBytesAntiBotModeTests(SimpleTestCase):
         with self.assertRaises(ValueError):
             download_image_bytes('https://images.gumtree.com.au/x.jpg', timeout=35)
 
+    @override_settings(ZENROWS_API_KEY='test-key')
+    def test_zr_content_type_wins_over_a_misleading_envelope_content_type(self):
+        """Live-observed prod case: ZenRows' own response envelope said
+        `text/plain` for a URL that was actually a real, successfully-fetched
+        JPEG — it reports the ORIGIN resource's real type separately via
+        `Zr-Content-Type`. Trusting the envelope header alone was rejecting
+        good photos as 'unexpected content type' and permanently failing them
+        on the first attempt (this is a ValueError, not a RequestException, so
+        Celery's autoretry never even got a chance to run)."""
+        fake_response = mock.Mock()
+        fake_response.headers = {'Content-Type': 'text/plain; charset=utf-8', 'Zr-Content-Type': 'image/jpeg'}
+        fake_response.content = b'\xff\xd8\xff\xdb\x00real-jpeg-bytes'
+        fake_response.raise_for_status = mock.Mock()
+
+        with mock.patch('VehicleListing.image_pipeline.ZenRowsClient') as client_cls:
+            client_cls.return_value.get.return_value = fake_response
+            data = download_image_bytes('https://images.gumtree.com.au/image/private/t_$_20/move/x', timeout=35)
+
+        self.assertEqual(data, fake_response.content)
+
+    @override_settings(ZENROWS_API_KEY='test-key')
+    def test_falls_back_to_envelope_content_type_when_zr_header_absent(self):
+        fake_response = mock.Mock()
+        fake_response.headers = {'Content-Type': 'text/html'}
+        fake_response.content = b'<html>not an image</html>'
+        fake_response.raise_for_status = mock.Mock()
+
+        with mock.patch('VehicleListing.image_pipeline.ZenRowsClient') as client_cls:
+            client_cls.return_value.get.return_value = fake_response
+            with self.assertRaises(ValueError):
+                download_image_bytes('https://images.gumtree.com.au/image/private/t_$_20/move/x', timeout=35)
+
 
 class UploadVariantTests(SimpleTestCase):
     def test_upload_variant_is_a_facebook_accepted_jpeg(self):

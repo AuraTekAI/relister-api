@@ -61,7 +61,23 @@ def download_image_bytes(url, timeout):
     client = ZenRowsClient(settings.ZENROWS_API_KEY)
     response = client.get(url, params={'mode': 'auto'}, timeout=timeout)
     response.raise_for_status()
-    content_type = (response.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+    # ZenRows' own response envelope's Content-Type does NOT reliably reflect
+    # the origin resource's real type — confirmed live against a production
+    # Gumtree image: envelope said `text/plain`, but the body was a genuine
+    # JPEG (correct magic bytes, byte-for-byte length matching Zr-Content-Length)
+    # and ZenRows had separately reported the true type via `Zr-Content-Type:
+    # image/jpeg`. Trusting the envelope header here was rejecting real,
+    # successfully-fetched photos as "unexpected content type" and permanently
+    # failing them (this is NOT a retryable RequestException, so it failed on
+    # the very first attempt with no retries). Prefer ZenRows' own
+    # `Zr-Content-Type` when present; fall back to the envelope header
+    # otherwise (e.g. requests that didn't go through ZenRows' proxying, or a
+    # future API response shape that omits it).
+    content_type = (
+        response.headers.get('Zr-Content-Type')
+        or response.headers.get('Content-Type')
+        or ''
+    ).split(';')[0].strip().lower()
     if content_type and content_type not in _ALLOWED_CONTENT_TYPES:
         raise ValueError(f"Unexpected content type '{content_type}' for image URL {url}")
     return response.content
