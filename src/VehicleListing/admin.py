@@ -106,7 +106,7 @@ admin.site.register(HostedImage, HostedImageAdmin)
 
 
 class VehicleListingImageAdmin(admin.ModelAdmin):
-    list_display = ('id', 'listing', 'position', 'status', 'retry_count', 'hosted_image', 'updated_at')
+    list_display = ('id', 'listing_id', 'position', 'status', 'retry_count', 'hosted_image', 'updated_at')
     search_fields = ('listing__id', 'source_url')
     list_filter = ('status',)
     raw_id_fields = ('listing', 'hosted_image')
