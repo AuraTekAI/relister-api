@@ -24,14 +24,22 @@ def _rewrite_proxy_url(url, request):
     return f"{proxy_base}?url={quote(url, safe='')}"
 
 
-def _resolve_storefront_images(listing, size, request):
+def _resolve_storefront_images(listing, size, request, require_hosted=False):
     """
     Ordered images for the public storefront: prefer our own S3/CDN URL for
-    whichever photos have finished processing, and fall back to the raw
-    (proxied-if-needed) source URL for anything still pending/failed or for
-    rows that predate this pipeline and have no image_slots yet at all — so
-    the storefront never shows a broken image while the async pipeline (or a
-    backfill) catches up.
+    whichever photos have finished processing.
+
+    require_hosted=False (default, used by the extension's publish flow):
+    falls back to the raw (proxied-if-needed) source URL for anything still
+    pending/failed or for rows that predate this pipeline and have no
+    image_slots yet at all — so publishing to Facebook always has *something*
+    to upload while the async pipeline (or a backfill) catches up.
+
+    require_hosted=True (used by the public storefront — see ProductListSerializer
+    /ProductDetailSerializer): only our own S3/CDN copy is ever returned — a
+    photo that isn't hosted yet is dropped rather than falling back to the
+    external Gumtree/dealer URL, so the storefront never depends on Gumtree
+    image hosting.
 
     Returns a list of {'url': str, 'is_hosted': bool} — is_hosted is True only
     for images actually served from our own AWS (S3/CloudFront) copy; False
@@ -39,6 +47,8 @@ def _resolve_storefront_images(listing, size, request):
     """
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
+        if require_hosted:
+            return []
         return [
             {'url': url, 'is_hosted': False}
             for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
@@ -50,6 +60,8 @@ def _resolve_storefront_images(listing, size, request):
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
             url = slot.hosted_image.url_for(size)
             is_hosted = True
+        elif require_hosted:
+            continue
         else:
             url = _rewrite_proxy_url(slot.source_url, request)
             is_hosted = False
@@ -115,15 +127,16 @@ class VehicleListingSerializer(serializers.ModelSerializer):
         return f"{suburb}, {full_state}"
 
     def get_images(self, obj):
-        # Custom-domain sites typically don't return CORS headers, so the
-        # extension cannot fetch their image URLs from the Facebook tab.
-        # Rewrite each image whose adapter declares needs_image_proxy() to
-        # our own CORS-friendly proxy (mirrors what images.gumtree.com.au
-        # does for Gumtree URLs). Intentionally still the RAW/proxied source
-        # URL, not our S3-hosted copy — the extension re-uploads these bytes
-        # straight to Facebook and doesn't go through the storefront.
+        # Prefer our own S3-hosted copy of each photo (finished processing via
+        # image_pipeline.py) over the raw Gumtree/dealer source URL, so the
+        # extension no longer depends on Gumtree/dealer image hosting when it
+        # re-uploads these bytes to Facebook. Falls back to the raw (proxied,
+        # for custom-domain hosts without CORS headers) source URL for photos
+        # still pending/failed, or for rows that predate this pipeline and
+        # have no image_slots yet — same fallback rule the public storefront
+        # already uses (see _resolve_storefront_images just above).
         request = self.context.get('request')
-        return [_rewrite_proxy_url(url, request) for url in (obj.images or [])]
+        return [item['url'] for item in _resolve_storefront_images(obj, 'large', request)]
 class ListingUrlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListingUrl
@@ -176,7 +189,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
 
     def get_image(self, obj):
-        images = _resolve_storefront_images(obj, 'medium', self.context.get('request'))
+        images = _resolve_storefront_images(obj, 'medium', self.context.get('request'), require_hosted=True)
         return images[0]['url'] if images else None
 
 
@@ -202,7 +215,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return getattr(obj.user, 'phone_number', None)
 
     def get_images(self, obj):
-        return _resolve_storefront_images(obj, 'large', self.context.get('request'))
+        return _resolve_storefront_images(obj, 'large', self.context.get('request'), require_hosted=True)
 
 
 class DealerListSerializer(serializers.ModelSerializer):
