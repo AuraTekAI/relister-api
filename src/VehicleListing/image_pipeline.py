@@ -20,11 +20,11 @@ import io
 import logging
 
 import boto3
-import requests
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from PIL import Image, ImageOps
+from zenrows import ZenRowsClient
 
 from .models import HostedImage, VehicleListingImage
 
@@ -36,7 +36,14 @@ _ALLOWED_CONTENT_TYPES = {'image/jpeg', 'image/pjpeg', 'image/png', 'image/webp'
 
 
 def download_image_bytes(url, timeout):
-    response = requests.get(url, timeout=timeout)
+    # Gumtree/dealer CDNs 403 bare `requests` calls (no browser-like headers,
+    # obvious bot User-Agent) — route through ZenRows, the same proxy already
+    # used for Gumtree scraping (see gumtree_scraper.py), so image downloads
+    # get the same anti-bot handling instead of being rejected outright.
+    if not settings.ZENROWS_API_KEY:
+        raise ValueError("ZENROWS_API_KEY is not configured in the environment variables")
+    client = ZenRowsClient(settings.ZENROWS_API_KEY)
+    response = client.get(url, timeout=timeout)
     response.raise_for_status()
     content_type = (response.headers.get('Content-Type') or '').split(';')[0].strip().lower()
     if content_type and content_type not in _ALLOWED_CONTENT_TYPES:
@@ -76,41 +83,72 @@ def build_variant_bytes(data, sizes, quality):
         return variants
 
 
-def s3_key_for(content_hash, size):
+def build_upload_variant_bytes(data, max_width, quality):
+    """One JPEG rendition for the Chrome extension to re-upload to Facebook
+    Marketplace.
+
+    FB Marketplace only accepts JPEG/PNG for listing photos — it rejects the
+    WebP variants we serve to the storefront — so the extension needs a JPEG
+    copy hosted on our own CORS-friendly CDN (otherwise it must proxy the
+    full-size dealer original per photo on every publish, which is what caused
+    the PARTIAL_IMAGE_UPLOAD timeouts). Downscale-only (never upscales); alpha is
+    flattened onto white because JPEG has no alpha channel."""
+    with Image.open(io.BytesIO(data)) as source:
+        source.load()
+        source = ImageOps.exif_transpose(source)
+        if source.mode in ('RGBA', 'LA') or (source.mode == 'P' and 'transparency' in source.info):
+            source = source.convert('RGBA')
+            background = Image.new('RGB', source.size, (255, 255, 255))
+            background.paste(source, mask=source.split()[-1])
+            source = background
+        elif source.mode != 'RGB':
+            source = source.convert('RGB')
+
+        image = source
+        if source.width > max_width:
+            ratio = max_width / float(source.width)
+            image = source.resize((max_width, max(1, round(source.height * ratio))), Image.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=quality, optimize=True)
+        return buffer.getvalue(), image.width, image.height
+
+
+def s3_key_for(content_hash, size, ext='webp'):
     """Content-hash-first key layout: identical photos always resolve to the
     same key, so a re-upload of already-stored content is a harmless no-op
     overwrite rather than a duplicate object. Sharded by the first two hex
-    chars to keep any single S3 prefix from growing unbounded."""
+    chars to keep any single S3 prefix from growing unbounded. `ext` lets the
+    JPEG upload variant sit alongside the WebP variants under the same hash."""
     prefix = settings.AWS_S3_VEHICLE_IMAGE_PREFIX.rstrip('/')
-    return f"{prefix}/{content_hash[:2]}/{content_hash}/{size}.webp"
+    return f"{prefix}/{content_hash[:2]}/{content_hash}/{size}.{ext}"
 
 
 def _s3_client():
     return boto3.client(
         's3',
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_S3_REGION_NAME,
+        aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_VEHICLE_IMAGE_REGION,
     )
 
 
-def upload_variant(key, webp_bytes):
+def upload_variant(key, body_bytes, content_type='image/webp'):
     _s3_client().put_object(
-        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+        Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
         Key=key,
-        Body=webp_bytes,
-        ContentType='image/webp',
+        Body=body_bytes,
+        ContentType=content_type,
         CacheControl='public, max-age=31536000, immutable',
     )
 
 
 def delete_variants_from_s3(hosted_image):
-    keys = [k for k in (hosted_image.thumbnail_image, hosted_image.medium_image, hosted_image.large_image) if k]
+    keys = [k for k in (hosted_image.thumbnail_image, hosted_image.medium_image, hosted_image.large_image, hosted_image.upload_image) if k]
     if not keys:
         return
     try:
         _s3_client().delete_objects(
-            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
             Delete={'Objects': [{'Key': key} for key in keys]},
         )
     except (BotoCoreError, ClientError) as exc:
@@ -123,18 +161,41 @@ def public_url_for(key):
         return None
     if settings.AWS_CLOUDFRONT_DOMAIN:
         return f"https://{settings.AWS_CLOUDFRONT_DOMAIN}/{key}"
-    return f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3.{settings.AWS_S3_REGION_NAME}.amazonaws.com/{key}"
+    return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
 
 
-def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):
+def _make_and_upload_upload_variant(content_hash, image_bytes):
+    """Build the FB-safe JPEG copy and put it in S3; return its key."""
+    upload_bytes, _upload_w, _upload_h = build_upload_variant_bytes(
+        image_bytes,
+        settings.VEHICLE_IMAGE_SIZES['large'],
+        settings.VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY,
+    )
+    upload_key = s3_key_for(content_hash, 'upload', ext='jpg')
+    upload_variant(upload_key, upload_bytes, content_type='image/jpeg')
+    return upload_key
+
+
+def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, build_upload_variant=True):
     """
     Returns (HostedImage, uploaded: bool). If a ready HostedImage already
-    exists for this exact content, it's returned unchanged and NOTHING is
-    re-encoded or re-uploaded — this is the dedup path that makes relisting
-    the same photo (or reusing one across listings) free.
+    exists for this exact content, it's returned (almost) unchanged and the
+    WebP variants are NOT re-encoded or re-uploaded — this is the dedup path
+    that makes relisting the same photo (or reusing one across listings) free.
+
+    `build_upload_variant` controls whether the extra FB-safe JPEG copy is
+    produced. Only custom-domain listings ever use it (the extension serves it
+    instead of proxying the original); Gumtree images never do, so the caller
+    passes False for them and we skip the extra encode + S3 object entirely —
+    no wasted work for Gumtree. If a photo first hosted for Gumtree (no JPEG) is
+    later needed by a custom-domain listing, that call passes True and we lazily
+    add just the JPEG to the existing row.
     """
     ready = HostedImage.objects.filter(content_hash=content_hash, status=HostedImage.STATUS_READY).first()
     if ready:
+        if build_upload_variant and not ready.upload_image:
+            ready.upload_image = _make_and_upload_upload_variant(content_hash, image_bytes)
+            ready.save(update_fields=['upload_image', 'updated_at'])
         return ready, False
 
     variants = build_variant_bytes(image_bytes, settings.VEHICLE_IMAGE_SIZES, settings.VEHICLE_IMAGE_WEBP_QUALITY)
@@ -144,12 +205,20 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):
         upload_variant(key, webp_bytes)
         keys[size] = (key, width, height)
 
+    # FB-safe JPEG copy for the extension's Marketplace upload (FB rejects our
+    # WebP) — built only for custom-domain images that will actually use it.
+    upload_key = (
+        _make_and_upload_upload_variant(content_hash, image_bytes)
+        if build_upload_variant else ''
+    )
+
     large_key, large_width, large_height = keys['large']
     defaults = {
         'source_url': source_url,
         'thumbnail_image': keys['thumbnail'][0],
         'medium_image': keys['medium'][0],
         'large_image': large_key,
+        'upload_image': upload_key,
         'width': large_width,
         'height': large_height,
         'file_size_bytes': len(image_bytes),
@@ -167,6 +236,27 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes):
 
 
 def sync_listing_images(listing, image_urls):
+    """Fail-safe wrapper around _sync_listing_images.
+
+    This runs inline inside the Gumtree and custom-domain scrape loops, right
+    after the listing row has already been saved. Image hosting is a
+    presentation nicety; scraping is the revenue path. An exception escaping
+    here would abort the rest of the scrape loop and leave a profile
+    half-processed, so anything that goes wrong is logged and swallowed —
+    the listing itself is already safely persisted, and the next scrape
+    re-attempts the slot reconciliation.
+    """
+    try:
+        _sync_listing_images(listing, image_urls)
+    except Exception:
+        logger.exception(
+            "sync_listing_images failed for listing id=%s — listing data is saved; "
+            "image slots will be retried on the next scrape",
+            getattr(listing, "pk", None),
+        )
+
+
+def _sync_listing_images(listing, image_urls):
     """
     Reconcile listing.image_slots against a freshly-scraped list of source
     URLs. Called every time a scraper sets/updates VehicleListing.images.
@@ -180,7 +270,18 @@ def sync_listing_images(listing, image_urls):
       once nothing else references them.
     - Brand-new URLs get a pending slot and a Celery task to process it.
     """
-    image_urls = [url for url in (image_urls or []) if url]
+    # Collapse repeats first, preserving first-seen order. (listing, source_url)
+    # is unique_together, so a scrape that hands back the same URL twice would
+    # otherwise raise IntegrityError partway through the loop below; the
+    # fail-safe wrapper swallows it and the listing is left with only the slots
+    # created *before* the duplicate — fewer hosted photos than the listing
+    # actually has, which is exactly what the extension reports as a partial
+    # image upload.
+    seen_urls = set()
+    image_urls = [
+        url for url in (image_urls or [])
+        if url and not (url in seen_urls or seen_urls.add(url))
+    ]
     existing_slots = {slot.source_url: slot for slot in listing.image_slots.all()}
 
     new_slot_ids = []
@@ -199,6 +300,13 @@ def sync_listing_images(listing, image_urls):
 
     if new_slot_ids:
         from .tasks import process_vehicle_listing_image_task
-        transaction.on_commit(
-            lambda: [process_vehicle_listing_image_task.delay(pk) for pk in new_slot_ids]
-        )
+
+        # Stagger by 1 second per image within this listing (countdown=index)
+        # rather than firing them all at once — a burst of concurrent requests
+        # to the same dealer/Gumtree CDN is more likely to trip anti-bot/rate
+        # blocking than the same requests spread out one per second.
+        def _enqueue():
+            for index, pk in enumerate(new_slot_ids):
+                process_vehicle_listing_image_task.apply_async(args=[pk], countdown=index)
+
+        transaction.on_commit(_enqueue)
