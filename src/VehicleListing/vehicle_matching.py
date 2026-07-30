@@ -28,6 +28,48 @@ logger = logging.getLogger('vehicle_matching')
 IDENTITY_FIELDS = ("make", "model", "variant", "year", "color", "body_type", "fuel_type", "transmission")
 
 
+def sanitize_positive_price(raw_price, existing_price=None):
+    """
+    Rejects a missing/non-numeric/non-positive price (e.g. a scrape glitch
+    producing -700, or 0) instead of persisting it, falling back to whatever
+    price was already stored (None on first create) so a bad scrape can't
+    silently corrupt a good existing value. Returns str(raw_price) — same
+    type VehicleListing.price is already stored as (CharField) — on success.
+    """
+    if raw_price is None:
+        return existing_price
+    try:
+        numeric_price = float(raw_price)
+    except (TypeError, ValueError):
+        logger.warning("Rejected non-numeric price %r", raw_price)
+        return existing_price
+    if numeric_price <= 0:
+        logger.warning("Rejected non-positive price %r", raw_price)
+        return existing_price
+    return str(raw_price)
+
+
+def _sanitize_mileage(raw_mileage, existing_mileage):
+    """
+    Rejects a negative odometer reading (e.g. a scrape glitch) instead of
+    persisting it, falling back to whatever mileage was already stored. Zero
+    is a valid mileage (brand-new vehicle) so only negative is rejected.
+    Returns an int — same type Vehicle.mileage is already stored as
+    (IntegerField) — on success.
+    """
+    if raw_mileage is None:
+        return existing_mileage
+    try:
+        mileage = int(raw_mileage)
+    except (TypeError, ValueError):
+        logger.warning("Rejected non-numeric mileage %r", raw_mileage)
+        return existing_mileage
+    if mileage < 0:
+        logger.warning("Rejected negative mileage %r", raw_mileage)
+        return existing_mileage
+    return mileage
+
+
 def _identity_conflicts(vehicle, result):
     conflicts = []
     for field in IDENTITY_FIELDS:
@@ -47,7 +89,7 @@ def sync_vehicle_from_result(vehicle, result):
     vehicle.body_type = result.get("body_type")
     vehicle.fuel_type = result.get("fuel_type")
     vehicle.color = result.get("color")
-    vehicle.mileage = result.get("mileage")
+    vehicle.mileage = _sanitize_mileage(result.get("mileage"), vehicle.mileage)
     vehicle.transmission = result.get("transmission")
     vehicle.save()
     vehicle.images.all().delete()

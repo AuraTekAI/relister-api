@@ -9,7 +9,7 @@ from django.conf import settings
 from bs4 import BeautifulSoup
 import re
 from .utils import get_full_state_name, mark_listing_sold
-from .vehicle_matching import get_or_create_vehicle, sync_vehicle_from_result
+from .vehicle_matching import get_or_create_vehicle, sanitize_positive_price, sync_vehicle_from_result
 # from .models import RelistingFacebooklisting
 from django.utils import timezone
 from datetime import timedelta
@@ -586,7 +586,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     logging.info(f"update the listing {listing_id} details")
                     if result:
                         sync_vehicle_from_result(vehicle, result)
-                        already_exists.price = str(result.get("price"))
+                        already_exists.price = sanitize_positive_price(result.get("price"), already_exists.price)
                         already_exists.description = result.get("description")
                         already_exists.save()
                         logging.info(f"Updated listing {listing_id} with new details")
@@ -606,7 +606,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     logging.info(f"update the listing {listing_id} details")
                     if result:
                         sync_vehicle_from_result(vehicle, result)
-                        already_exists.price = str(result.get("price"))
+                        already_exists.price = sanitize_positive_price(result.get("price"), already_exists.price)
                         already_exists.description = result.get("description")
                         already_exists.save()
                         logging.info(f"Updated listing {listing_id} with new details")
@@ -630,7 +630,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     user=user,
                     vehicle=vehicle,
                     gumtree_url=listing_url,
-                    price=str(result.get("price")),
+                    price=sanitize_positive_price(result.get("price")),
                     description=result.get("description"),
                     status="pending",
                     seller_profile_id=seller_id

@@ -11,7 +11,7 @@ from django.utils import timezone
 from .custom_domain_adapters import resolve_for_url
 from .models import CustomDomainProfileListing, VehicleListing, ListingUrl
 from .utils import mark_listing_sold
-from .vehicle_matching import get_or_create_vehicle, sync_vehicle_from_result
+from .vehicle_matching import get_or_create_vehicle, sanitize_positive_price, sync_vehicle_from_result
 
 logger = logging.getLogger("custom_domain")
 
@@ -98,7 +98,7 @@ def _apply_listing_update(existing, result):
     # VIN lookup, so no identity-conflict check needed here (see
     # vehicle_matching.get_or_create_vehicle, used only at first-create time).
     sync_vehicle_from_result(existing.vehicle, result)
-    existing.price = str(result.get("price")) if result.get("price") is not None else existing.price
+    existing.price = sanitize_positive_price(result.get("price"), existing.price)
     existing.description = result.get("description")
     existing.save()
 
@@ -193,7 +193,7 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
                         user=user,
                         vehicle=vehicle,
                         gumtree_url=listing_url,
-                        price=str(result.get("price")) if result.get("price") is not None else None,
+                        price=sanitize_positive_price(result.get("price")),
                         description=result.get("description"),
                         status="pending",
                         seller_profile_id=profile_id,
