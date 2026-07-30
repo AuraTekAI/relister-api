@@ -92,10 +92,14 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
 def _resolve_extension_images(listing, request):
     """Ordered image URLs for the Chrome extension to re-upload to Facebook.
 
-    Prefer our own S3/CloudFront copy (small, already-resized WebP, CORS-friendly
-    and CDN-cached) for every photo that's finished processing, and fall back to
-    the raw source URL routed through custom_domain_image_proxy only for photos
-    still pending/failed, or for legacy rows with no image_slots yet.
+    Prefer our own S3/CloudFront copy (the FB-safe JPEG upload variant) for
+    every photo that's finished processing, and fall back to the raw source
+    URL (routed through custom_domain_image_proxy only for hosts that need it)
+    for photos still pending/failed, or for legacy rows with no image_slots
+    yet. This means what Facebook actually receives is OUR hosted copy, not
+    the dealer/Gumtree original, whenever hosting has succeeded for that photo
+    — the per-slot fallback is what keeps publishing safe (never blocked) for
+    anything that hasn't finished hosting yet.
 
     Why this exists: the previous behaviour proxied EVERY full-size original on
     every publish. For custom-domain dealers (whose images all need the proxy,
@@ -105,11 +109,14 @@ def _resolve_extension_images(listing, request):
     its PARTIAL_IMAGE_UPLOAD guard. Serving the pre-hosted CDN copy keeps the
     proxy off the hot path for the common case.
 
-    Gated by settings.EXTENSION_USE_HOSTED_IMAGES (default True) so the hosted
-    path can be switched off via env alone — no deploy — reverting exactly to the
-    old proxy-everything behaviour if Facebook ever rejects the hosted WebP
-    variant. The per-slot proxy fallback also means nothing breaks for photos
-    that simply haven't been processed yet.
+    Custom-domain's rollout of this is gated by settings.EXTENSION_USE_HOSTED_IMAGES
+    (staged: default False until the migration + backfill_upload_variants have
+    run, then flipped True via env alone — no deploy) so it can be switched off
+    instantly if Facebook ever rejects the hosted JPEG variant. Gumtree never
+    had the PARTIAL_IMAGE_UPLOAD problem that switch was built for and isn't
+    part of that staged rollout, so it always attempts the hosted path below —
+    the per-slot fallback to its raw (never-proxied) URL is what keeps a
+    not-yet-hosted or permanently-failed Gumtree photo publishable regardless.
 
     TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over all
     of the above for Gumtree listings — see _gumtree_hosting_bypassed.
@@ -119,7 +126,10 @@ def _resolve_extension_images(listing, request):
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
-    if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
+    is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
+                      or getattr(listing, 'gumtree_url_id', None))
+
+    if not is_gumtree and not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
         return [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
