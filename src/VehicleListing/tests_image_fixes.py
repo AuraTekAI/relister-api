@@ -35,6 +35,7 @@ from .image_pipeline import (
     build_upload_variant_bytes,
     build_variant_bytes,
     content_hash_for,
+    download_image_bytes,
     get_or_create_ready_hosted_image,
     public_url_for,
     s3_key_for,
@@ -612,6 +613,39 @@ class ExtensionImagePayloadTests(TestCase):
         self.assertIn('custom-domain-image', urls[0])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Gumtree image-CDN 403 — images.gumtree.com.au (Peakhour-fronted, Cloudinary-
+# backed) blocks ZenRows' default datacenter-IP proxy tier with a hard 403,
+# even though the exact same URL fetches fine from a real browser (which is
+# how the Chrome extension gets it onto Facebook Marketplace). mode=auto asks
+# ZenRows to escalate to residential proxies/JS rendering only when the cheap
+# default path is blocked, fixing the download without paying premium-proxy
+# cost on every other (non-Gumtree) image this function downloads.
+# ─────────────────────────────────────────────────────────────────────────────
+class DownloadImageBytesAntiBotModeTests(SimpleTestCase):
+    @override_settings(ZENROWS_API_KEY='test-key')
+    def test_requests_adaptive_stealth_mode_to_dodge_the_datacenter_ip_block(self):
+        fake_response = mock.Mock()
+        fake_response.headers = {'Content-Type': 'image/jpeg'}
+        fake_response.content = b'\xff\xd8\xff'
+        fake_response.raise_for_status = mock.Mock()
+
+        with mock.patch('VehicleListing.image_pipeline.ZenRowsClient') as client_cls:
+            client_cls.return_value.get.return_value = fake_response
+            download_image_bytes('https://images.gumtree.com.au/image/private/t_$_20/move/x', timeout=35)
+
+        client_cls.return_value.get.assert_called_once_with(
+            'https://images.gumtree.com.au/image/private/t_$_20/move/x',
+            params={'mode': 'auto'},
+            timeout=35,
+        )
+
+    @override_settings(ZENROWS_API_KEY='')
+    def test_missing_api_key_fails_fast(self):
+        with self.assertRaises(ValueError):
+            download_image_bytes('https://images.gumtree.com.au/x.jpg', timeout=35)
+
+
 class UploadVariantTests(SimpleTestCase):
     def test_upload_variant_is_a_facebook_accepted_jpeg(self):
         data, width, height = build_upload_variant_bytes(make_jpeg(2400, 1600), 1600, 85)
@@ -777,6 +811,72 @@ class ResyncCustomDomainImagesCommandTests(TestCase):
         self._run(self.deduped, no_mark_changed=True)
         self.assertEqual(self.listing.images, self.deduped)
         self.assertFalse(self.listing.is_changed)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remediation of VehicleListingImage rows stuck FAILED by the Gumtree 403
+# (the download-side fix above only helps NEW downloads — these rows need an
+# explicit requeue since nothing else re-drives an already-FAILED slot).
+# ─────────────────────────────────────────────────────────────────────────────
+class RetryFailedVehicleImagesCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email='retry@test.invalid', password='x')
+        profile = GumtreeProfileListing.objects.create(user=self.user)
+        self.listing = VehicleListing.objects.create(
+            user=self.user, list_id='RT1', seller_profile_id='P', gumtree_profile=profile)
+
+    def _make_slot(self, source_url, status=VehicleListingImage.STATUS_FAILED, retry_count=5):
+        return VehicleListingImage.objects.create(
+            listing=self.listing, source_url=source_url, status=status,
+            retry_count=retry_count, error_message='403 Client Error: Forbidden for url: ' + source_url,
+        )
+
+    def test_only_failed_gumtree_cdn_rows_are_requeued(self):
+        gumtree_failed = self._make_slot('https://images.gumtree.com.au/image/private/t_$_20/move/a')
+        other_domain_failed = self._make_slot('https://storage.googleapis.com/au-assets/b.jpg')
+        gumtree_ready = self._make_slot(
+            'https://images.gumtree.com.au/image/private/t_$_20/move/c',
+            status=VehicleListingImage.STATUS_READY, retry_count=0)
+
+        with mock.patch('VehicleListing.management.commands.retry_failed_vehicle_images.'
+                         'process_vehicle_listing_image_task.delay') as delay:
+            call_command('retry_failed_vehicle_images', stdout=io.StringIO())
+
+        delay.assert_called_once_with(gumtree_failed.pk)
+
+        gumtree_failed.refresh_from_db()
+        self.assertEqual(gumtree_failed.status, VehicleListingImage.STATUS_PENDING)
+        self.assertEqual(gumtree_failed.retry_count, 0)
+        self.assertIsNone(gumtree_failed.error_message)
+
+        other_domain_failed.refresh_from_db()
+        self.assertEqual(other_domain_failed.status, VehicleListingImage.STATUS_FAILED, 'touched a non-Gumtree row')
+
+        gumtree_ready.refresh_from_db()
+        self.assertEqual(gumtree_ready.status, VehicleListingImage.STATUS_READY, 'touched an already-ready row')
+
+    def test_dry_run_changes_nothing(self):
+        slot = self._make_slot('https://images.gumtree.com.au/image/private/t_$_20/move/a')
+
+        with mock.patch('VehicleListing.management.commands.retry_failed_vehicle_images.'
+                         'process_vehicle_listing_image_task.delay') as delay:
+            call_command('retry_failed_vehicle_images', '--dry-run', stdout=io.StringIO())
+
+        delay.assert_not_called()
+        slot.refresh_from_db()
+        self.assertEqual(slot.status, VehicleListingImage.STATUS_FAILED)
+
+    def test_limit_caps_how_many_rows_are_requeued(self):
+        for i in range(3):
+            self._make_slot(f'https://images.gumtree.com.au/image/private/t_$_20/move/{i}')
+
+        with mock.patch('VehicleListing.management.commands.retry_failed_vehicle_images.'
+                         'process_vehicle_listing_image_task.delay') as delay:
+            call_command('retry_failed_vehicle_images', '--limit=2', stdout=io.StringIO())
+
+        self.assertEqual(delay.call_count, 2)
+        self.assertEqual(
+            VehicleListingImage.objects.filter(status=VehicleListingImage.STATUS_PENDING).count(), 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

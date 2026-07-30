@@ -36,14 +36,30 @@ _ALLOWED_CONTENT_TYPES = {'image/jpeg', 'image/pjpeg', 'image/png', 'image/webp'
 
 
 def download_image_bytes(url, timeout):
-    # Gumtree/dealer CDNs 403 bare `requests` calls (no browser-like headers,
-    # obvious bot User-Agent) — route through ZenRows, the same proxy already
-    # used for Gumtree scraping (see gumtree_scraper.py), so image downloads
-    # get the same anti-bot handling instead of being rejected outright.
+    # Gumtree's image CDN (images.gumtree.com.au, a Cloudinary-backed host
+    # fronted by the Peakhour bot-mitigation edge) 403s ANY datacenter-IP
+    # request — confirmed by hitting the exact production-failing URL directly
+    # from a plain, unproxied request: `peakhour-error: blocked` came back
+    # regardless of User-Agent/Referer/Accept headers. ZenRows' *default*
+    # proxy tier is itself datacenter IPs, so routing through plain
+    # `client.get(url)` (no extra params) hits the identical block — that's
+    # why this kept failing even after the previous 403 fix switched bare
+    # `requests` calls over to ZenRows.
+    #
+    # The Chrome extension's own image fetch (fillVehicleForm.ts, uploading the
+    # same URL to Facebook Marketplace) succeeds because it runs as a normal
+    # `fetch()` from the dealer's own browser — a residential IP, not a proxy —
+    # which is exactly what Peakhour is choosing not to block. `mode=auto`
+    # asks ZenRows for Adaptive Stealth Mode: it tries the cheap default path
+    # first and only escalates to premium (residential) proxies/JS rendering
+    # when that gets blocked, and per ZenRows' billing model we're only
+    # charged for whichever attempt actually succeeds — so this fixes Gumtree
+    # image downloads without paying premium-proxy cost on every other
+    # dealer/custom-domain image this same function downloads.
     if not settings.ZENROWS_API_KEY:
         raise ValueError("ZENROWS_API_KEY is not configured in the environment variables")
     client = ZenRowsClient(settings.ZENROWS_API_KEY)
-    response = client.get(url, timeout=timeout)
+    response = client.get(url, params={'mode': 'auto'}, timeout=timeout)
     response.raise_for_status()
     content_type = (response.headers.get('Content-Type') or '').split(';')[0].strip().lower()
     if content_type and content_type not in _ALLOWED_CONTENT_TYPES:
