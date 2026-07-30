@@ -1,5 +1,6 @@
 from urllib.parse import quote
 
+from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
 
@@ -70,6 +71,72 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
     return resolved
 
 
+def _resolve_extension_images(listing, request):
+    """Ordered image URLs for the Chrome extension to re-upload to Facebook.
+
+    Prefer our own S3/CloudFront copy (small, already-resized WebP, CORS-friendly
+    and CDN-cached) for every photo that's finished processing, and fall back to
+    the raw source URL routed through custom_domain_image_proxy only for photos
+    still pending/failed, or for legacy rows with no image_slots yet.
+
+    Why this exists: the previous behaviour proxied EVERY full-size original on
+    every publish. For custom-domain dealers (whose images all need the proxy,
+    unlike Gumtree) that meant the server live-fetched and buffered N large
+    originals from the dealer CDN at once per publish, saturating gunicorn
+    workers — a subset timed out, the extension dropped those photos and tripped
+    its PARTIAL_IMAGE_UPLOAD guard. Serving the pre-hosted CDN copy keeps the
+    proxy off the hot path for the common case.
+
+    Gated by settings.EXTENSION_USE_HOSTED_IMAGES (default True) so the hosted
+    path can be switched off via env alone — no deploy — reverting exactly to the
+    old proxy-everything behaviour if Facebook ever rejects the hosted WebP
+    variant. The per-slot proxy fallback also means nothing breaks for photos
+    that simply haven't been processed yet.
+
+    Gumtree guard: if the listing is a Gumtree one, return the EXACT original
+    behaviour and skip this whole hosted-image path. Gumtree images are already
+    CORS-friendly, were served direct (never proxied), and never had the
+    partial-upload problem this addresses — so flipping EXTENSION_USE_HOSTED_IMAGES
+    on can never change what a Gumtree dealer publishes."""
+    is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
+                      or getattr(listing, 'gumtree_url_id', None))
+    if is_gumtree:
+        # Verbatim pre-change behaviour — Gumtree stays exactly as it was.
+        return [_rewrite_proxy_url(url, request) for url in (listing.images or [])]
+
+    if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
+        return [
+            url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
+
+    slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
+    if not slots:
+        return [
+            url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
+
+    urls = []
+    for slot in slots:
+        url = None
+        if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
+            # Serve the FB-safe JPEG upload variant. Facebook Marketplace only
+            # accepts JPEG/PNG for listing photos (our storefront WebP variants
+            # are rejected), so we deliberately DON'T use url_for('large').
+            # Images processed before this variant existed have no upload copy
+            # yet (upload_url() -> None) and fall through to the proxy until the
+            # backfill runs — belt-and-braces format check keeps that safe.
+            hosted = slot.hosted_image.upload_url()
+            if hosted and hosted.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
+                url = hosted
+        if not url:
+            url = _rewrite_proxy_url(slot.source_url, request)
+        if url:
+            urls.append(url)
+    return urls
+
+
 # State-code → full-name mapping used when assembling a fallback `location`
 # string for custom-domain listings from User.dealership_state. Kept local to
 # this module so VehicleListing/utils.get_full_state_name (used by the Gumtree
@@ -127,16 +194,17 @@ class VehicleListingSerializer(serializers.ModelSerializer):
         return f"{suburb}, {full_state}"
 
     def get_images(self, obj):
-        # Prefer our own S3-hosted copy of each photo (finished processing via
-        # image_pipeline.py) over the raw Gumtree/dealer source URL, so the
-        # extension no longer depends on Gumtree/dealer image hosting when it
-        # re-uploads these bytes to Facebook. Falls back to the raw (proxied,
-        # for custom-domain hosts without CORS headers) source URL for photos
-        # still pending/failed, or for rows that predate this pipeline and
-        # have no image_slots yet — same fallback rule the public storefront
-        # already uses (see _resolve_storefront_images just above).
+        # Custom-domain sites typically don't return CORS headers, so the
+        # extension cannot fetch their raw image URLs from the Facebook tab.
+        # Prefer our own S3/CloudFront copy (CORS-friendly, resized, CDN-cached)
+        # for photos that have finished processing, and fall back to the
+        # CORS-friendly proxy for anything still pending. Serving the pre-hosted
+        # copy keeps the worker-pinning proxy off the hot path and fixes the
+        # PARTIAL_IMAGE_UPLOAD drops custom-domain dealers hit when every
+        # full-size original was proxied at publish time. See
+        # _resolve_extension_images for the rationale + the env kill-switch.
         request = self.context.get('request')
-        return [item['url'] for item in _resolve_storefront_images(obj, 'large', request)]
+        return _resolve_extension_images(obj, request)
 class ListingUrlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListingUrl

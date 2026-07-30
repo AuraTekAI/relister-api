@@ -360,6 +360,12 @@ class HostedImage(models.Model):
     thumbnail_image = models.CharField(max_length=512, blank=True, default='')
     medium_image = models.CharField(max_length=512, blank=True, default='')
     large_image = models.CharField(max_length=512, blank=True, default='')
+    # FB-safe JPEG rendition (same max width as `large`) that the Chrome
+    # extension re-uploads to Facebook Marketplace, which rejects WebP. Blank
+    # for images processed before this variant existed — the extension
+    # serializer falls back to the image proxy for those until backfilled
+    # (manage.py backfill_upload_variants).
+    upload_image = models.CharField(max_length=512, blank=True, default='')
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
     file_size_bytes = models.PositiveIntegerField(null=True, blank=True)
@@ -381,6 +387,12 @@ class HostedImage(models.Model):
             'large': self.large_image,
         }.get(size)
         return public_url_for(key)
+
+    def upload_url(self):
+        """Public URL for the FB-safe JPEG upload variant, or None if this image
+        predates that variant (and hasn't been backfilled yet)."""
+        from .image_pipeline import public_url_for
+        return public_url_for(self.upload_image) if self.upload_image else None
 
 
 class VehicleListingImage(models.Model):
