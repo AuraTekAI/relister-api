@@ -421,7 +421,11 @@ VEHICLE_IMAGE_WEBP_QUALITY = env.int('VEHICLE_IMAGE_WEBP_QUALITY', default=82)
 # Facebook Marketplace (WebP is rejected there). Slightly higher than the WebP
 # quality since JPEG is less efficient at the same perceptual quality.
 VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY = env.int('VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY', default=85)
-VEHICLE_IMAGE_DOWNLOAD_TIMEOUT = env.int('VEHICLE_IMAGE_DOWNLOAD_TIMEOUT', default=20)
+# mode=auto (see image_pipeline.download_image_bytes) can escalate a blocked
+# request to premium/residential proxies or JS rendering server-side before
+# answering, which takes longer than a plain proxied fetch — 20s was tuned for
+# the latter and was at risk of timing out an escalated request.
+VEHICLE_IMAGE_DOWNLOAD_TIMEOUT = env.int('VEHICLE_IMAGE_DOWNLOAD_TIMEOUT', default=35)
 # Celery per-task rate limit for process_vehicle_listing_image_task — throttles
 # how fast we hit Gumtree/dealer sites for image downloads regardless of how
 # many listings get scraped at once.
