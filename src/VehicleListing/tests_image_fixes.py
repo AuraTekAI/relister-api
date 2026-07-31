@@ -458,7 +458,7 @@ class SyncListingImagesTests(TestCase):
         inside TestCase's wrapping atomic block — captureOnCommitCallbacks runs
         it explicitly so the enqueue assertions mean something.
         """
-        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay') as delay:
+        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async') as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 sync_listing_images(self.listing, urls)
         return delay
@@ -522,7 +522,7 @@ class SyncListingImagesAutocommitTests(TransactionTestCase):
             'https://x.invalid/c.jpg',
         ]
 
-        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay') as delay:
+        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async') as delay:
             sync_listing_images(listing, urls)
 
         self.assertEqual(
@@ -624,7 +624,7 @@ class ExtensionImagePayloadTests(TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 class DownloadImageBytesAntiBotModeTests(SimpleTestCase):
     @override_settings(ZENROWS_API_KEY='test-key')
-    def test_requests_adaptive_stealth_mode_to_dodge_the_datacenter_ip_block(self):
+    def test_gumtree_image_cdn_uses_premium_au_proxy_to_dodge_the_datacenter_ip_block(self):
         fake_response = mock.Mock()
         fake_response.headers = {'Content-Type': 'image/jpeg'}
         fake_response.content = b'\xff\xd8\xff'
@@ -636,6 +636,23 @@ class DownloadImageBytesAntiBotModeTests(SimpleTestCase):
 
         client_cls.return_value.get.assert_called_once_with(
             'https://images.gumtree.com.au/image/private/t_$_20/move/x',
+            params={'premium_proxy': 'true', 'proxy_country': 'au'},
+            timeout=35,
+        )
+
+    @override_settings(ZENROWS_API_KEY='test-key')
+    def test_non_gumtree_urls_keep_adaptive_stealth_mode_to_save_credits(self):
+        fake_response = mock.Mock()
+        fake_response.headers = {'Content-Type': 'image/jpeg'}
+        fake_response.content = b'\xff\xd8\xff'
+        fake_response.raise_for_status = mock.Mock()
+
+        with mock.patch('VehicleListing.image_pipeline.ZenRowsClient') as client_cls:
+            client_cls.return_value.get.return_value = fake_response
+            download_image_bytes('https://dealer.example.com/photos/1.jpg', timeout=35)
+
+        client_cls.return_value.get.assert_called_once_with(
+            'https://dealer.example.com/photos/1.jpg',
             params={'mode': 'auto'},
             timeout=35,
         )
