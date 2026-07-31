@@ -89,17 +89,61 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
     return resolved
 
 
+def _resolve_gumtree_hosted_only_images(listing):
+    """Gumtree's extension-facing image list: ONLY our own S3-hosted FB-safe
+    JPEG is ever returned — the raw Gumtree URL is never sent to the extension,
+    at any point, for any reason. This is a deliberate reversal of the
+    never-block-publish fallback every other path in this module uses.
+
+    Because hosting happens asynchronously (Celery, after the scrape), a
+    listing whose photos haven't all finished settling yet (still
+    pending/processing) is withheld ENTIRELY (empty list) rather than
+    publishing early with a partial set — the extension's own GUARD 2 (minimum
+    2 images) and the UnpublishedListingSnapshot 'INSUFFICIENT_IMAGES' reporting
+    already handle an empty/short list gracefully, so this listing simply waits
+    for its next sync once every slot has resolved one way or another.
+
+    A photo whose slot is status=Failed is dropped forever rather than
+    blocking the rest of the listing — Failed is only ever set after every
+    retry is exhausted (see tasks.process_vehicle_listing_image_task), so it's
+    already a terminal, not transient, state; there is nothing left to wait
+    for on that specific photo."""
+    slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
+    if not slots:
+        # Legacy/just-scraped listing with no slots yet at all — nothing hosted
+        # to publish; wait for sync_listing_images to create and process them.
+        return []
+
+    still_settling = any(
+        slot.status in (VehicleListingImage.STATUS_PENDING, VehicleListingImage.STATUS_PROCESSING)
+        for slot in slots
+    )
+    if still_settling:
+        return []
+
+    urls = []
+    for slot in slots:
+        if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
+            hosted = slot.hosted_image.upload_url()
+            if hosted and hosted.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
+                urls.append(hosted)
+        # Anything else (Failed) is simply dropped — no raw-URL fallback, ever.
+    return urls
+
+
 def _resolve_extension_images(listing, request):
     """Ordered image URLs for the Chrome extension to re-upload to Facebook.
 
-    Prefer our own S3/CloudFront copy (the FB-safe JPEG upload variant) for
-    every photo that's finished processing, and fall back to the raw source
-    URL (routed through custom_domain_image_proxy only for hosts that need it)
-    for photos still pending/failed, or for legacy rows with no image_slots
-    yet. This means what Facebook actually receives is OUR hosted copy, not
-    the dealer/Gumtree original, whenever hosting has succeeded for that photo
-    — the per-slot fallback is what keeps publishing safe (never blocked) for
-    anything that hasn't finished hosting yet.
+    Gumtree listings are routed to _resolve_gumtree_hosted_only_images (see
+    its docstring) — raw Gumtree URLs are never sent to Facebook.
+
+    For every other source (custom-domain), prefer our own S3/CloudFront copy
+    (the FB-safe JPEG upload variant) for every photo that's finished
+    processing, and fall back to the raw source URL (routed through
+    custom_domain_image_proxy only for hosts that need it) for photos still
+    pending/failed, or for legacy rows with no image_slots yet — the per-slot
+    fallback is what keeps publishing safe (never blocked) for anything that
+    hasn't finished hosting yet.
 
     Why this exists: the previous behaviour proxied EVERY full-size original on
     every publish. For custom-domain dealers (whose images all need the proxy,
@@ -112,14 +156,12 @@ def _resolve_extension_images(listing, request):
     Custom-domain's rollout of this is gated by settings.EXTENSION_USE_HOSTED_IMAGES
     (staged: default False until the migration + backfill_upload_variants have
     run, then flipped True via env alone — no deploy) so it can be switched off
-    instantly if Facebook ever rejects the hosted JPEG variant. Gumtree never
-    had the PARTIAL_IMAGE_UPLOAD problem that switch was built for and isn't
-    part of that staged rollout, so it always attempts the hosted path below —
-    the per-slot fallback to its raw (never-proxied) URL is what keeps a
-    not-yet-hosted or permanently-failed Gumtree photo publishable regardless.
+    instantly if Facebook ever rejects the hosted JPEG variant.
 
-    TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over all
-    of the above for Gumtree listings — see _gumtree_hosting_bypassed.
+    TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over
+    everything above for Gumtree listings, unconditionally serving the raw
+    scraped URL instead of routing to _resolve_gumtree_hosted_only_images —
+    see _gumtree_hosting_bypassed.
     """
     if _gumtree_hosting_bypassed(listing):
         return [
@@ -129,7 +171,10 @@ def _resolve_extension_images(listing, request):
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
-    if not is_gumtree and not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
+    if is_gumtree:
+        return _resolve_gumtree_hosted_only_images(listing)
+
+    if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
         return [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
