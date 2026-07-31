@@ -27,8 +27,9 @@ CACHES = {
 
 # Never hand a task to a real broker during tests; every test that cares about
 # enqueueing patches the task object directly.
-CELERY_TASK_ALWAYS_EAGER = False
+CELERY_TASK_ALWAYS_EAGER = True
 CELERY_BROKER_URL = 'memory://'
+CELERY_RESULT_BACKEND = 'memory://'
 
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
