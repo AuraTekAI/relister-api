@@ -1705,6 +1705,112 @@ def update_vehicle_listing_facebook_id(request):
         }, status=500)
 
 
+# Reasons the extension can report for a relist-recovery call. Kept as a fixed
+# set (rather than free text) so the `relister_views` log line is grep-able and
+# any future admin/alerting view can group by cause.
+RELIST_RECOVERY_REASONS = {
+    'watchdog_timeout_confirmed_deleted',   # delete-lock watchdog fired, ground-truth check confirmed the FB listing IS gone
+    'watchdog_timeout_unconfirmed',         # delete-lock watchdog fired, ground-truth check could not confirm either way
+    'republish_failed_after_delete',        # delete confirmed, republish returned success=false
+    'unexpected_error_after_delete',        # delete confirmed, an unhandled exception interrupted the republish step
+}
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def relist_recovery(request):
+    """
+    Atomic recovery for the relist workflow's delete-then-republish gap: called
+    by the extension whenever a Facebook listing was deleted (confirmed, or
+    could not be ruled out — see RELIST_RECOVERY_REASONS) but the matching
+    republish did not confirm success. A single atomic write instead of the
+    separate facebook-id DELETE + mark-changed PATCH calls, so a mid-sequence
+    network drop can't leave the row with the stale FB id cleared but
+    is_changed still false (or vice versa) — half-fixed is the same bug this
+    endpoint exists to close.
+
+    Effects (all in one transaction):
+      - facebook_listing_id -> null (stop pointing at a dead/uncertain listing)
+      - is_changed -> True (guarantees the row is re-evaluated and retried by
+        the extension's next relist cycle, regardless of what actually
+        happened on Facebook's side)
+      - retry_count += 1 (visibility into how often a listing hits this path)
+
+    Logged at ERROR level unconditionally (not just on rejection) — this call
+    only ever fires when the extension detected a real backend/Facebook
+    desync risk, so every occurrence is worth a durable, server-side record
+    independent of the extension's own client-side logs (which can be lost to
+    a browser crash before they ship).
+
+    Request Body: { "id": 123, "reason": "watchdog_timeout_confirmed_deleted", "detail": "optional free text, e.g. the caught error message" }
+    Returns:      { "success": true, "data": { "id": 123, "facebook_listing_id": null, "is_changed": true, "retry_count": 4 } }
+    """
+    try:
+        data = json.loads(request.body or b'{}')
+        if not isinstance(data, dict):
+            return JsonResponse({'success': False, 'error': 'Request body must be a JSON object'}, status=400)
+
+        try:
+            vehicle_listing_id = int(data.get('id'))
+            if vehicle_listing_id <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            logger.warning("relist-recovery rejected: invalid id %r", data.get('id'))
+            return JsonResponse({'success': False, 'error': 'Invalid vehicle listing ID format'}, status=400)
+
+        reason = data.get('reason')
+        if reason not in RELIST_RECOVERY_REASONS:
+            logger.warning("relist-recovery rejected: invalid reason %r (id=%s)", reason, vehicle_listing_id)
+            return JsonResponse({'success': False, 'error': f'reason must be one of {sorted(RELIST_RECOVERY_REASONS)}'}, status=400)
+        detail = str(data.get('detail') or '')[:2000]
+
+        with transaction.atomic():
+            vehicle_listing = VehicleListing.objects.select_for_update().filter(
+                id=vehicle_listing_id, user=request.user
+            ).first()
+            if vehicle_listing is None:
+                logger.warning(
+                    "relist-recovery 404: listing id=%s not found for user=%s",
+                    vehicle_listing_id, getattr(request.user, 'email', request.user),
+                )
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Vehicle listing not found or you do not have permission to update it'
+                }, status=404)
+
+            previous_fb_id = vehicle_listing.facebook_listing_id
+            vehicle_listing.facebook_listing_id = None
+            vehicle_listing.is_changed = True
+            vehicle_listing.retry_count = (vehicle_listing.retry_count or 0) + 1
+            vehicle_listing.save(update_fields=['facebook_listing_id', 'is_changed', 'retry_count', 'updated_at'])
+
+        logger.error(
+            "RELIST DESYNC RECOVERY: listing id=%s user=%s reason=%s previous_facebook_listing_id=%r "
+            "retry_count=%s detail=%r",
+            vehicle_listing_id, getattr(request.user, 'email', request.user), reason,
+            previous_fb_id, vehicle_listing.retry_count, detail,
+        )
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'id': vehicle_listing.id,
+                'facebook_listing_id': vehicle_listing.facebook_listing_id,
+                'is_changed': vehicle_listing.is_changed,
+                'retry_count': vehicle_listing.retry_count,
+            }
+        }, status=200)
+
+    except json.JSONDecodeError:
+        logger.warning("relist-recovery rejected: invalid JSON body")
+        return JsonResponse({'success': False, 'error': 'Invalid JSON format in request body'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in relist_recovery: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while recording relist recovery'
+        }, status=500)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_old_vehicle_listings(request):
