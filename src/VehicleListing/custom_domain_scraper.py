@@ -9,8 +9,10 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .custom_domain_adapters import resolve_for_url
+from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
 from .models import CustomDomainProfileListing, VehicleListing
+from .utils import reactivate_listing
 
 logger = logging.getLogger("custom_domain")
 
@@ -112,6 +114,133 @@ def _apply_listing_update(existing, result):
     existing.is_changed = True
     existing.save()
     sync_listing_images(existing, result.get("image"))
+
+def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter):
+    """Scrape/update/create a single listing. Returns True if it should count
+    toward `processed_listings` (i.e. it exists or was successfully created)."""
+    already_exists = VehicleListing.objects.filter(
+        list_id=listing_id, user=user, seller_profile_id=profile_id
+    ).first()
+
+    if already_exists:
+        logger.info(
+            f"Custom domain listing already exists: {already_exists} price={already_exists.price}"
+        )
+        stale_pending = (
+            already_exists.status in ["pending", "failed", "sold"]
+            and already_exists.created_at < timezone.now() - timedelta(days=1)
+        )
+        stale_completed = (
+            already_exists.status == "completed"
+            and already_exists.listed_on
+            and already_exists.listed_on < timezone.now() - timedelta(days=1)
+        )
+        if stale_pending or stale_completed:
+            result = adapter.parse_listing(stock_url)
+            if not result:
+                logger.error(f"Failed to refetch custom domain listing {listing_id}")
+                return True
+            price_match = (
+                already_exists.price == str(result.get("price"))
+                if result.get("price") is not None
+                else True
+            )
+            images_match = set(already_exists.images or []) == set(result.get("image") or [])
+            if (
+                already_exists.year == result.get("year")
+                and already_exists.make == result.get("make")
+                and already_exists.model == result.get("model")
+                and price_match
+                and images_match
+                and already_exists.description == result.get("description")
+            ):
+                logger.info(f"Custom domain listing {listing_id} unchanged — skipping update")
+                return True
+            logger.info(f"Custom domain listing {listing_id} changed — updating")
+            _apply_listing_update(already_exists, result)
+        else:
+            logger.info(
+                f"Custom domain listing {listing_id} not eligible for update (status={already_exists.status})"
+            )
+        return True
+
+    time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
+    result = adapter.parse_listing(stock_url)
+    if not result:
+        logger.error(f"Failed to fetch details for custom domain listing {listing_id} — skipping")
+        return False
+
+    # No match on list_id, but that only tells us the SOURCE's id for this
+    # stock item is new to us — not that the physical vehicle is. Dealer sites
+    # occasionally reissue stock tokens (a re-index, a relist) for a car we
+    # already have a row for. Re-check by VIN / structural attributes using
+    # the data we just fetched anyway (no extra request), scoped to this one
+    # dealer, before deciding this is really a new vehicle.
+    matched = find_existing_vehicle(
+        VehicleListing.objects.filter(user=user, seller_profile_id=profile_id),
+        vin=result.get("vin"),
+        make=result.get("make"), model=result.get("model"), variant=result.get("variant"),
+        year=result.get("year"), color=result.get("color"), mileage=result.get("mileage"),
+        body_type=result.get("body_type"), fuel_type=result.get("fuel_type"),
+        transmission=result.get("transmission"),
+    )
+    if matched is not None:
+        logger.info(
+            f"Custom domain listing {listing_id} matches existing vehicle_listing id={matched.id} "
+            f"(list_id changing {matched.list_id!r} -> {listing_id!r}) — updating in place instead of "
+            f"creating a duplicate row"
+        )
+        if matched.status == "sold" or matched.sales:
+            reactivate_listing(matched)
+        matched.list_id = str(listing_id)
+        matched.custom_domain_profile = profile_instance
+        _apply_listing_update(matched, result)
+        return True
+
+    # Atomic create: a concurrent scrape thread (e.g. cron firing
+    # during an in-progress POST scrape) racing on the same listing
+    # gets the unique-together constraint to raise IntegrityError;
+    # we catch it and apply the freshly-parsed data as an update
+    # instead of inserting a duplicate row.
+    try:
+        with transaction.atomic():
+            vehicle_listing = VehicleListing.objects.create(
+                user=user,
+                custom_domain_profile=profile_instance,
+                list_id=listing_id,
+                year=result.get("year"),
+                body_type=result.get("body_type"),
+                fuel_type=result.get("fuel_type"),
+                color=result.get("color"),
+                variant=result.get("variant"),
+                make=result.get("make"),
+                mileage=result.get("mileage"),
+                mileage_unavailable=result.get("mileage") in (None, 0),
+                model=result.get("model"),
+                price=str(result.get("price")) if result.get("price") is not None else None,
+                transmission=result.get("transmission"),
+                description=result.get("description"),
+                images=result.get("image"),
+                url=result.get("url"),
+                location=result.get("location"),
+                status="pending",
+                is_relist=False,
+                seller_profile_id=profile_id,
+            )
+        sync_listing_images(vehicle_listing, result.get("image"))
+        logger.info(f"Created custom domain vehicle_listing: {vehicle_listing}")
+    except IntegrityError:
+        # Another concurrent thread won the create race. The row now
+        # exists; apply the data we already fetched as an update.
+        logger.info(
+            f"Create race lost for listing {listing_id} — another thread created it; applying parsed data as update"
+        )
+        raced_row = VehicleListing.objects.filter(
+            user=user, list_id=listing_id, seller_profile_id=profile_id
+        ).first()
+        if raced_row is not None:
+            _apply_listing_update(raced_row, result)
+    return True
 
 
 def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter):

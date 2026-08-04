@@ -1083,7 +1083,7 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
         hosted = HostedImage.objects.create(
             content_hash='9' * 64, large_image='k/large.webp',
-            upload_image='k/upload.jpg', status=HostedImage.STATUS_READY)
+            status=HostedImage.STATUS_READY)
         VehicleListingImage.objects.create(
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
             position=0, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
@@ -1171,6 +1171,7 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
         payload = _resolve_extension_images(listing, self.request)
 
         self.assertTrue(payload[0].endswith('upload.jpg'))
+
 
 
 class BackfillScopingTests(TestCase):
