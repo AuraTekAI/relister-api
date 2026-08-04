@@ -128,6 +128,14 @@ class VehicleListing(models.Model):
         # transaction.atomic and treats IntegrityError on this constraint as
         # "another thread won the race" — see custom_domain_scraper.py.
         unique_together = [("user", "list_id", "seller_profile_id")]
+        # Support duplicate_matching.find_existing_vehicle()'s lookups (same
+        # dealer + VIN, or same dealer + make/model/year) without a full scan
+        # of the dealer's rows. Index-only — no new column — so this is safe
+        # to add without touching existing data or the create()/update() paths.
+        indexes = [
+            models.Index(fields=['user', 'seller_profile_id', 'vin'], name='vl_dealer_vin_idx'),
+            models.Index(fields=['user', 'seller_profile_id', 'make', 'model', 'year'], name='vl_dealer_mmy_idx'),
+        ]
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
