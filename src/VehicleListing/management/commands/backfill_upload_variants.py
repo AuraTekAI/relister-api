@@ -1,6 +1,5 @@
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db.models import Q
 
 from VehicleListing.image_pipeline import (
     _s3_client,
@@ -32,18 +31,12 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        # Only images actually used by a custom-domain listing need the JPEG —
-        # the extension only serves it for those. Gumtree-only images are left
-        # alone so we don't create copies nothing will ever use.
+        # Every hosted image now needs the JPEG — _resolve_extension_images serves
+        # it to Facebook for Gumtree listings too, not just custom-domain ones.
         queryset = (
             HostedImage.objects
             .filter(status=HostedImage.STATUS_READY, upload_image='')
             .exclude(large_image='')
-            .filter(
-                Q(listing_links__listing__custom_domain_profile__isnull=False)
-                | Q(listing_links__listing__custom_domain_url__isnull=False)
-            )
-            .distinct()
             .order_by('id')
         )
         limit = options.get('limit')
