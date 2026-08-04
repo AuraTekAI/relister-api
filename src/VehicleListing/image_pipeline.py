@@ -49,17 +49,24 @@ def download_image_bytes(url, timeout):
     # The Chrome extension's own image fetch (fillVehicleForm.ts, uploading the
     # same URL to Facebook Marketplace) succeeds because it runs as a normal
     # `fetch()` from the dealer's own browser — a residential IP, not a proxy —
-    # which is exactly what Peakhour is choosing not to block. `mode=auto`
-    # asks ZenRows for Adaptive Stealth Mode: it tries the cheap default path
-    # first and only escalates to premium (residential) proxies/JS rendering
-    # when that gets blocked, and per ZenRows' billing model we're only
-    # charged for whichever attempt actually succeeds — so this fixes Gumtree
-    # image downloads without paying premium-proxy cost on every other
-    # dealer/custom-domain image this same function downloads.
+    # which is exactly what Peakhour is choosing not to block. For Gumtree image
+    # URLs we therefore ask ZenRows for a premium/residential AU proxy straight
+    # away: the datacenter path is *always* blocked, so `mode=auto` only wastes a
+    # failing request before escalating. For all other dealer/custom-domain URLs we
+    # keep `mode=auto` so we only pay premium-proxy cost when the cheap path is
+    # actually blocked.
     if not settings.ZENROWS_API_KEY:
         raise ValueError("ZENROWS_API_KEY is not configured in the environment variables")
+
+    is_gumtree_image = 'images.gumtree.com.au' in url
+    params = (
+        {'premium_proxy': 'true', 'proxy_country': 'au'}
+        if is_gumtree_image
+        else {'mode': 'auto'}
+    )
+
     client = ZenRowsClient(settings.ZENROWS_API_KEY)
-    response = client.get(url, params={'mode': 'auto'}, timeout=timeout)
+    response = client.get(url, params=params, timeout=timeout)
     response.raise_for_status()
     # ZenRows' own response envelope's Content-Type does NOT reliably reflect
     # the origin resource's real type — confirmed live against a production
