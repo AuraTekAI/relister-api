@@ -92,18 +92,7 @@ def _resolve_extension_images(listing, request):
     old proxy-everything behaviour if Facebook ever rejects the hosted WebP
     variant. The per-slot proxy fallback also means nothing breaks for photos
     that simply haven't been processed yet.
-
-    Gumtree guard: if the listing is a Gumtree one, return the EXACT original
-    behaviour and skip this whole hosted-image path. Gumtree images are already
-    CORS-friendly, were served direct (never proxied), and never had the
-    partial-upload problem this addresses — so flipping EXTENSION_USE_HOSTED_IMAGES
-    on can never change what a Gumtree dealer publishes."""
-    is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
-                      or getattr(listing, 'gumtree_url_id', None))
-    if is_gumtree:
-        # Verbatim pre-change behaviour — Gumtree stays exactly as it was.
-        return [_rewrite_proxy_url(url, request) for url in (listing.images or [])]
-
+    """
     if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
         return [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))

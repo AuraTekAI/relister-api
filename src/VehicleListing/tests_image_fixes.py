@@ -1037,17 +1037,21 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G2', seller_profile_id='P', gumtree_profile=profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
-        # A fully-hosted photo with a ready JPEG exists on the listing...
+        # A fully-hosted photo exists on the listing, plus a second photo tracked
+        # only by a slot. Gumtree images are processed without the FB-safe JPEG
+        # upload variant, so the payload must be the original raw Gumtree URLs.
         hosted = HostedImage.objects.create(
             content_hash='9' * 64, large_image='k/large.webp',
-            upload_image='k/upload.jpg', status=HostedImage.STATUS_READY)
+            status=HostedImage.STATUS_READY)
         VehicleListingImage.objects.create(
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
             position=0, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
+        VehicleListingImage.objects.create(
+            listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
+            position=1, status=VehicleListingImage.STATUS_READY)
 
         payload = _resolve_extension_images(listing, self.request)
 
-        # ...but Gumtree is served its own raw URLs (Gumtree hosts are never proxied), not the JPEG.
         self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg',
                                    'https://images.gumtree.com.au/b.jpg'])
         self.assertFalse(any('upload.jpg' in u for u in payload))
