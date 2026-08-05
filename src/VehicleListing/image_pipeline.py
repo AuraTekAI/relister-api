@@ -278,6 +278,14 @@ def sync_listing_images(listing, image_urls):
     the listing itself is already safely persisted, and the next scrape
     re-attempts the slot reconciliation.
     """
+    # TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING. Skip ingestion
+    # entirely for Gumtree listings — no VehicleListingImage slots get
+    # created and no Celery download/S3-upload task ever gets enqueued, so
+    # the hosted pipeline does zero work for Gumtree photos. Custom-domain
+    # listings (gumtree_profile_id is None) are unaffected. See the setting's
+    # docstring in settings.py for how to revert.
+    if getattr(settings, 'BYPASS_GUMTREE_IMAGE_HOSTING', False) and getattr(listing, 'gumtree_profile_id', None):
+        return
     try:
         _sync_listing_images(listing, image_urls)
     except Exception:

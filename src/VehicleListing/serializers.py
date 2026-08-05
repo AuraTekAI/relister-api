@@ -25,6 +25,15 @@ def _rewrite_proxy_url(url, request):
     return f"{proxy_base}?url={quote(url, safe='')}"
 
 
+def _gumtree_hosting_bypassed(listing):
+    """TEMPORARY: True when settings.BYPASS_GUMTREE_IMAGE_HOSTING is on and
+    this listing is Gumtree-sourced. Callers use this to skip
+    HostedImage/VehicleListingImage entirely and serve the raw scraped URL
+    instead — including for listings that already have hosted rows from
+    before the flag was flipped on. See settings.py for how to revert."""
+    return bool(getattr(settings, 'BYPASS_GUMTREE_IMAGE_HOSTING', False) and getattr(listing, 'gumtree_profile_id', None))
+
+
 def _resolve_storefront_images(listing, size, request, require_hosted=False):
     """
     Ordered images for the public storefront: prefer our own S3/CDN URL for
@@ -46,6 +55,15 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
     for images actually served from our own AWS (S3/CloudFront) copy; False
     means it's still the raw/proxied external source URL.
     """
+    if _gumtree_hosting_bypassed(listing):
+        # TEMPORARY bypass: never touch VehicleListingImage/HostedImage for
+        # this listing, even if hosted rows already exist — always serve the
+        # raw Gumtree URL, storefront included.
+        return [
+            {'url': url, 'is_hosted': False}
+            for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
         if require_hosted:
@@ -92,7 +110,15 @@ def _resolve_extension_images(listing, request):
     old proxy-everything behaviour if Facebook ever rejects the hosted WebP
     variant. The per-slot proxy fallback also means nothing breaks for photos
     that simply haven't been processed yet.
+
+    TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over all
+    of the above for Gumtree listings — see _gumtree_hosting_bypassed.
     """
+    if _gumtree_hosting_bypassed(listing):
+        return [
+            url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
     if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
         return [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
