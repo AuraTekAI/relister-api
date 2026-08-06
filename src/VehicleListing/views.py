@@ -1055,10 +1055,16 @@ def get_user_gumtree_profile_vehicle_listings(request):
     if not gumtree_profile_url:
         return JsonResponse({'error': 'url parameter is required'}, status=400)
 
+    # The stored profile URL can differ from the request by a trailing slash,
+    # http vs https, or www prefix. The seller ID is the stable identifier.
+    seller_id = extract_seller_id(gumtree_profile_url)
+    if not seller_id or not seller_id.isdigit():
+        return JsonResponse({'error': 'Invalid Gumtree profile URL'}, status=400)
+
     # Verify the profile belongs to the user
     gumtree_profile = GumtreeProfileListing.objects.filter(
         user=user,
-        url=gumtree_profile_url
+        profile_id=seller_id
     ).first()
 
     if not gumtree_profile:
