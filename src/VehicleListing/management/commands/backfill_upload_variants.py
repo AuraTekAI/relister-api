@@ -1,6 +1,5 @@
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db.models import Q
 
 from VehicleListing.image_pipeline import (
     _s3_client,
@@ -32,17 +31,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        # Only images actually used by a custom-domain listing need the JPEG —
-        # the extension only serves it for those. Gumtree-only images are left
-        # alone so we don't create copies nothing will ever use.
+        # Backfill the FB-safe JPEG upload variant for every ready hosted image
+        # that doesn't already have one, regardless of whether it is used by a
+        # Gumtree or custom-domain listing. The extension now publishes all
+        # listings using the S3-hosted JPEG URL stored in HostedImage.upload_image.
         queryset = (
             HostedImage.objects
             .filter(status=HostedImage.STATUS_READY, upload_image='')
             .exclude(large_image='')
-            .filter(
-                Q(listing_links__listing__custom_domain_profile__isnull=False)
-                | Q(listing_links__listing__custom_domain_url__isnull=False)
-            )
             .distinct()
             .order_by('id')
         )

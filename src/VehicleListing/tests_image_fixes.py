@@ -458,7 +458,7 @@ class SyncListingImagesTests(TestCase):
         inside TestCase's wrapping atomic block — captureOnCommitCallbacks runs
         it explicitly so the enqueue assertions mean something.
         """
-        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay') as delay:
+        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async') as delay:
             with self.captureOnCommitCallbacks(execute=True):
                 sync_listing_images(self.listing, urls)
         return delay
@@ -522,7 +522,7 @@ class SyncListingImagesAutocommitTests(TransactionTestCase):
             'https://x.invalid/c.jpg',
         ]
 
-        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay') as delay:
+        with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async') as delay:
             sync_listing_images(listing, urls)
 
         self.assertEqual(
@@ -802,7 +802,7 @@ class ResyncCustomDomainImagesCommandTests(TestCase):
         adapter.parse_listing.return_value = {'image': parsed_images} if parsed_images is not None else None
         with mock.patch('VehicleListing.management.commands.resync_custom_domain_images.resolve_for_url',
                         return_value=adapter), \
-                mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay'):
+                mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async'):
             with self.captureOnCommitCallbacks(execute=True):
                 call_command('resync_custom_domain_images', '--delay=0', stdout=io.StringIO(),
                              stderr=io.StringIO(), **options)
@@ -927,7 +927,7 @@ class EasyVehiclesEndToEndTests(TestCase):
                     user=user, list_id=f'E2E{index}', seller_profile_id='easyvehiclesaustralia.com.au',
                     images=urls,
                 )
-                with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.delay'):
+                with mock.patch('VehicleListing.tasks.process_vehicle_listing_image_task.apply_async'):
                     _sync_listing_images(listing, urls)
 
                 # Simulate the ingest worker finishing every slot.
@@ -953,11 +953,13 @@ class EasyVehiclesEndToEndTests(TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gumtree isolation — the custom-domain image work must never touch Gumtree.
+# Upload-variant scoping — Gumtree and custom-domain listings both need the
+# FB-safe JPEG upload variant because the extension publishes every listing
+# using the S3-hosted JPEG URL stored in HostedImage.upload_image.
 # ─────────────────────────────────────────────────────────────────────────────
 class UploadVariantSourceScopingTests(TestCase):
-    """The FB-safe JPEG upload variant is a custom-domain-only concern; Gumtree
-    images must not pay the extra encode + S3 write for a copy they never use."""
+    """The FB-safe JPEG upload variant is required for both Gumtree and
+    custom-domain listings; the task should always request it."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='scope@test.invalid', password='x')
@@ -976,13 +978,20 @@ class UploadVariantSourceScopingTests(TestCase):
         self.assertTrue(hosted.upload_image.endswith('upload.jpg'))
         self.assertTrue(self._jpeg_uploaded())
 
-    def test_gumtree_call_builds_no_jpeg(self):
+    def test_gumtree_call_builds_the_jpeg(self):
+        data = make_jpeg(1200, 800)
+        hosted, _ = get_or_create_ready_hosted_image(
+            content_hash_for(data), 'https://x/a.jpg', data, build_upload_variant=True)
+        self.assertTrue(hosted.upload_image.endswith('upload.jpg'))
+        self.assertTrue(self._jpeg_uploaded(), 'Gumtree image should have a JPEG variant')
+
+    def test_build_upload_variant_false_skips_the_jpeg(self):
         data = make_jpeg(1200, 800)
         hosted, _ = get_or_create_ready_hosted_image(
             content_hash_for(data), 'https://x/a.jpg', data, build_upload_variant=False)
         self.assertEqual(hosted.upload_image, '')
         self.assertIsNone(hosted.upload_url())
-        self.assertFalse(self._jpeg_uploaded(), 'wasted a JPEG encode/upload on a Gumtree image')
+        self.assertFalse(self._jpeg_uploaded(), 'build_upload_variant=False should skip JPEG')
 
     def test_jpeg_added_lazily_when_custom_domain_reuses_a_gumtree_image(self):
         data = make_jpeg(1200, 800)
@@ -1007,12 +1016,12 @@ class UploadVariantSourceScopingTests(TestCase):
             process_vehicle_listing_image_task.apply(args=[slot.pk])
         return gocr.call_args
 
-    def test_task_disables_upload_variant_for_gumtree(self):
+    def test_task_enables_upload_variant_for_gumtree(self):
         profile = GumtreeProfileListing.objects.create(user=self.user)
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G1', seller_profile_id='P', gumtree_profile=profile)
         _args, kwargs = self._run_task(listing)
-        self.assertFalse(kwargs['build_upload_variant'], 'Gumtree image asked for a JPEG variant')
+        self.assertTrue(kwargs['build_upload_variant'], 'Gumtree image should ask for a JPEG variant')
 
     def test_task_enables_upload_variant_for_custom_domain(self):
         profile = CustomDomainProfileListing.objects.create(
@@ -1023,25 +1032,27 @@ class UploadVariantSourceScopingTests(TestCase):
         self.assertTrue(kwargs['build_upload_variant'], 'custom-domain image skipped its JPEG variant')
 
 
-class ExtensionPayloadGumtreeGuardTests(TestCase):
-    """With the hosted path ON, a Gumtree listing must still publish its own raw
-    URLs — never our hosted JPEG."""
+class ExtensionPayloadGumtreeUsesHostedJpegTests(TestCase):
+    """With the hosted path ON, a Gumtree listing must publish using the
+    S3-hosted FB-safe JPEG URL stored in HostedImage.upload_image."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='gum@test.invalid', password='x')
         self.request = RequestFactory().get('/api/vehicle-listing/custom-domain-listings/')
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=True)
-    def test_gumtree_listing_ignores_the_hosted_jpeg_path(self):
+    def test_gumtree_listing_returns_hosted_jpeg_path(self):
         profile = GumtreeProfileListing.objects.create(user=self.user)
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G2', seller_profile_id='P', gumtree_profile=profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
         # A fully-hosted photo exists on the listing, plus a second photo tracked
-        # only by a slot. Gumtree images are processed without the FB-safe JPEG
-        # upload variant, so the payload must be the original raw Gumtree URLs.
+        # only by a slot. Both should resolve to the S3 JPEG upload variant when
+        # it exists; the second slot falls back to the raw source URL because it
+        # has no hosted_image yet.
         hosted = HostedImage.objects.create(
             content_hash='9' * 64, large_image='k/large.webp',
+            upload_image='vehicle-images/aa/99/upload.jpg',
             status=HostedImage.STATUS_READY)
         VehicleListingImage.objects.create(
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
@@ -1052,14 +1063,15 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
 
         payload = _resolve_extension_images(listing, self.request)
 
-        self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg',
-                                   'https://images.gumtree.com.au/b.jpg'])
-        self.assertFalse(any('upload.jpg' in u for u in payload))
+        self.assertTrue(payload[0].endswith('vehicle-images/aa/99/upload.jpg'))
+        self.assertEqual(payload[1], 'https://images.gumtree.com.au/b.jpg')
+        self.assertTrue(any('upload.jpg' in u for u in payload))
 
 
 class BackfillScopingTests(TestCase):
-    """The one-off backfill only creates JPEGs for images a custom-domain listing
-    actually uses — Gumtree-only images are left alone."""
+    """The one-off backfill creates JPEGs for every hosted image that doesn't
+    already have one, including Gumtree-only images, because the extension now
+    publishes all listings using the S3-hosted JPEG URL."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='bf@test.invalid', password='x')
@@ -1069,7 +1081,7 @@ class BackfillScopingTests(TestCase):
             content_hash=f'{n:064d}', large_image=f'vehicle-images/aa/{n}/large.webp',
             upload_image='', status=HostedImage.STATUS_READY)
 
-    def test_backfill_targets_custom_domain_images_only(self):
+    def test_backfill_targets_all_ready_images(self):
         cd_profile = CustomDomainProfileListing.objects.create(
             user=self.user, url='https://d.com/stock', profile_id='d.com', status='completed')
         cd_listing = VehicleListing.objects.create(
@@ -1084,10 +1096,10 @@ class BackfillScopingTests(TestCase):
 
         with mock.patch('VehicleListing.management.commands.backfill_upload_variants._s3_client') as s3, \
              mock.patch('VehicleListing.management.commands.backfill_upload_variants.upload_variant'):
-            s3.return_value.get_object.return_value = {'Body': io.BytesIO(make_jpeg(1600, 1067))}
+            s3.return_value.get_object.side_effect = lambda **kwargs: {'Body': io.BytesIO(make_jpeg(1600, 1067))}
             call_command('backfill_upload_variants', stdout=io.StringIO(), stderr=io.StringIO())
 
         cd_img.refresh_from_db()
         gum_img.refresh_from_db()
         self.assertTrue(cd_img.upload_image.endswith('upload.jpg'), 'custom-domain image was not backfilled')
-        self.assertEqual(gum_img.upload_image, '', 'Gumtree-only image was needlessly backfilled')
+        self.assertTrue(gum_img.upload_image.endswith('upload.jpg'), 'Gumtree-only image was not backfilled')

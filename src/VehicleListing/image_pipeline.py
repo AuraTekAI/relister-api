@@ -216,12 +216,13 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, buil
     that makes relisting the same photo (or reusing one across listings) free.
 
     `build_upload_variant` controls whether the extra FB-safe JPEG copy is
-    produced. Only custom-domain listings ever use it (the extension serves it
-    instead of proxying the original); Gumtree images never do, so the caller
-    passes False for them and we skip the extra encode + S3 object entirely —
-    no wasted work for Gumtree. If a photo first hosted for Gumtree (no JPEG) is
-    later needed by a custom-domain listing, that call passes True and we lazily
-    add just the JPEG to the existing row.
+    produced. Both Gumtree and custom-domain listings now require this JPEG
+    variant because the extension publishes to Facebook Marketplace using the
+    S3-hosted JPEG URL stored in HostedImage.upload_image. The default is True;
+    callers may pass False only for legacy/backfill scenarios where the JPEG is
+    known to be unnecessary. If a photo first hosted without a JPEG is later
+    needed with one, a call passing True lazily adds just the JPEG to the
+    existing row.
     """
     ready = HostedImage.objects.filter(content_hash=content_hash, status=HostedImage.STATUS_READY).first()
     if ready:
@@ -238,7 +239,7 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, buil
         keys[size] = (key, width, height)
 
     # FB-safe JPEG copy for the extension's Marketplace upload (FB rejects our
-    # WebP) — built only for custom-domain images that will actually use it.
+    # WebP) — built for all listings that will be published through the extension.
     upload_key = (
         _make_and_upload_upload_variant(content_hash, image_bytes)
         if build_upload_variant else ''

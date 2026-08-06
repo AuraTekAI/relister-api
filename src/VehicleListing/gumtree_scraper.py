@@ -44,6 +44,9 @@ def _apply_gumtree_update(existing, result):
     existing.vin = result.get("vin")
     existing.is_changed = True
     existing.save()
+    logging.info(
+        f"Syncing {len(result.get('image') or [])} image(s) for updated listing {existing.pk} (list_id={existing.list_id})"
+    )
     sync_listing_images(existing, result.get("image"))
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -345,6 +348,7 @@ def get_gumtree_listing_details(listing_id):
             return None
 
         logging.info(f"Successfully fetched details for listing ID: {listing_id}")
+        logging.info(f"images_found_on_gumtree: {len(listing_details.get('image') or [])} for listing ID {listing_id}")
         logging.info(f"listing_details: {listing_details}")
         return listing_details
 
@@ -692,6 +696,9 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 status="pending",
                 is_relist=False,
                 seller_profile_id=seller_id
+            )
+            logging.info(
+                f"Syncing {len(result.get('image') or [])} image(s) for new listing {vehicle_listing.pk} (list_id={listing_id})"
             )
             sync_listing_images(vehicle_listing, result.get("image"))
             logging.info(f"Created new vehicle_listing: {vehicle_listing}")

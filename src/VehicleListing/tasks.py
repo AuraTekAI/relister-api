@@ -1276,11 +1276,14 @@ def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
     slot.status = VehicleListingImage.STATUS_PROCESSING
     slot.save(update_fields=['status', 'updated_at'])
 
-    # Only custom-domain listings serve the FB-safe JPEG upload variant; Gumtree
-    # images never use it, so don't spend the extra encode + S3 write on them.
+    # Gumtree and custom-domain listings both use the FB-safe JPEG upload variant
+    # (HostedImage.upload_image) when the extension publishes to Facebook Marketplace.
+    # Always build it so the S3 URL stored in the database is the one sent to Facebook.
     listing = slot.listing
-    listing_is_gumtree = bool(
-        getattr(listing, 'gumtree_profile_id', None) or getattr(listing, 'gumtree_url_id', None)
+
+    image_logger.info(
+        "Processing image slot %s for listing %s (source=%s, images_found=1)",
+        slot.pk, slot.listing_id, slot.source_url,
     )
 
     try:
@@ -1288,7 +1291,7 @@ def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
         content_hash = content_hash_for(image_bytes)
         hosted_image, uploaded = get_or_create_ready_hosted_image(
             content_hash, slot.source_url, image_bytes,
-            build_upload_variant=not listing_is_gumtree,
+            build_upload_variant=True,
         )
     except (RequestException, BotoCoreError, ClientError) as exc:
         # Only mark FAILED on the last attempt — autoretry_for below will keep
@@ -1316,10 +1319,11 @@ def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
     slot.status = VehicleListingImage.STATUS_READY
     slot.error_message = None
     slot.save(update_fields=['hosted_image', 'status', 'error_message', 'updated_at'])
+    s3_url = hosted_image.upload_url()
     image_logger.info(
-        "%s image for listing %s (hash=%s)",
+        "%s image for listing %s (hash=%s, slot=%s, s3_url=%s)",
         "Uploaded new" if uploaded else "Deduped existing",
-        slot.listing_id, content_hash,
+        slot.listing_id, content_hash, slot.pk, s3_url,
     )
 
 

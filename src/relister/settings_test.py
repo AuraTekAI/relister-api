@@ -9,6 +9,8 @@ identical to production.
 Usage:
     python src/manage.py test VehicleListing --settings=relister.settings_test
 """
+import os
+
 from .settings import *  # noqa: F401,F403
 
 DATABASES = {
@@ -26,9 +28,19 @@ CACHES = {
 }
 
 # Never hand a task to a real broker during tests; every test that cares about
-# enqueueing patches the task object directly.
+# enqueueing patches the task object directly. Use the in-memory broker and
+# disable the result backend so the suite runs without Redis.
 CELERY_TASK_ALWAYS_EAGER = False
 CELERY_BROKER_URL = 'memory://'
+CELERY_RESULT_BACKEND = 'cache+memory://'
+CELERY_CACHE_BACKEND = 'memory'
+
+# settings.py reads .env with overwrite=True, which leaves CELERY_* env vars
+# pointing at the real Redis host. Celery's app then uses those env vars in
+# preference to Django settings, so make sure the environment matches the test
+# settings before any task module is imported.
+os.environ['CELERY_BROKER_URL'] = CELERY_BROKER_URL
+os.environ['CELERY_RESULT_BACKEND'] = CELERY_RESULT_BACKEND
 
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']

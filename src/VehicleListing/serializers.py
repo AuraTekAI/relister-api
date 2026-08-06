@@ -1,5 +1,7 @@
 from urllib.parse import quote
 
+import logging
+
 from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
@@ -8,6 +10,8 @@ from accounts.models import User
 
 from .custom_domain_adapters import any_needs_image_proxy
 from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookProfileListing, GumtreeProfileListing, RelistingFacebooklisting, CustomDomainProfileListing, VehicleListingImage
+
+logger = logging.getLogger('vehicle_image_pipeline')
 
 
 def _rewrite_proxy_url(url, request):
@@ -92,8 +96,8 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
 def _resolve_extension_images(listing, request):
     """Ordered image URLs for the Chrome extension to re-upload to Facebook.
 
-    Prefer our own S3/CloudFront copy (small, already-resized WebP, CORS-friendly
-    and CDN-cached) for every photo that's finished processing, and fall back to
+    Prefer our own S3/CloudFront copy (FB-safe JPEG, CORS-friendly and
+    CDN-cached) for every photo that's finished processing, and fall back to
     the raw source URL routed through custom_domain_image_proxy only for photos
     still pending/failed, or for legacy rows with no image_slots yet.
 
@@ -103,16 +107,14 @@ def _resolve_extension_images(listing, request):
     originals from the dealer CDN at once per publish, saturating gunicorn
     workers — a subset timed out, the extension dropped those photos and tripped
     its PARTIAL_IMAGE_UPLOAD guard. Serving the pre-hosted CDN copy keeps the
-    proxy off the hot path for the common case.
+    proxy off the hot path for the common case and now also applies to Gumtree
+    listings so Facebook receives the S3 URL stored in the database.
 
     Gated by settings.EXTENSION_USE_HOSTED_IMAGES (default True) so the hosted
     path can be switched off via env alone — no deploy — reverting exactly to the
-    old proxy-everything behaviour if Facebook ever rejects the hosted WebP
+    old proxy-everything behaviour if Facebook ever rejects the hosted JPEG
     variant. The per-slot proxy fallback also means nothing breaks for photos
     that simply haven't been processed yet.
-
-    TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over all
-    of the above for Gumtree listings — see _gumtree_hosting_bypassed.
     """
     if _gumtree_hosting_bypassed(listing):
         return [
@@ -133,6 +135,8 @@ def _resolve_extension_images(listing, request):
         ]
 
     urls = []
+    s3_urls = []
+    fallback_urls = []
     for slot in slots:
         url = None
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
@@ -145,10 +149,18 @@ def _resolve_extension_images(listing, request):
             hosted = slot.hosted_image.upload_url()
             if hosted and hosted.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
                 url = hosted
+                s3_urls.append(url)
         if not url:
             url = _rewrite_proxy_url(slot.source_url, request)
+            fallback_urls.append(url)
         if url:
             urls.append(url)
+
+    if s3_urls:
+        logger.info(
+            "Extension images for listing %s: %s S3 URL(s), %s fallback URL(s). S3 URLs: %s",
+            listing.pk, len(s3_urls), len(fallback_urls), s3_urls,
+        )
     return urls
 
 
