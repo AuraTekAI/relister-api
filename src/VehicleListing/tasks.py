@@ -532,7 +532,16 @@ def profile_listings_for_approved_users(self, user_id):
             if not seller_id or not seller_id.isdigit():
                 logger.warning("Invalid seller ID extracted from Gumtree profile URL.")
                 results.append("Gumtree: Invalid seller ID")
-            elif GumtreeProfileListing.objects.filter(url=gumtree_profile_url, user=user_instance, profile_id=seller_id).exists():
+            elif GumtreeProfileListing.objects.filter(
+                url=gumtree_profile_url, user=user_instance, profile_id=seller_id
+            ).exclude(status="pending").exists():
+                # Excludes "pending" because the approval flow now creates a
+                # pending placeholder row synchronously (see
+                # gumtree_scraper.ensure_gumtree_profile_placeholder) so the
+                # extension's GET doesn't 404 while this task is still queued.
+                # Without the exclude, that placeholder would make this branch
+                # true on every run and get_gumtree_listings() would never
+                # actually fetch anything.
                 logger.info("Gumtree profile URL has already been processed for this user.")
                 results.append("Gumtree: already processed")
             else:

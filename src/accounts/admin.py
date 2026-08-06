@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from accounts.models import User
 from VehicleListing.tasks import profile_listings_for_approved_users
+from VehicleListing.gumtree_scraper import ensure_gumtree_profile_placeholder
 from VehicleListing.utils import send_user_approval_email
 
 
@@ -92,6 +93,11 @@ class UserAdmin(UserAdmin):
             
             # Check if is_approved changed from False to True
             if not was_approved and obj.is_approved:
+                # Create the Gumtree profile row synchronously before queuing the
+                # async fetch, so /gumtree-listings/ doesn't 404 the moment the
+                # extension queries it right after approval (see gumtree_scraper).
+                ensure_gumtree_profile_placeholder(obj)
+
                 # Trigger the Celery task
                 profile_listings_for_approved_users.delay(obj.id)
                 
@@ -123,6 +129,11 @@ class UserAdmin(UserAdmin):
             
             # If new user is created as approved, also trigger the task and send email
             if obj.is_approved:
+                # Create the Gumtree profile row synchronously before queuing the
+                # async fetch, so /gumtree-listings/ doesn't 404 the moment the
+                # extension queries it right after approval (see gumtree_scraper).
+                ensure_gumtree_profile_placeholder(obj)
+
                 profile_listings_for_approved_users.delay(obj.id)
                 email_sent = send_user_approval_email(obj)
                 

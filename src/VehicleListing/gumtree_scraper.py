@@ -55,6 +55,33 @@ def extract_seller_id(profile_url):
     seller_id = profile_url.split('/')[-1]
     return seller_id
 
+
+def ensure_gumtree_profile_placeholder(user):
+    """Synchronously create a status="pending" GumtreeProfileListing row for
+    user.gumtree_dealarship_url, if one doesn't already exist.
+
+    Call this at approval time, before profile_listings_for_approved_users.delay()
+    is queued. Without it, views.get_user_gumtree_profile_vehicle_listings 404s with
+    "Gumtree profile not found or does not belong to user" for every request that
+    lands before the Celery task finishes its two outbound ZenRows/Gumtree calls
+    (which is exactly what the extension does — it queries right after login/approval).
+    Creating the row up front closes that race: the row exists immediately, and
+    get_gumtree_listings() finds and updates it in place rather than creating a
+    duplicate.
+    """
+    profile_url = user.gumtree_dealarship_url
+    if not profile_url:
+        return None
+    seller_id = extract_seller_id(profile_url)
+    if not seller_id or not seller_id.isdigit():
+        return None
+    gumtree_profile_listing_instance, _ = GumtreeProfileListing.objects.get_or_create(
+        user=user,
+        profile_id=seller_id,
+        defaults={'url': profile_url, 'status': 'pending'},
+    )
+    return gumtree_profile_listing_instance
+
 def format_car_description(description):
     """
     Convert raw car description by replacing <br> tags with line breaks/spaces.

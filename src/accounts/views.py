@@ -27,6 +27,7 @@ from VehicleListing.utils import send_welcome_email, send_user_approval_email
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from VehicleListing.tasks import profile_listings_for_approved_users
+from VehicleListing.gumtree_scraper import ensure_gumtree_profile_placeholder
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
@@ -281,6 +282,10 @@ class UserListview(ModelViewSet):
             user=serializer.instance
             #proccess the approved user profile urls
             if user.is_approved and not user_approved:
+                # Create the Gumtree profile row synchronously before queuing the
+                # async fetch, so /gumtree-listings/ doesn't 404 the moment the
+                # extension queries it right after approval (see gumtree_scraper).
+                ensure_gumtree_profile_placeholder(user)
                 profile_listings_for_approved_users.delay(user.id)
                 send_user_approval_email(user)
 
