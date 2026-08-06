@@ -298,7 +298,15 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return getattr(obj.user, 'phone_number', None)
 
     def get_images(self, obj):
-        return _resolve_storefront_images(obj, 'large', self.context.get('request'), require_hosted=True)
+        # _resolve_storefront_images returns [{'url', 'is_hosted'}, ...]
+        # unwrap to plain URL strings to match ProductListSerializer.get_image()
+        # and the frontend's VehicleDetail.images: string[] contract (the
+        # frontend never reads is_hosted). Serving the raw dicts here made
+        # next/image receive an object as `src`, which it silently renders as
+        # an empty src attribute -- the "Image is missing required src
+        # property" / empty-string console errors on the vehicle detail page.
+        images = _resolve_storefront_images(obj, 'large', self.context.get('request'), require_hosted=True)
+        return [img['url'] for img in images]
 
 
 class DealerListSerializer(serializers.ModelSerializer):
