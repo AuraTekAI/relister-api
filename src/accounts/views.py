@@ -23,10 +23,10 @@ from accounts.serializers import (
 )
 from accounts.models import User, NotificationPreference, EmailVerificationToken
 from accounts.throttles import LoginRateThrottle, RegisterRateThrottle, PasswordResetRateThrottle
-from VehicleListing.utils import send_welcome_email, send_user_approval_email
+from VehicleListing.utils import send_welcome_email
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
-from VehicleListing.tasks import profile_listings_for_approved_users
+from VehicleListing.tasks import profile_listings_for_approved_users, send_user_approval_email_task
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
@@ -282,7 +282,14 @@ class UserListview(ModelViewSet):
             #proccess the approved user profile urls
             if user.is_approved and not user_approved:
                 profile_listings_for_approved_users.delay(user.id)
-                send_user_approval_email(user)
+                # Dispatched async (not called synchronously) — the underlying
+                # send_user_approval_email() makes a blocking HTTPS call to the
+                # Flashpost email API with up to a 15s timeout, which exceeds the
+                # admin webapp's 10s axios timeout. Calling it inline here meant
+                # this PATCH could time out client-side (with is_approved already
+                # committed to the DB) even though the request would have
+                # eventually succeeded server-side.
+                send_user_approval_email_task.delay(user.id)
 
             return Response({
                 'status': status.HTTP_200_OK,
