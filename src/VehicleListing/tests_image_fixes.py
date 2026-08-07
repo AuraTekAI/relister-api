@@ -565,9 +565,10 @@ class ExtensionImagePayloadTests(TestCase):
         for i in range(18):
             self._add_slot(i)
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
 
         self.assertEqual(len(urls), 18)
+        self.assertTrue(ready)
         self.assertEqual(len(set(urls)), 18, 'duplicate URLs in the extension payload')
         for url in urls:
             self.assertTrue(url.endswith('.jpg'), f'not a FB-accepted format: {url}')
@@ -579,9 +580,10 @@ class ExtensionImagePayloadTests(TestCase):
         self._add_slot(1, ready=False)
         self._add_slot(2, with_upload=False)  # hosted but pre-backfill: no JPEG yet
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
 
         self.assertEqual(len(urls), 3, 'a photo went missing from the payload')
+        self.assertFalse(ready, 'a pre-backfill photo with no JPEG variant should not count as ready')
         self.assertTrue(urls[0].endswith('.jpg'))
         self.assertIn('custom-domain-image', urls[1])
         self.assertIn('custom-domain-image', urls[2])
@@ -590,7 +592,7 @@ class ExtensionImagePayloadTests(TestCase):
     def test_ordering_follows_slot_position(self):
         for i in (2, 0, 1):
             self._add_slot(i)
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, _ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(urls, sorted(urls, key=lambda u: int(u.split('/')[-2])))
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=False)
@@ -599,18 +601,20 @@ class ExtensionImagePayloadTests(TestCase):
         self.listing.save(update_fields=['images'])
         self._add_slot(0)
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(len(urls), 1)
         self.assertIn('custom-domain-image', urls[0])
+        self.assertFalse(ready)
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=True)
     def test_legacy_listing_without_slots_is_unaffected(self):
         self.listing.images = ['https://storage.googleapis.com/au-assets/a.jpg']
         self.listing.save(update_fields=['images'])
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(len(urls), 1)
         self.assertIn('custom-domain-image', urls[0])
+        self.assertFalse(ready)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -942,7 +946,7 @@ class EasyVehiclesEndToEndTests(TestCase):
                     slot.status = VehicleListingImage.STATUS_READY
                     slot.save(update_fields=['hosted_image', 'status'])
 
-                payload = _resolve_extension_images(listing, request)
+                payload, _ready = _resolve_extension_images(listing, request)
 
                 self.assertEqual(len(payload), len(urls), 'photo count changed between scrape and publish')
                 self.assertEqual(len(set(payload)), len(payload), 'duplicate photo in the publish payload')
@@ -1061,9 +1065,10 @@ class ExtensionPayloadGumtreeUsesHostedJpegTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
             position=1, status=VehicleListingImage.STATUS_READY)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
         self.assertTrue(payload[0].endswith('vehicle-images/aa/99/upload.jpg'))
+        self.assertTrue(ready)
         self.assertEqual(payload[1], 'https://images.gumtree.com.au/b.jpg')
         self.assertTrue(any('upload.jpg' in u for u in payload))
 

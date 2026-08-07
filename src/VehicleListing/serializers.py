@@ -94,7 +94,8 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
 
 
 def _resolve_extension_images(listing, request):
-    """Ordered image URLs for the Chrome extension to re-upload to Facebook.
+    """Ordered image URLs for the Chrome extension to re-upload to Facebook,
+    plus whether every one of them is our own hosted S3 copy.
 
     Prefer our own S3/CloudFront copy (FB-safe JPEG, CORS-friendly and
     CDN-cached) for every photo that's finished processing, and fall back to
@@ -115,24 +116,32 @@ def _resolve_extension_images(listing, request):
     old proxy-everything behaviour if Facebook ever rejects the hosted JPEG
     variant. The per-slot proxy fallback also means nothing breaks for photos
     that simply haven't been processed yet.
+
+    Returns (urls, all_hosted). `all_hosted` is False whenever ANY image in the
+    list is still the raw/proxied fallback — callers (the extension's publish
+    guard) use this to hold off publishing until every photo has its S3 copy,
+    rather than sending Facebook a mix of S3 and Gumtree URLs.
     """
     if _gumtree_hosting_bypassed(listing):
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        return urls, False
     if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        return urls, False
 
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        return urls, False
 
     urls = []
     s3_urls = []
@@ -161,7 +170,7 @@ def _resolve_extension_images(listing, request):
             "Extension images for listing %s: %s S3 URL(s), %s fallback URL(s). S3 URLs: %s",
             listing.pk, len(s3_urls), len(fallback_urls), s3_urls,
         )
-    return urls
+    return urls, not fallback_urls
 
 
 # State-code → full-name mapping used when assembling a fallback `location`
@@ -183,6 +192,7 @@ _AU_STATE_FULL_NAMES = {
 class VehicleListingSerializer(serializers.ModelSerializer):
     relisting_dates = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    images_ready = serializers.SerializerMethodField()
     # Override the model field so custom-domain rows missing a per-listing
     # location can fall back to the dealer's saved suburb/state (auto-discovered
     # from their custom_domain_url at signup). Gumtree rows always carry their
@@ -231,7 +241,25 @@ class VehicleListingSerializer(serializers.ModelSerializer):
         # full-size original was proxied at publish time. See
         # _resolve_extension_images for the rationale + the env kill-switch.
         request = self.context.get('request')
-        return _resolve_extension_images(obj, request)
+        urls, ready = _resolve_extension_images(obj, request)
+        # Cached for get_images_ready below — `images` is declared first on this
+        # serializer so DRF always resolves it first, sparing a second identical
+        # image_slots query for the same listing in the common case. Falls back
+        # to recomputing itself if that ordering assumption ever changes.
+        obj._images_ready_cache = ready
+        return urls
+
+    def get_images_ready(self, obj):
+        """True only when every image in `images` above is our own S3-hosted
+        copy — i.e. nothing in that list is still the raw Gumtree/dealer URL.
+        The extension's publish guard waits on this instead of publishing a
+        listing whose photos haven't finished the S3 pipeline yet."""
+        cached = getattr(obj, '_images_ready_cache', None)
+        if cached is not None:
+            return cached
+        request = self.context.get('request')
+        _, ready = _resolve_extension_images(obj, request)
+        return ready
 class ListingUrlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListingUrl
