@@ -1069,7 +1069,7 @@ def get_user_gumtree_profile_vehicle_listings(request):
         gumtree_profile=gumtree_profile
     ).select_related('gumtree_profile').order_by('-updated_at')
 
-    serializer = VehicleListingSerializer(vehicle_listings, many=True)
+    serializer = VehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
     return JsonResponse({
         'count': vehicle_listings.count(),
         'gumtree_profile_url': gumtree_profile_url,

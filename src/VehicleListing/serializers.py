@@ -72,10 +72,13 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
 
 
 def _resolve_gumtree_hosted_only_images(listing):
-    """Gumtree's extension-facing image list: prefer our own S3-hosted FB-safe
-    JPEG for whichever photos have finished processing, and fall back to the
-    raw Gumtree URL for anything still pending/processing/failed, or for a
-    legacy/just-scraped listing with no image_slots yet at all.
+    """Gumtree's extension-facing image list, plus whether every one of those
+    URLs is our own hosted S3 copy.
+
+    Prefer our own S3-hosted FB-safe JPEG for whichever photos have finished
+    processing, and fall back to the raw Gumtree URL for anything still
+    pending/processing/failed, or for a legacy/just-scraped listing with no
+    image_slots yet at all.
 
     Gumtree's CDN is CORS-friendly (see any_needs_image_proxy), so the raw URL
     needs no proxying and is always safe to hand straight to the extension —
@@ -84,18 +87,25 @@ def _resolve_gumtree_hosted_only_images(listing):
     moment a listing is scraped, well before the async S3 hosting pipeline (or
     even the first sync_listing_images call) has run: showing nothing until
     every photo is S3-hosted made the home page display no images at all for
-    any listing with even one photo still processing. Facebook publishing is
-    unaffected by this fallback — it still gets the S3 copy for every photo
-    that's actually finished; only photos that aren't hosted yet use the raw
-    URL, exactly like every other resolver in this module already does."""
+    any listing with even one photo still processing.
+
+    Returns (urls, all_hosted). `all_hosted` is False whenever ANY url in the
+    list is still the raw Gumtree fallback rather than our S3 copy — the
+    extension's publish guard (GUARD 1d in publishListing.ts) checks this and
+    refuses to publish until it's True, so Facebook only ever receives these
+    URLs once every one of them is confirmed S3-hosted; the raw fallback above
+    only ever reaches *display*, never a Facebook upload."""
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
         # Legacy/just-scraped listing with no slots yet at all — show the raw
         # Gumtree URLs immediately; sync_listing_images creates and processes
-        # slots in the background without blocking display.
-        return [url for url in (listing.images or []) if url]
+        # slots in the background without blocking display. Nothing is hosted
+        # yet, so this is never publish-ready.
+        urls = [url for url in (listing.images or []) if url]
+        return urls, False
 
     urls = []
+    all_hosted = True
     for slot in slots:
         url = None
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
@@ -104,13 +114,15 @@ def _resolve_gumtree_hosted_only_images(listing):
                 url = hosted
         if not url:
             url = slot.source_url
+            all_hosted = False
         if url:
             urls.append(url)
-    return urls
+    return urls, all_hosted
 
 
 def _resolve_extension_images(listing, request):
-    """Ordered image URLs for the Chrome extension to re-upload to Facebook.
+    """Ordered image URLs for the Chrome extension to re-upload to Facebook,
+    plus whether every one of them is our own hosted S3 copy.
 
     Gumtree listings are routed to _resolve_gumtree_hosted_only_images (see
     its docstring) — S3 is preferred per-photo the moment it's hosted, with
@@ -121,7 +133,7 @@ def _resolve_extension_images(listing, request):
     processing, and fall back to the raw source URL (routed through
     custom_domain_image_proxy only for hosts that need it) for photos still
     pending/failed, or for legacy rows with no image_slots yet — the per-slot
-    fallback is what keeps publishing safe (never blocked) for anything that
+    fallback is what keeps *display* safe (never blank) for anything that
     hasn't finished hosting yet.
 
     Why this exists: the previous behaviour proxied EVERY full-size original on
@@ -135,7 +147,14 @@ def _resolve_extension_images(listing, request):
     Custom-domain's rollout of this is gated by settings.EXTENSION_USE_HOSTED_IMAGES
     (staged: default False until the migration + backfill_upload_variants have
     run, then flipped True via env alone — no deploy) so it can be switched off
-    instantly if Facebook ever rejects the hosted JPEG variant."""
+    instantly if Facebook ever rejects the hosted JPEG variant.
+
+    Returns (urls, all_hosted). `all_hosted` is False whenever ANY url in the
+    list is still the raw/proxied fallback rather than our S3 copy. The
+    extension's publish guard waits on this instead of calling Facebook with a
+    fallback URL — see the sibling Gumtree resolver's docstring for why this
+    matters: display must never block on hosting finishing, but a Facebook
+    upload must never use anything but our own S3 copy."""
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
@@ -143,19 +162,22 @@ def _resolve_extension_images(listing, request):
         return _resolve_gumtree_hosted_only_images(listing)
 
     if not getattr(settings, 'EXTENSION_USE_HOSTED_IMAGES', True):
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        return urls, False
 
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        return urls, False
 
     urls = []
+    all_hosted = True
     for slot in slots:
         url = None
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
@@ -170,9 +192,10 @@ def _resolve_extension_images(listing, request):
                 url = hosted
         if not url:
             url = _rewrite_proxy_url(slot.source_url, request)
+            all_hosted = False
         if url:
             urls.append(url)
-    return urls
+    return urls, all_hosted
 
 
 # State-code → full-name mapping used when assembling a fallback `location`
@@ -194,6 +217,7 @@ _AU_STATE_FULL_NAMES = {
 class VehicleListingSerializer(serializers.ModelSerializer):
     relisting_dates = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
+    images_ready = serializers.SerializerMethodField()
     # Override the model field so custom-domain rows missing a per-listing
     # location can fall back to the dealer's saved suburb/state (auto-discovered
     # from their custom_domain_url at signup). Gumtree rows always carry their
@@ -242,7 +266,29 @@ class VehicleListingSerializer(serializers.ModelSerializer):
         # full-size original was proxied at publish time. See
         # _resolve_extension_images for the rationale + the env kill-switch.
         request = self.context.get('request')
-        return _resolve_extension_images(obj, request)
+        urls, ready = _resolve_extension_images(obj, request)
+        # Cached for get_images_ready below — `images` is declared first on
+        # this serializer so DRF always resolves it first, sparing a second
+        # identical image_slots query for the same listing in the common case.
+        # get_images_ready recomputes from scratch if that ordering assumption
+        # ever changes, so it's correct either way.
+        obj._images_ready_cache = ready
+        return urls
+
+    def get_images_ready(self, obj):
+        """True only when every URL in `images` above is our own S3-hosted
+        copy — nothing in that list is still the raw Gumtree/dealer fallback.
+        This is what the extension's publish guard (publishListing.ts GUARD 1d)
+        waits on: it refuses to call Facebook until this is True, so a photo
+        that hasn't finished the S3 pipeline yet is never uploaded as a raw
+        Gumtree/dealer URL — only ever shown on the extension's home page via
+        the `images` fallback above, never sent to Facebook."""
+        cached = getattr(obj, '_images_ready_cache', None)
+        if cached is not None:
+            return cached
+        request = self.context.get('request')
+        _, ready = _resolve_extension_images(obj, request)
+        return ready
 class ListingUrlSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListingUrl
