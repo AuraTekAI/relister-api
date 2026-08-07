@@ -72,44 +72,40 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
 
 
 def _resolve_gumtree_hosted_only_images(listing):
-    """Gumtree's extension-facing image list: ONLY our own S3-hosted FB-safe
-    JPEG is ever returned — the raw Gumtree URL is never sent to the extension,
-    at any point, for any reason. This is a deliberate reversal of the
-    never-block-publish fallback every other path in this module uses.
+    """Gumtree's extension-facing image list: prefer our own S3-hosted FB-safe
+    JPEG for whichever photos have finished processing, and fall back to the
+    raw Gumtree URL for anything still pending/processing/failed, or for a
+    legacy/just-scraped listing with no image_slots yet at all.
 
-    Because hosting happens asynchronously (Celery, after the scrape), a
-    listing whose photos haven't all finished settling yet (still
-    pending/processing) is withheld ENTIRELY (empty list) rather than
-    publishing early with a partial set — the extension's own GUARD 2 (minimum
-    2 images) and the UnpublishedListingSnapshot 'INSUFFICIENT_IMAGES' reporting
-    already handle an empty/short list gracefully, so this listing simply waits
-    for its next sync once every slot has resolved one way or another.
-
-    A photo whose slot is status=Failed is dropped forever rather than
-    blocking the rest of the listing — Failed is only ever set after every
-    retry is exhausted (see tasks.process_vehicle_listing_image_task), so it's
-    already a terminal, not transient, state; there is nothing left to wait
-    for on that specific photo."""
+    Gumtree's CDN is CORS-friendly (see any_needs_image_proxy), so the raw URL
+    needs no proxying and is always safe to hand straight to the extension —
+    that's what lets this fall back per-photo instead of withholding the whole
+    listing. This is what the extension's home page reads to show images the
+    moment a listing is scraped, well before the async S3 hosting pipeline (or
+    even the first sync_listing_images call) has run: showing nothing until
+    every photo is S3-hosted made the home page display no images at all for
+    any listing with even one photo still processing. Facebook publishing is
+    unaffected by this fallback — it still gets the S3 copy for every photo
+    that's actually finished; only photos that aren't hosted yet use the raw
+    URL, exactly like every other resolver in this module already does."""
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
-        # Legacy/just-scraped listing with no slots yet at all — nothing hosted
-        # to publish; wait for sync_listing_images to create and process them.
-        return []
-
-    still_settling = any(
-        slot.status in (VehicleListingImage.STATUS_PENDING, VehicleListingImage.STATUS_PROCESSING)
-        for slot in slots
-    )
-    if still_settling:
-        return []
+        # Legacy/just-scraped listing with no slots yet at all — show the raw
+        # Gumtree URLs immediately; sync_listing_images creates and processes
+        # slots in the background without blocking display.
+        return [url for url in (listing.images or []) if url]
 
     urls = []
     for slot in slots:
+        url = None
         if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
             hosted = slot.hosted_image.upload_url()
             if hosted and hosted.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
-                urls.append(hosted)
-        # Anything else (Failed) is simply dropped — no raw-URL fallback, ever.
+                url = hosted
+        if not url:
+            url = slot.source_url
+        if url:
+            urls.append(url)
     return urls
 
 
@@ -117,7 +113,8 @@ def _resolve_extension_images(listing, request):
     """Ordered image URLs for the Chrome extension to re-upload to Facebook.
 
     Gumtree listings are routed to _resolve_gumtree_hosted_only_images (see
-    its docstring) — raw Gumtree URLs are never sent to Facebook.
+    its docstring) — S3 is preferred per-photo the moment it's hosted, with
+    the raw Gumtree URL as the fallback for anything not hosted yet.
 
     For every other source (custom-domain), prefer our own S3/CloudFront copy
     (the FB-safe JPEG upload variant) for every photo that's finished
