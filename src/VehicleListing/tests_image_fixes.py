@@ -1068,7 +1068,9 @@ class ExtensionPayloadGumtreeUsesHostedJpegTests(TestCase):
         payload, ready = _resolve_extension_images(listing, self.request)
 
         self.assertTrue(payload[0].endswith('vehicle-images/aa/99/upload.jpg'))
-        self.assertTrue(ready)
+        # The second slot has no hosted_image yet, so this listing is a mix of
+        # S3 + raw fallback — not fully ready.
+        self.assertFalse(ready)
         self.assertEqual(payload[1], 'https://images.gumtree.com.au/b.jpg')
         self.assertTrue(any('upload.jpg' in u for u in payload))
 
