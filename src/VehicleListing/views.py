@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -2211,6 +2211,158 @@ def _parse_dt(value):
         return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
     except (ValueError, TypeError, OSError):
         return None
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def facebook_verification_status(request):
+    """
+    Report Facebook verification wall detection/clearance to backend.
+    Called by the extension when a verification wall is hit or cleared.
+
+    Request Body:
+    {
+      "status": "detected" | "cleared",
+      "wall_type": "checkpoint" | "confirm" | "disabled" | "id_verify" | null,
+      "reason": "Optional reason for eligibility-based blocks",
+      "detected_at": ISO-8601 timestamp
+    }
+
+    Returns: { "success": true, "event_id": ... }
+    """
+    user = request.user
+    try:
+        data = json.loads(request.body or b'{}')
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'Invalid JSON body'}, status=400)
+
+    status = data.get('status')
+    if status not in ('detected', 'cleared'):
+        return JsonResponse(
+            {'success': False, 'error': 'Invalid status; must be "detected" or "cleared"'},
+            status=400
+        )
+
+    wall_type = data.get('wall_type')
+    valid_wall_types = {c[0] for c in [
+        ('checkpoint', 'Checkpoint'),
+        ('confirm', 'Email/Phone confirmation'),
+        ('disabled', 'Account disabled/restricted'),
+        ('id_verify', 'Identity verification'),
+        ('unknown', 'Unknown wall type'),
+    ]}
+    wall_type = wall_type if wall_type in valid_wall_types else (None if status == 'cleared' else 'unknown')
+
+    reason = data.get('reason')
+    detected_at_raw = data.get('detected_at')
+    detected_at = _parse_dt(detected_at_raw) or timezone.now()
+
+    # Log the event
+    event = FBVerificationEvent.objects.create(
+        user=user,
+        status=status,
+        wall_type=wall_type,
+        reason=reason,
+        detected_at=detected_at,
+    )
+
+    # Update the ExtensionSyncStatus to reflect current state
+    ext_status, created = ExtensionSyncStatus.objects.get_or_create(user=user)
+    if status == 'detected':
+        ext_status.status = 'verification_required'
+        ext_status.status_detail = f"{wall_type or 'unknown'} wall detected at {detected_at.isoformat()}"
+    else:  # cleared
+        ext_status.status = 'ok'
+        ext_status.status_detail = None
+    ext_status.save()
+
+    logger.info(
+        'fb-verification %s user=%s wall_type=%s reason=%s',
+        status, getattr(user, 'email', user), wall_type, reason
+    )
+
+    return JsonResponse({
+        'success': True,
+        'event_id': event.id,
+        'status': status,
+        'ext_sync_status': ext_status.status,
+    }, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def list_facebook_verification_blocked_dealers(request):
+    """
+    ADMIN ONLY — List dealers currently blocked by Facebook verification.
+    Filters ExtensionSyncStatus by status='verification_required'.
+
+    Query params (all optional):
+      - page:        1-based page (default 1)
+      - page_size:   per page (default 10, max 100)
+      - user_id:     restrict to one dealer
+      - include_history: include recent verification events (default false)
+    """
+    # Get currently blocked dealers from ExtensionSyncStatus
+    blocked = ExtensionSyncStatus.objects.filter(
+        status='verification_required'
+    ).select_related('user')
+
+    # Optional filter
+    user_id = request.GET.get('user_id')
+    if user_id:
+        try:
+            user_id = int(user_id)
+            blocked = blocked.filter(user_id=user_id)
+        except (ValueError, TypeError):
+            pass
+
+    # Pagination
+    try:
+        page = int(request.GET.get('page', 1))
+        page_size = min(int(request.GET.get('page_size', 10)), 100)
+    except (ValueError, TypeError):
+        page, page_size = 1, 10
+
+    total = blocked.count()
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_items = blocked[start:end]
+
+    # Build response
+    dealers = []
+    for item in page_items:
+        dealer_dict = {
+            'user_id': item.user_id,
+            'email': item.user.email if item.user else 'unknown',
+            'status': item.status,
+            'status_detail': item.status_detail,
+            'synced_at': item.synced_at.isoformat() if item.synced_at else None,
+            'extension_version': item.extension_version,
+        }
+
+        # Optional: include recent verification events
+        if request.GET.get('include_history') in ('1', 'true', 'True'):
+            events = FBVerificationEvent.objects.filter(user_id=item.user_id).order_by('-created_at')[:5]
+            dealer_dict['recent_events'] = [
+                {
+                    'status': e.status,
+                    'wall_type': e.wall_type,
+                    'reason': e.reason,
+                    'detected_at': e.detected_at.isoformat(),
+                    'created_at': e.created_at.isoformat(),
+                }
+                for e in events
+            ]
+
+        dealers.append(dealer_dict)
+
+    return JsonResponse({
+        'success': True,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'dealers': dealers,
+    }, status=200)
 
 
 @api_view(['POST'])

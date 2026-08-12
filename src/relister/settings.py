@@ -443,6 +443,25 @@ VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', def
 # EXTENSION_USE_HOSTED_IMAGES=True in the env (no code deploy needed) to turn the
 # fix on. Flip back to False to instantly revert to the old proxy-everything path.
 EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
+
+# ── TEMPORARY: bypass the S3 hosted-image pipeline for Gumtree listings ────
+# For testing, Gumtree-sourced listings skip HostedImage/VehicleListingImage
+# ingestion entirely: no download/convert/upload Celery work runs for new
+# Gumtree scrapes, and every read path (extension publish payload + public
+# storefront) serves the original scraped Gumtree URL straight through
+# instead of a HostedImage/S3 copy — including for listings that already have
+# hosted rows from before this flag was flipped on.
+#
+# Custom-domain dealer listings are untouched by this flag; they keep using
+# the hosted pipeline exactly as before (their images still need CORS
+# proxying/hosting that Gumtree's own CDN doesn't require).
+#
+# This does NOT delete or disable the HostedImage/VehicleListingImage models,
+# the image_pipeline module, or its Celery tasks — it only short-circuits the
+# call sites that invoke them for Gumtree. Set BYPASS_GUMTREE_IMAGE_HOSTING=False
+# in the env (no code changes needed) to fully restore the S3-backed pipeline
+# for Gumtree.
+BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=True)
 # When True, the EasyVehicles adapter checks each gallery photo while parsing
 # and, for any full-size URL that isn't serving, stores the slide's displayed
 # (640x480) rendition instead.
