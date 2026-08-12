@@ -1300,19 +1300,15 @@ def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
     slot.status = VehicleListingImage.STATUS_PROCESSING
     slot.save(update_fields=['status', 'updated_at'])
 
-    # Only custom-domain listings serve the FB-safe JPEG upload variant; Gumtree
-    # images never use it, so don't spend the extra encode + S3 write on them.
-    listing = slot.listing
-    listing_is_gumtree = bool(
-        getattr(listing, 'gumtree_profile_id', None) or getattr(listing, 'gumtree_url_id', None)
-    )
-
     try:
         image_bytes = download_image_bytes(slot.source_url, timeout=settings.VEHICLE_IMAGE_DOWNLOAD_TIMEOUT)
         content_hash = content_hash_for(image_bytes)
+        # Every listing source (Gumtree included) now publishes to Facebook from
+        # our own hosted copy — see _resolve_extension_images — so every photo
+        # needs the FB-safe JPEG upload variant, not just custom-domain ones.
         hosted_image, uploaded = get_or_create_ready_hosted_image(
             content_hash, slot.source_url, image_bytes,
-            build_upload_variant=not listing_is_gumtree,
+            build_upload_variant=True,
         )
     except (RequestException, BotoCoreError, ClientError) as exc:
         # Only mark FAILED on the last attempt — autoretry_for below will keep
