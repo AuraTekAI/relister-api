@@ -278,6 +278,54 @@ class ExtensionSyncStatus(models.Model):
         return f"{self.user_id} {self.status} @ {self.synced_at:%Y-%m-%d %H:%M}"
 
 
+class FBVerificationEvent(models.Model):
+    """
+    Audit trail of Facebook verification wall detections and clearances.
+
+    When the extension detects that Facebook is requiring account verification,
+    it immediately POSTs to the backend, creating a 'detected' event. When
+    verification is cleared (by successful publish or user action), a 'cleared'
+    event is recorded. This enables:
+    - Admin visibility: "which dealers are blocked and for how long?"
+    - Metrics: "how often do verification walls appear?"
+    - Audit trail: when and why was each dealer blocked/unblocked
+
+    The companion ExtensionSyncStatus.status='verification_required' is the
+    real-time state; this model is the event log.
+    """
+    STATUS_CHOICES = [
+        ('detected', 'Verification wall detected'),
+        ('cleared', 'Verification wall cleared'),
+    ]
+    WALL_TYPE_CHOICES = [
+        ('checkpoint', 'Checkpoint'),
+        ('confirm', 'Email/Phone confirmation'),
+        ('disabled', 'Account disabled/restricted'),
+        ('id_verify', 'Identity verification'),
+        ('unknown', 'Unknown wall type'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fb_verification_events')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    wall_type = models.CharField(max_length=40, choices=WALL_TYPE_CHOICES, null=True, blank=True)
+    # Free-text reason from the extension (e.g. for eligibility-based blocks that aren't wall detections)
+    reason = models.CharField(max_length=255, null=True, blank=True)
+    # Timestamp when the wall was detected (set by extension)
+    detected_at = models.DateTimeField()
+    # Backend-side timestamp
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'status', 'created_at']),
+            models.Index(fields=['status', 'created_at']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user_id} {self.status} ({self.wall_type}) @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
 class Invoice(models.Model):
     STATUS_CHOICES = [
         ('paid', 'Paid'),
