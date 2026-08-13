@@ -35,3 +35,5 @@ uvicorn[standard]==0.30.6
 redis==5.0.8
 # Web Push (VAPID) sending
 pywebpush==2.0.0
+# WebP encode/decode + resize for the vehicle image hosting pipeline
+Pillow==10.4.0

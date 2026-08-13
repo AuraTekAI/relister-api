@@ -394,6 +394,91 @@ AWS_S3_ZIP_PREFIX = env('AWS_S3_ZIP_PREFIX', default='zip-files/')
 AWS_S3_PRESIGNED_URL_EXPIRY = env.int('AWS_S3_PRESIGNED_URL_EXPIRY', default=3600)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Vehicle image hosting pipeline (VehicleListing.image_pipeline) ─────────
+# Its own bucket/credentials, each defaulting to the shared AWS settings above
+# so nothing changes for a deployment that doesn't set them.
+#
+# These exist because the pipeline originally read AWS_STORAGE_BUCKET_NAME
+# directly — the same variable zip_manager serves the browser-extension zips
+# from. Pointing that at an image bucket would have made every extension
+# download 404, so the two subsystems get independent config instead of being
+# separated only by an S3 prefix.
+AWS_VEHICLE_IMAGE_BUCKET = env('AWS_VEHICLE_IMAGE_BUCKET', default=AWS_STORAGE_BUCKET_NAME)
+AWS_VEHICLE_IMAGE_ACCESS_KEY_ID = env('AWS_VEHICLE_IMAGE_ACCESS_KEY_ID', default=AWS_ACCESS_KEY_ID)
+AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY = env('AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY', default=AWS_SECRET_ACCESS_KEY)
+AWS_VEHICLE_IMAGE_REGION = env('AWS_VEHICLE_IMAGE_REGION', default=AWS_S3_REGION_NAME)
+AWS_S3_VEHICLE_IMAGE_PREFIX = env('AWS_S3_VEHICLE_IMAGE_PREFIX', default='vehicle-images/')
+# CloudFront distribution domain fronting the bucket (e.g. d123abc.cloudfront.net
+# or a custom domain like images.autorelister.com.au). Left blank in dev to fall
+# back to a direct virtual-hosted S3 URL; set in production.
+AWS_CLOUDFRONT_DOMAIN = env('AWS_CLOUDFRONT_DOMAIN', default='')
+# Max width in px for each generated WebP variant. Keys must stay exactly
+# 'thumbnail'/'medium'/'large' — image_pipeline.get_or_create_ready_hosted_image
+# indexes the render result by these names.
+VEHICLE_IMAGE_SIZES = {'thumbnail': 320, 'medium': 800, 'large': 1600}
+VEHICLE_IMAGE_WEBP_QUALITY = env.int('VEHICLE_IMAGE_WEBP_QUALITY', default=82)
+# Quality for the FB-safe JPEG upload variant the extension re-uploads to
+# Facebook Marketplace (WebP is rejected there). Slightly higher than the WebP
+# quality since JPEG is less efficient at the same perceptual quality.
+VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY = env.int('VEHICLE_IMAGE_UPLOAD_JPEG_QUALITY', default=85)
+# mode=auto (see image_pipeline.download_image_bytes) can escalate a blocked
+# request to premium/residential proxies or JS rendering server-side before
+# answering, which takes longer than a plain proxied fetch — 20s was tuned for
+# the latter and was at risk of timing out an escalated request.
+VEHICLE_IMAGE_DOWNLOAD_TIMEOUT = env.int('VEHICLE_IMAGE_DOWNLOAD_TIMEOUT', default=35)
+# Celery per-task rate limit for process_vehicle_listing_image_task — throttles
+# how fast we hit Gumtree/dealer sites for image downloads regardless of how
+# many listings get scraped at once.
+VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', default='60/m')
+# When True, the Chrome extension's publish payload serves our own
+# S3/CloudFront-hosted copy of each processed photo instead of proxying the
+# full-size dealer original through custom_domain_image_proxy — this keeps the
+# worker-pinning proxy off the publish hot path and fixes PARTIAL_IMAGE_UPLOAD
+# drops for custom-domain dealers.
+#
+# The pipeline now stores an FB-safe JPEG upload variant (HostedImage.upload_image)
+# that _resolve_extension_images serves; images without it yet fall back to the
+# proxy automatically. DEFAULT FALSE for a controlled rollout: apply the
+# migration and run `manage.py backfill_upload_variants` first, then set
+# EXTENSION_USE_HOSTED_IMAGES=True in the env (no code deploy needed) to turn the
+# fix on. Flip back to False to instantly revert to the old proxy-everything path.
+EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
+
+# ── TEMPORARY: bypass the S3 hosted-image pipeline for Gumtree listings ────
+# For testing, Gumtree-sourced listings skip HostedImage/VehicleListingImage
+# ingestion entirely: no download/convert/upload Celery work runs for new
+# Gumtree scrapes, and every read path (extension publish payload + public
+# storefront) serves the original scraped Gumtree URL straight through
+# instead of a HostedImage/S3 copy — including for listings that already have
+# hosted rows from before this flag was flipped on.
+#
+# Custom-domain dealer listings are untouched by this flag; they keep using
+# the hosted pipeline exactly as before (their images still need CORS
+# proxying/hosting that Gumtree's own CDN doesn't require).
+#
+# This does NOT delete or disable the HostedImage/VehicleListingImage models,
+# the image_pipeline module, or its Celery tasks — it only short-circuits the
+# call sites that invoke them for Gumtree. Set BYPASS_GUMTREE_IMAGE_HOSTING=False
+# in the env (no code changes needed) to fully restore the S3-backed pipeline
+# for Gumtree.
+BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=False)
+# When True, the EasyVehicles adapter checks each gallery photo while parsing
+# and, for any full-size URL that isn't serving, stores the slide's displayed
+# (640x480) rendition instead.
+#
+# On by default because the dealer's full-size bucket is unreliable in a way
+# that stops listings publishing at all: measured 2026-07-29, 5 of 23 full-size
+# photos serving on one listing, 7 of 20 and 8 of 17 on others — while the
+# displayed rendition was 20 of 20 and 17 of 17 on those same pages. Below 15
+# fetchable photos the extension aborts the publish outright, so a lower-
+# resolution photo is strictly better than no listing.
+#
+# The cost is one request per photo at parse time (~1.4s each against this
+# dealer's CDN). Set False to skip the check and store whatever the page lists,
+# accepting that some listings will not publish.
+EASYVEHICLES_VERIFY_IMAGE_URLS = env.bool('EASYVEHICLES_VERIFY_IMAGE_URLS', default=True)
+# ─────────────────────────────────────────────────────────────────────────────
+
 EMAIL_BACKEND = 'relister.email_backend.FlashpostEmailBackend'
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='hello@autorelister.com.au')
 FLASHPOST_API_URL = env('FLASHPOST_API_URL')

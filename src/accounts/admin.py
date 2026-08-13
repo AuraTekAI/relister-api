@@ -1,8 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from accounts.models import User
-from VehicleListing.tasks import profile_listings_for_approved_users
-from VehicleListing.utils import send_user_approval_email
+from VehicleListing.tasks import profile_listings_for_approved_users, send_user_approval_email_task
 
 
 class UserAdmin(UserAdmin):
@@ -94,29 +93,26 @@ class UserAdmin(UserAdmin):
             if not was_approved and obj.is_approved:
                 # Trigger the Celery task
                 profile_listings_for_approved_users.delay(obj.id)
-                
-                # Send approval email
-                email_sent = send_user_approval_email(obj)
-                
+
+                # Send approval email asynchronously — dispatched via Celery
+                # rather than called inline, since send_user_approval_email()
+                # makes a blocking HTTPS call to the Flashpost API (up to a 15s
+                # timeout) that would otherwise hold this admin page's request
+                # open for the same duration. See send_user_approval_email_task
+                # for the full rationale.
+                send_user_approval_email_task.delay(obj.id)
+
                 # Add success messages
                 self.message_user(
                     request,
                     f"User '{obj.email}' has been approved. Profile listings task has been triggered.",
                     level='SUCCESS'
                 )
-                
-                if email_sent:
-                    self.message_user(
-                        request,
-                        f"Approval email sent to '{obj.email}'.",
-                        level='SUCCESS'
-                    )
-                else:
-                    self.message_user(
-                        request,
-                        f"Warning: Failed to send approval email to '{obj.email}'. Please check logs.",
-                        level='WARNING'
-                    )
+                self.message_user(
+                    request,
+                    f"Approval email to '{obj.email}' has been queued.",
+                    level='SUCCESS'
+                )
         else:
             # For new users, just save normally
             super().save_model(request, obj, form, change)
@@ -124,20 +120,18 @@ class UserAdmin(UserAdmin):
             # If new user is created as approved, also trigger the task and send email
             if obj.is_approved:
                 profile_listings_for_approved_users.delay(obj.id)
-                email_sent = send_user_approval_email(obj)
-                
+                send_user_approval_email_task.delay(obj.id)
+
                 self.message_user(
                     request,
                     f"User '{obj.email}' created as approved. Profile listings task has been triggered.",
                     level='SUCCESS'
                 )
-                
-                if email_sent:
-                    self.message_user(
-                        request,
-                        f"Approval email sent to '{obj.email}'.",
-                        level='SUCCESS'
-                    )
+                self.message_user(
+                    request,
+                    f"Approval email to '{obj.email}' has been queued.",
+                    level='SUCCESS'
+                )
 
 
 admin.site.register(User, UserAdmin)

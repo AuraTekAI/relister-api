@@ -245,6 +245,36 @@ services:
     networks:
       - internal_network
 
+  # Consumer for `image_ingest_queue` (VehicleListing.tasks
+  # process_vehicle_listing_image_task / gc_hosted_image_task). Those tasks were
+  # added with a new queue but no worker to drain it, so every scraped photo
+  # enqueued a message nothing would ever run — the hosting pipeline silently
+  # did nothing while Redis accumulated tens of thousands of tasks.
+  #
+  # Kept as its own container rather than folded into an existing worker so a
+  # burst of image downloads can't starve scraping/relisting, matching the
+  # queue separation the task itself documents. Concurrency 2 because the work
+  # is download-then-WebP-encode (IO bound with a CPU tail); the real throttle
+  # is the task's own VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT.
+  celery-worker-image:
+    container_name: celery-worker-image
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./docker/beat/Dockerfile
+    volumes:
+      - .:/app
+    env_file:
+      - ./src/.env
+    working_dir: /app/src
+    depends_on:
+      - redis
+      - web
+    command: >
+      sh -c "celery -A relister worker --loglevel=info --hostname=image@%h -Q image_ingest_queue -E --concurrency=2"
+    networks:
+      - internal_network
+
 volumes:
   local-db-data:
 

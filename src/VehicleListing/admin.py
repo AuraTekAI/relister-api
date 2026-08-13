@@ -1,8 +1,8 @@
 from django.contrib import admin
 
 # Register your models here
-from .models import VehicleListing, ListingUrl, Vehicle, VehicleImage
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus
+from .models import VehicleListing, ListingUrl, Vehicle, VehicleImage, HostedImage, VehicleListingImage
+from .models import FacebookListing, FacebookUserCredentials, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, CustomDomainProfileListing, FacebookListingSnapshot, UnpublishedListingSnapshot, ExtensionSyncStatus
 from .utils import reactivate_listing, withdraw_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
@@ -125,3 +125,21 @@ class ExtensionSyncStatusAdmin(admin.ModelAdmin):
     list_filter = ('status', 'mode')
 
 admin.site.register(ExtensionSyncStatus, ExtensionSyncStatusAdmin)
+
+
+class HostedImageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'content_hash', 'status', 'width', 'height', 'file_size_bytes', 'created_at')
+    search_fields = ('content_hash', 'source_url')
+    list_filter = ('status',)
+    readonly_fields = ('content_hash', 'thumbnail_image', 'medium_image', 'large_image', 'created_at', 'updated_at')
+
+admin.site.register(HostedImage, HostedImageAdmin)
+
+
+class VehicleListingImageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'listing_id', 'position', 'status', 'retry_count', 'hosted_image', 'created_at', 'updated_at')
+    search_fields = ('listing__id', 'source_url')
+    list_filter = ('status',)
+    raw_id_fields = ('listing', 'hosted_image')
+
+admin.site.register(VehicleListingImage, VehicleListingImageAdmin)

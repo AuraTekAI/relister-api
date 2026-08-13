@@ -1,7 +1,7 @@
 from relister.celery import CustomExceptionHandler
 from celery import shared_task
 # from VehicleListing.facebook_listing import create_marketplace_listing,verify_facebook_listing_images_upload, perform_search_and_extract_listings, find_and_delete_duplicate_listing_sync, search_facebook_listing_sync, search_facebook_listing_sync, find_and_delete_duplicate_listing_sync
-from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, CustomDomainProfileListing
+from VehicleListing.models import VehicleListing, GumtreeProfileListing, FacebookProfileListing, RelistingFacebooklisting, Invoice, CustomDomainProfileListing, VehicleListingImage, HostedImage
 # FacebookUserCredentials import commented out — Facebook automation disabled
 # from .models import FacebookUserCredentials
 from datetime import timedelta
@@ -16,14 +16,23 @@ from VehicleListing.custom_domain_adapters import resolve_for_url
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import _clean_log_file
+from .utils import _clean_log_file, send_user_approval_email
 # from .utils import update_credentials_success, handle_retry_or_disable_credentials, create_or_update_relisting_entry, handle_failed_relisting, should_create_listing, should_check_images_upload_status_time, send_missing_listing_notification, send_status_reminder_email
 from django.conf import settings
+from requests.exceptions import RequestException
+from botocore.exceptions import BotoCoreError, ClientError
+from .image_pipeline import (
+    download_image_bytes,
+    content_hash_for,
+    get_or_create_ready_hosted_image,
+    delete_variants_from_s3,
+)
 import time
 import random
 import logging
 import os
 logger = logging.getLogger('facebook_listing_cronjob')
+image_logger = logging.getLogger('vehicle_image_pipeline')
 
 # @shared_task(bind=True, base=CustomExceptionHandler, queue='scheduling_queue')
 # def create_pending_facebook_marketplace_listing_task(self):
@@ -504,6 +513,30 @@ def check_custom_domain_profile_relisting_task(self):
 #                     credentials.save()
 #                     send_status_reminder_email(credentials)
 #                 logger.error("No facebook credentials found")
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def send_user_approval_email_task(self, user_id):
+    """Send the "you're approved" email off the request thread.
+
+    Previously accounts/views.py (UserListview.update) and accounts/admin.py
+    called send_user_approval_email(user) synchronously, right on the PATCH
+    /api/users/<id>/ request that flips is_approved False->True. That
+    function's email.send() goes through relister.email_backend's
+    FlashpostEmailBackend, which makes a blocking HTTPS call to the Flashpost
+    API with up to a 15s timeout (email_backend.py REQUEST_TIMEOUT) — longer
+    than the admin webapp's 10s axios timeout. Any slowness on that call (cold
+    connection, provider latency) made the client abort with an empty-response
+    timeout error even though is_approved=True had already been committed to
+    the DB moments earlier in the same request. A second click then "worked"
+    only because the already-approved user no longer re-enters this branch.
+    Routing the send through Celery (matching profile_listings_for_approved_users
+    below) removes it from the request/response cycle entirely.
+    """
+    user_instance = User.objects.filter(id=user_id).first()
+    if not user_instance:
+        return "No user found for the given ID while sending approval email."
+    send_user_approval_email(user_instance)
+
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 def profile_listings_for_approved_users(self, user_id):
@@ -1235,3 +1268,106 @@ def check_trial_expiry_task():
         f"4d warnings: {users_4.count()}, "
         f"Expired: {expired_users.count()}"
     )
+
+
+@shared_task(
+    bind=True,
+    base=CustomExceptionHandler,
+    queue='image_ingest_queue',
+    rate_limit=settings.VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT,
+    autoretry_for=(RequestException, BotoCoreError, ClientError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+)
+def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
+    """
+    Download one scraped photo, dedupe/convert/upload it via image_pipeline,
+    and link the VehicleListingImage slot to the resulting HostedImage.
+    Rate-limited and queued separately (image_ingest_queue) from the scraping
+    /relisting queues so a burst of new listings can't hammer Gumtree/dealer
+    sites with concurrent image downloads.
+    """
+    try:
+        slot = VehicleListingImage.objects.select_related('hosted_image', 'listing').get(pk=vehicle_listing_image_id)
+    except VehicleListingImage.DoesNotExist:
+        return  # listing/slot was deleted (e.g. relisted again) before this ran
+
+    if slot.status == VehicleListingImage.STATUS_READY and slot.hosted_image_id:
+        return  # already processed — guards against duplicate task delivery
+
+    slot.status = VehicleListingImage.STATUS_PROCESSING
+    slot.save(update_fields=['status', 'updated_at'])
+
+    try:
+        image_bytes = download_image_bytes(slot.source_url, timeout=settings.VEHICLE_IMAGE_DOWNLOAD_TIMEOUT)
+        content_hash = content_hash_for(image_bytes)
+        # Every listing source (Gumtree included) now publishes to Facebook from
+        # our own hosted copy — see _resolve_extension_images — so every photo
+        # needs the FB-safe JPEG upload variant, not just custom-domain ones.
+        hosted_image, uploaded = get_or_create_ready_hosted_image(
+            content_hash, slot.source_url, image_bytes,
+            build_upload_variant=True,
+        )
+    except (RequestException, BotoCoreError, ClientError) as exc:
+        # Only mark FAILED on the last attempt — autoretry_for below will keep
+        # retrying (with backoff) until then, and a later success should win.
+        is_final_attempt = self.request.retries >= self.max_retries
+        slot.retry_count = self.request.retries + 1
+        slot.error_message = str(exc)[:2000]
+        slot.status = VehicleListingImage.STATUS_FAILED if is_final_attempt else VehicleListingImage.STATUS_PENDING
+        slot.save(update_fields=['retry_count', 'error_message', 'status', 'updated_at'])
+        raise
+    except Exception as exc:
+        # Not a transient network/S3 error (corrupt image, unsupported format,
+        # HTML error page instead of an image, ...) — retrying won't help.
+        slot.retry_count += 1
+        slot.error_message = str(exc)[:2000]
+        slot.status = VehicleListingImage.STATUS_FAILED
+        slot.save(update_fields=['retry_count', 'error_message', 'status', 'updated_at'])
+        image_logger.error(
+            "Permanently failed to process image %s for listing %s: %s",
+            slot.source_url, slot.listing_id, exc,
+        )
+        return
+
+    slot.hosted_image = hosted_image
+    slot.status = VehicleListingImage.STATUS_READY
+    slot.error_message = None
+    slot.save(update_fields=['hosted_image', 'status', 'error_message', 'updated_at'])
+    image_logger.info(
+        "%s image for listing %s (hash=%s)",
+        "Uploaded new" if uploaded else "Deduped existing",
+        slot.listing_id, content_hash,
+    )
+
+
+@shared_task(
+    bind=True,
+    base=CustomExceptionHandler,
+    queue='image_ingest_queue',
+    autoretry_for=(BotoCoreError, ClientError),
+    retry_backoff=True,
+    max_retries=3,
+)
+def gc_hosted_image_task(self, hosted_image_id):
+    """
+    Delete a HostedImage's S3 objects once nothing references it any more.
+    Enqueued (via transaction.on_commit) by signals.py whenever a
+    VehicleListingImage row is deleted — i.e. a listing was permanently
+    removed, or a relist dropped a photo from the set. Re-checks referencing
+    rows at run time (not just at enqueue time) so a listing recreated in the
+    gap between enqueue and execution doesn't lose its images.
+    """
+    if VehicleListingImage.objects.filter(hosted_image_id=hosted_image_id).exists():
+        return  # still referenced by at least one listing
+
+    try:
+        hosted_image = HostedImage.objects.get(pk=hosted_image_id)
+    except HostedImage.DoesNotExist:
+        return
+
+    delete_variants_from_s3(hosted_image)
+    hosted_image.delete()
+    image_logger.info("Garbage-collected HostedImage %s (hash=%s)", hosted_image_id, hosted_image.content_hash)

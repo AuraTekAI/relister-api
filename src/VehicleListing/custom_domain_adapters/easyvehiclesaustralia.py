@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from zenrows import ZenRowsClient
 
 from .base import DomainAdapter
 from ..make_normalizer import normalize_make
@@ -26,17 +27,153 @@ USER_AGENT = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Fetch layer: bot-protection detection + ZenRows fallback.
+#
+# VirtualYard rate-limits repeated hits from one IP. Once tripped it 302s to
+# /security.php?err=<code> and serves a "prove you're human" page — crucially
+# with HTTP *200*, so a status-code check alone treats it as success. Parsing
+# that page yields no specs, which is how hollow listings (no year/make/model,
+# no price, no images) got written to the DB.
+#
+# So: detect the challenge explicitly, and on a block retry the same URL through
+# ZenRows (rotating premium AU proxies) so the request arrives from a different
+# IP. If both attempts fail the caller gets None and SKIPS the listing — never
+# a half-empty row. ZenRows is a fallback rather than the default path so we
+# only spend credits on requests the direct fetch actually lost (~8 of 28 per
+# run at time of writing) and behaviour stays unchanged when the site is happy.
+# ---------------------------------------------------------------------------
+
+# Bot-challenge fingerprints. The redirect target is the strongest signal; the
+# <title> catches the case where a proxy already followed the redirect for us
+# (ZenRows returns the final page, so response.url is the ZenRows API URL and
+# can't be inspected). Deliberately NOT size-based — a small-but-legitimate
+# page must not be mistaken for a block.
+_BLOCK_URL_MARKER = "security.php"
+_BLOCK_TITLE_RE = re.compile(r"<title>\s*security\s*</title>", re.IGNORECASE)
+
+# ZenRows knobs. premium_proxy + AU geo because the block is IP-reputation
+# based (the site is AU-only and datacentre ranges are the first to be
+# throttled). No JS rendering: the site is fully server-rendered, so paying for
+# js_render would be wasted credits.
+_ZENROWS_PARAMS = {"premium_proxy": "true", "proxy_country": "au"}
+
+# Transport/throttle failures worth a second attempt through the proxy. 404/410
+# are deliberately absent — a genuinely missing page shouldn't burn credits.
+_RETRYABLE_STATUSES = frozenset({403, 408, 429, 500, 502, 503, 504})
+
+# (connect, read) timeout for the per-photo availability HEAD in _parse_images.
+# Deliberately short: the check is a best-effort guard, not something a scrape
+# should stall on.
+_IMAGE_CHECK_TIMEOUT = (5, 10)
+
+# Anything smaller than this is the platform's shared "no photo" placeholder
+# (~8KB), not a vehicle photo. The smallest real rendition (640x480) is 40KB+,
+# and the full-size ones run 250-500KB, so this floor separates them with a wide
+# margin. See _url_is_live.
+_MIN_REAL_IMAGE_BYTES = 15_000
+
+FETCH_OK = "ok"
+FETCH_BLOCKED = "blocked"
+FETCH_ERROR = "error"
+
+
 def _http_get(url):
+    """Plain direct fetch — the un-proxied primitive used by _fetch()."""
     return requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
 
 
+def _looks_blocked(response):
+    """True when `response` is the bot-challenge page rather than real content."""
+    if _BLOCK_URL_MARKER in (getattr(response, "url", "") or "").lower():
+        return True
+    for prior in getattr(response, "history", None) or []:
+        location = (prior.headers.get("location") or "").lower()
+        if _BLOCK_URL_MARKER in location:
+            return True
+    try:
+        return bool(_BLOCK_TITLE_RE.search(response.text or ""))
+    except Exception:
+        return False
+
+
+def _zenrows_get(url):
+    """Re-fetch `url` through ZenRows. Returns a response or None."""
+    if not settings.ZENROWS_API_KEY:
+        logger.error(
+            "ZENROWS_API_KEY is not configured — cannot retry blocked "
+            f"EasyVehicles fetch for {url}"
+        )
+        return None
+    try:
+        client = ZenRowsClient(settings.ZENROWS_API_KEY)
+        response = client.get(url, params=_ZENROWS_PARAMS)
+    except Exception as exc:
+        logger.error(f"ZenRows request errored for {url}: {exc}")
+        return None
+    if response.status_code == 402:
+        logger.error(
+            f"ZenRows returned 402 (out of credits / check API key) for {url}"
+        )
+        return None
+    return response
+
+
+def _fetch(url):
+    """Fetch `url`, retrying through ZenRows if the direct hit is blocked.
+
+    Returns ``(html, status)`` where status is FETCH_OK / FETCH_BLOCKED /
+    FETCH_ERROR. ``html`` is None unless the status is FETCH_OK, so callers can
+    never accidentally parse a challenge page.
+    """
+    response = None
+    try:
+        response = _http_get(url)
+    except Exception as exc:
+        logger.error(f"Direct fetch failed for {url}: {exc}")
+
+    if response is not None:
+        blocked = _looks_blocked(response)
+        if response.status_code == 200 and not blocked:
+            return response.text, FETCH_OK
+        if not blocked and response.status_code not in _RETRYABLE_STATUSES:
+            logger.error(f"Non-200 ({response.status_code}) for {url}")
+            return None, FETCH_ERROR
+        logger.warning(
+            f"EasyVehicles fetch obstructed for {url} "
+            f"(status={response.status_code}, bot_challenge={blocked}) — "
+            "retrying via ZenRows"
+        )
+    else:
+        logger.warning(f"Retrying {url} via ZenRows after transport failure")
+
+    proxied = _zenrows_get(url)
+    if proxied is None:
+        return None, FETCH_BLOCKED if response is not None else FETCH_ERROR
+    if proxied.status_code != 200:
+        logger.error(f"ZenRows non-200 ({proxied.status_code}) for {url}")
+        return None, FETCH_ERROR
+    if _looks_blocked(proxied):
+        logger.error(f"Still bot-challenged via ZenRows for {url} — giving up this run")
+        return None, FETCH_BLOCKED
+    logger.info(f"ZenRows fallback succeeded for {url}")
+    return proxied.text, FETCH_OK
+
+
 def _base_url_from(profile_url):
-    """Derive scheme+host from whatever the user registered, falling back to the
-    canonical host. Keeps us faithful to what they typed while guaranteeing a
-    usable base even if they entered just the bare domain."""
+    """Derive the scheme+host to scrape from.
+
+    We only trust the host the user registered when it's the canonical dealer
+    host (or its www form) — for those, staying faithful to what they typed is
+    fine. Any other host (e.g. the marketing domain easyvehicles.com.au, which
+    only 301-redirects to the canonical host at the *root* — deeper paths like
+    /stock return an empty page) is normalised to CANONICAL_BASE_URL so the
+    stock index and detail pages actually resolve. Also falls back to the
+    canonical base if the URL is unparseable or host-less."""
     try:
         parsed = urlparse(profile_url)
-        if parsed.scheme and parsed.netloc:
+        host = (parsed.netloc or "").lower()
+        if parsed.scheme and host in (HOST, f"www.{HOST}"):
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
         pass
@@ -160,8 +297,11 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
     """Adapter for easyvehiclesaustralia.com.au (Teixeira Group), a dealer site
     on the VirtualYard / carsforsale.com.au platform.
 
-    The site is fully server-rendered HTML (no JS / bot protection), so a plain
-    requests + BeautifulSoup scrape works — no Playwright needed. Detail pages
+    The site is fully server-rendered HTML, so a plain requests +
+    BeautifulSoup scrape works — no Playwright needed. It *does* however
+    rate-limit repeated hits from one IP behind a /security.php bot challenge
+    served with HTTP 200; see the fetch layer above, which detects that and
+    retries through ZenRows. Detail pages
     expose a clean "Vehicle specifics" table plus schema/OpenGraph meta tags,
     and gallery images on storage.googleapis.com. This adapter deliberately
     parses by table-label and meta tag rather than fragile CSS classes so a
@@ -204,13 +344,25 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
                 # is a safe, self-terminating probe for larger inventories.
                 page_url = f"{base_url}{STOCK_PATH}?page={page}"
             logger.info(f"Fetching EasyVehicles stock index: {page_url}")
-            try:
-                response = _http_get(page_url)
-            except Exception as exc:
-                logger.error(f"Failed to fetch {page_url}: {exc}")
-                break
-            if response.status_code != 200:
-                logger.error(f"Non-200 ({response.status_code}) for {page_url}")
+            html, status = _fetch(page_url)
+            if status == FETCH_BLOCKED:
+                # Abandon the whole run rather than hand back what we scraped so
+                # far. A short list is worse than an empty one: the caller's
+                # reconcile step deletes/marks-sold every listing missing from
+                # the batch, and its cascade guard only trips below 50% of the
+                # existing count — so a block on page 2 of 2 could silently bin
+                # the listings that live on that page. Returning [] makes the
+                # caller bail with "No listings found" and leave the DB alone;
+                # the next scheduled run retries.
+                logger.error(
+                    f"Bot-protection block on stock index {page_url} — abandoning "
+                    "discovery for this run to avoid a partial-list reconcile"
+                )
+                return []
+            if html is None:
+                # Genuine error (404 = we walked past the last page). Keep the
+                # links gathered so far, as before.
+                logger.error(f"Failed to fetch stock index {page_url}")
                 break
 
             # Match detail links only: exactly /buy/<slug>/<token> (two path
@@ -218,7 +370,7 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
             # finance/enquiry links, which have extra path segments.
             page_hrefs = re.findall(
                 r"""href=['"]((?:https?://[^'"/]+)?/buy/[^'"/]+/[A-Za-z0-9_\-]+)['"]""",
-                response.text,
+                html,
             )
             new_count = 0
             for href in page_hrefs:
@@ -272,19 +424,207 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
                     spec[label.strip().lower()] = value
         return spec
 
-    def _parse_images(self, html):
-        """Collect real gallery image URLs. Prefer the storage.googleapis.com
-        au-assets gallery (full set); fall back to virtualyard.com.au/photos
-        only if the gallery isn't present. Excludes the theme no-photo
-        placeholder and site chrome.
+    # Recognises a real full-size gallery photo URL (either host), excluding the
+    # theme no-photo placeholder and site chrome. Query strings (e.g. ?w=2048 on
+    # the VirtualYard-hosted variants) are tolerated.
+    _IMG_EXT_RE = re.compile(r"\.(?:jpe?g|png|webp)(?:$|\?)", re.IGNORECASE)
 
-        Same sidebar hazard as _parse_price: this scans the page for image
-        URLs, so it must not reach into the "Recent vehicles" section. If the
-        platform ever renders real related-car gallery images there, they'd be
-        wrongly attached to THIS listing and would flicker as the sidebar
-        rotates between scrapes — tripping the change-detector into a needless
-        delete+republish. Cut the page at the earliest related-section marker
-        first (mirrors the guard in _parse_price)."""
+    @staticmethod
+    def _is_gallery_image(url):
+        if not url:
+            return False
+        if "storage.googleapis.com/au-assets/" not in url and \
+                "virtualyard.com.au/photos/" not in url:
+            return False
+        return bool(EasyVehiclesAustraliaAdapter._IMG_EXT_RE.search(url))
+
+    @staticmethod
+    def _url_is_live(url):
+        """True unless the URL definitively answers with a non-200, or serves
+        the platform's "no photo" placeholder.
+
+        A transport error or a HEAD-hostile status (405/501) returns True: we
+        can't prove the URL is dead, and treating an unverifiable URL as usable
+        preserves existing behaviour rather than churning photos onto another
+        rendition because of one flaky request.
+
+        The size floor is what stops the placeholder getting published. Some
+        listings' data-src-error resolves to a single generic ~8KB image shared
+        by every slide (identical sha256), while on other listings the same
+        attribute is the full-resolution photo at 300-500KB. Both answer 200, so
+        status alone can't tell them apart — but no real gallery photo, even the
+        640x480 rendition (40KB+), is anywhere near this small.
+        """
+        try:
+            response = requests.head(
+                url, headers={"User-Agent": USER_AGENT},
+                timeout=_IMAGE_CHECK_TIMEOUT, allow_redirects=True,
+            )
+        except Exception as exc:
+            logger.warning(f"Could not verify gallery image {url}: {exc}")
+            return True
+        if response.status_code in (405, 501):
+            return True
+        if response.status_code != 200:
+            return False
+        try:
+            length = int(response.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length:
+            if length < _MIN_REAL_IMAGE_BYTES:
+                logger.info(f"Ignoring {url}: {length} bytes, too small to be a real photo")
+                return False
+            return True
+        # No Content-Length on the HEAD. The mirror host answers exactly this
+        # way *and* serves the placeholder, so trusting the 200 here is what
+        # let 53 placeholder URLs get stored — measure the body instead.
+        return EasyVehiclesAustraliaAdapter._body_is_big_enough(url)
+
+    @staticmethod
+    def _body_is_big_enough(url):
+        """Stream just enough of the body to tell a photo from the placeholder.
+
+        Reads at most _MIN_REAL_IMAGE_BYTES and stops, so the cost is a few KB
+        rather than a full-size download. Unreachable → True, same
+        can't-prove-it's-dead rule as the HEAD path.
+        """
+        try:
+            with requests.get(
+                url, headers={"User-Agent": USER_AGENT},
+                timeout=_IMAGE_CHECK_TIMEOUT, stream=True, allow_redirects=True,
+            ) as response:
+                if response.status_code != 200:
+                    return False
+                read = 0
+                for chunk in response.iter_content(8192):
+                    read += len(chunk)
+                    if read >= _MIN_REAL_IMAGE_BYTES:
+                        return True
+        except Exception as exc:
+            logger.warning(f"Could not size-check gallery image {url}: {exc}")
+            return True
+        logger.info(f"Ignoring {url}: {read} bytes, too small to be a real photo")
+        return False
+
+    @staticmethod
+    def _slide_image_candidates(li):
+        """Every URL this slide offers for its photo, best quality first.
+
+        VirtualYard publishes each photo at up to four addresses — full-size on
+        storage.googleapis.com, a full-size mirror (``?w=2048``), the displayed
+        640x480 rendition, and a 640x480 mirror — and which of them are actually
+        serving varies per photo, per listing and over time. The page itself
+        falls through them via its onerror handlers, which is why a gallery looks
+        complete in a browser while the single URL we used to store 404s.
+        """
+        img = li.find("img")
+        return [
+            li.get("data-src"),                              # full-size
+            img.get("data-src") if img is not None else None,  # full-size (same, usually)
+            li.get("data-src-error"),                        # full-size mirror
+            img.get("src") if img is not None else None,     # displayed 640x480
+            li.get("data-thumb"),                            # 640x480 (same, usually)
+            li.get("data-thumb-error"),                      # 640x480 mirror
+        ]
+
+    def _parse_images(self, html):
+        """Collect exactly one URL per real gallery photo.
+
+        The VirtualYard lightSlider gallery renders EACH photo several times at
+        different sizes, and — crucially — every rendition is a *different*
+        signed URL with its own opaque token:
+
+          * the fullscreen image on the slide's own ``<li data-src=...>``
+          * a carousel-sized copy on the inner ``<img src>/<img data-src>``
+          * a thumbnail on ``data-thumb``
+          * plus lightSlider's loop ``<li class="clone">`` copies
+
+        The previous implementation regex-scanned the whole page for
+        au-assets URLs and de-duplicated by *exact string*. Because the
+        full-size and carousel-sized renditions of one photo are distinct
+        strings, that dedup couldn't pair them, so every photo was collected
+        twice (25 photos → 50 URLs) and published 2× on Facebook — the
+        "duplicate images" bug.
+
+        Fix: parse the gallery structurally and take a single canonical URL per
+        real slide — the fullscreen ``<li data-src>`` (falling back to the
+        inner ``<img>`` if a slide lacks it) — skipping ``li.clone`` loop
+        copies. Selecting only the ``vehicle-photo-carousel`` list also keeps us
+        out of the "Recent vehicles" sidebar for free (no page-cut needed on
+        this path). If the gallery markup can't be found (template change), fall
+        back to the old whole-page scan so we degrade to "some duplicates"
+        rather than "no images at all".
+
+        Dead-primary handling: a slide's ``data-src`` (the storage.googleapis.com
+        copy) is frequently a 404 — 6 of 20 photos on one reported listing, 11 of
+        21 on another. The dealer's own page still looks complete because each
+        slide carries a ``data-src-error`` twin on virtualyard.com.au that the
+        markup's ``onerror`` swaps in; we stored only the dead primary, so the
+        extension fetched a 404 per affected photo, dropped it, and tripped its
+        PARTIAL_IMAGE_UPLOAD guard. So — when EASYVEHICLES_VERIFY_IMAGE_URLS is
+        on — verify each primary and substitute the slide's own fallback if it
+        isn't serving. It defaults to OFF because those 404s were subsequently
+        measured to be transient and the ingest task's own retries recover them;
+        see the setting's comment for the numbers."""
+        soup = BeautifulSoup(html, "html.parser")
+        gallery = []
+        seen = set()
+        verify = getattr(settings, "EASYVEHICLES_VERIFY_IMAGE_URLS", True)
+
+        carousel = soup.find("ul", class_="vehicle-photo-carousel")
+        if carousel:
+            for li in carousel.find_all("li", recursive=False):
+                if "clone" in (li.get("class") or []):
+                    continue  # lightSlider loop duplicate
+                # Prefer the slide's own fullscreen image; fall back to the
+                # inner <img>'s data-src / src if the slide lacks data-src.
+                url = li.get("data-src")
+                if not self._is_gallery_image(url):
+                    img = li.find("img")
+                    if img is not None:
+                        url = img.get("data-src") or img.get("src")
+                if not self._is_gallery_image(url):
+                    continue
+                # The full-size URL is frequently missing from the dealer's
+                # bucket (measured on one listing: 5 of 23 serving; on others 7
+                # of 20 and 8 of 17) while other renditions of the same photo
+                # serve fine. Storing only the dead one is what reaches the
+                # extension as a 404 and aborts the publish with
+                # PARTIAL_IMAGE_UPLOAD. So walk the slide's renditions in
+                # quality order and keep the first that actually serves.
+                if verify and not self._url_is_live(url):
+                    replacement = next(
+                        (
+                            candidate for candidate in self._slide_image_candidates(li)
+                            if candidate and candidate != url
+                            and self._is_gallery_image(candidate)
+                            and self._url_is_live(candidate)
+                        ),
+                        None,
+                    )
+                    if replacement:
+                        logger.info(
+                            f"Gallery image {url} is not serving — using the "
+                            f"slide's next working rendition {replacement}"
+                        )
+                        url = replacement
+                    else:
+                        logger.warning(
+                            f"Gallery image {url} is not serving and no rendition "
+                            "on the slide is either — keeping the original"
+                        )
+                if url not in seen:
+                    seen.add(url)
+                    gallery.append(url)
+            if gallery:
+                return gallery
+
+        # --- Fallback: gallery markup not found (e.g. template change). ---
+        # Old behaviour: whole-page scan, cut at the related-vehicles section so
+        # a sidebar car's photos can't attach to this listing. Exact-string
+        # dedup only — may keep same-photo size variants, but that's strictly
+        # better than returning no images.
         lowered = html.lower()
         cut = len(html)
         for marker in ("recent vehicles", "similar vehicles",
@@ -292,28 +632,18 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
             idx = lowered.find(marker)
             if idx != -1:
                 cut = min(cut, idx)
-        html = html[:cut]
-        gallery = []
-        seen = set()
-        for m in re.finditer(
+        scan = html[:cut]
+        for host_re in (
             r"https://storage\.googleapis\.com/au-assets/[A-Za-z0-9_\-./]+\.(?:jpe?g|png|webp)",
-            html,
-        ):
-            url = m.group(0)
-            if url not in seen:
-                seen.add(url)
-                gallery.append(url)
-        if gallery:
-            return gallery
-        # Fallback: VirtualYard-hosted photos (used in og:image / comments).
-        for m in re.finditer(
             r"https://virtualyard\.com\.au/photos/[A-Za-z0-9_\-./]+\.(?:jpe?g|png|webp)",
-            html,
         ):
-            url = m.group(0)
-            if url not in seen:
-                seen.add(url)
-                gallery.append(url)
+            for m in re.finditer(host_re, scan):
+                url = m.group(0)
+                if url not in seen:
+                    seen.add(url)
+                    gallery.append(url)
+            if gallery:
+                break
         return gallery
 
     def _parse_price(self, soup, spec):
@@ -350,16 +680,18 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         if not listing_id:
             logger.error(f"Could not extract listing id from {stock_url}")
             return None
-        try:
-            response = _http_get(stock_url)
-        except Exception as exc:
-            logger.error(f"Failed to fetch {stock_url}: {exc}")
-            return None
-        if response.status_code != 200:
-            logger.error(f"Non-200 ({response.status_code}) for {stock_url}")
+        html, status = _fetch(stock_url)
+        if html is None:
+            # Blocked or errored. Returning None makes the orchestrator skip
+            # this listing entirely — no create, no update — so a transient
+            # block can never overwrite good data with blanks. The listing is
+            # still counted as "seen" by the caller, so it won't be reconciled
+            # away either; the next run picks it up.
+            logger.error(
+                f"Skipping EasyVehicles listing {listing_id} — fetch {status} for {stock_url}"
+            )
             return None
 
-        html = response.text
         soup = BeautifulSoup(html, "html.parser")
         spec = self._parse_specs(soup)
 
@@ -404,6 +736,36 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
 
         images = self._parse_images(html)
 
+        # Last line of defence against writing an empty listing. Even with the
+        # block detection above, any future change that leaves the specs table
+        # unparseable would otherwise produce a row with every field None — the
+        # exact hollow listings this guard exists to prevent. Year+make is the
+        # minimum identity a listing needs to be publishable; without it we'd
+        # rather have no row than a blank one, so skip and retry next run.
+        # (Deliberately not gated on `model`: the make-normalizer legitimately
+        # empties it for two-token brands such as MINI Cooper, and that listing
+        # is otherwise complete.)
+        if not year or not make:
+            logger.error(
+                f"Discarding EasyVehicles listing {listing_id} — no vehicle data "
+                f"parsed (year={year!r} make={make!r} model={model!r}). "
+                f"Page fetched OK ({len(html)} bytes) but specs were unreadable."
+            )
+            return None
+
+        # Non-fatal completeness warning: worth surfacing because a listing
+        # published without these looks broken to buyers, but not worth dropping
+        # an otherwise-identifiable vehicle over.
+        missing = [
+            name for name, value in (("price", price), ("images", images))
+            if not value
+        ]
+        if missing:
+            logger.warning(
+                f"EasyVehicles listing {listing_id} parsed with missing "
+                f"{', '.join(missing)} — saving anyway"
+            )
+
         title = " ".join(str(p) for p in [year, make, model, variant] if p)
 
         listing_details = {
@@ -434,6 +796,17 @@ class EasyVehiclesAustraliaAdapter(DomainAdapter):
         return False
 
     def discover_dealer_location(self, profile_url: str) -> dict | None:
-        # Location comes from the dealer's registration (suburb/state), so no
-        # site-level discovery is attempted here.
-        return None
+        # Easy Vehicles Australia (Teixeira Group) trades from a single physical
+        # location — 5 Old Aberdeen Pl, West Perth WA 6005 (per their /contact
+        # page). Per-listing location isn't exposed on the detail pages, so
+        # (mirroring the DNA / Buckingham adapters) we return the dealership's
+        # own suburb/state here. discover_and_save_dealer_location() stamps this
+        # onto User.dealership_suburb/_state at signup, and the listing
+        # serializer builds each row's `location` from it. A reseller feeding
+        # off this site who isn't in West Perth can be overridden per-user in
+        # the admin.
+        return {
+            "suburb": "West Perth",
+            "state": "WA",
+            "address": "5 Old Aberdeen Pl, West Perth WA 6005",
+        }

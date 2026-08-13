@@ -1,6 +1,8 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
-from .models import VehicleListing,GumtreeProfileListing,ListingUrl
+from .models import VehicleListing, GumtreeProfileListing, ListingUrl
+from .duplicate_matching import find_existing_vehicle
+from .image_pipeline import sync_listing_images
 import logging
 import time
 import random
@@ -8,7 +10,7 @@ import threading
 from django.conf import settings
 from bs4 import BeautifulSoup
 import re
-from .utils import get_full_state_name, mark_listing_sold
+from .utils import get_full_state_name, mark_listing_sold, reactivate_listing
 from .vehicle_matching import get_or_create_vehicle, sanitize_positive_price, sync_vehicle_from_result
 # from .models import RelistingFacebooklisting
 from django.utils import timezone
@@ -18,6 +20,32 @@ from .models import FacebookUserCredentials
 import xml.etree.ElementTree as ET
 
 logging = logging.getLogger('gumtree')
+
+
+def _apply_gumtree_update(existing, result):
+    """Write freshly-scraped fields from `result` onto an existing
+    VehicleListing and persist. Shared by the two "refresh a stale row"
+    branches below and by the VIN/structural duplicate-match branch, so a
+    relisted-under-a-new-ad-id vehicle is updated identically to a normal
+    same-ad refresh."""
+    existing.year = result.get("year")
+    existing.make = result.get("make")
+    existing.model = result.get("model")
+    existing.body_type = result.get("body_type")
+    existing.fuel_type = result.get("fuel_type")
+    existing.color = result.get("color")
+    existing.variant = result.get("variant")
+    existing.price = str(result.get("price"))
+    existing.mileage = result.get("mileage")
+    existing.mileage_unavailable = result.get("mileage_unavailable", False)
+    existing.transmission = result.get("transmission")
+    existing.description = result.get("description")
+    existing.images = result.get("image")
+    existing.location = result.get("location")
+    existing.vin = result.get("vin")
+    existing.is_changed = True
+    existing.save()
+    sync_listing_images(existing, result.get("image"))
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
     if profile_url.endswith('/'):
@@ -589,6 +617,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.price = sanitize_positive_price(result.get("price"), already_exists.price)
                         already_exists.description = result.get("description")
                         already_exists.save()
+                        sync_listing_images(already_exists, result.get("image"))
                         logging.info(f"Updated listing {listing_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
@@ -609,6 +638,7 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                         already_exists.price = sanitize_positive_price(result.get("price"), already_exists.price)
                         already_exists.description = result.get("description")
                         already_exists.save()
+                        sync_listing_images(already_exists, result.get("image"))
                         logging.info(f"Updated listing {listing_id} with new details")
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
@@ -620,25 +650,65 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             logging.info(f"Listing ID {listing_id} does not exist, fetching details")
             time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
             result = get_gumtree_listing_details(listing_id)
-            if result and not already_exists:
-                count += 1
-                vehicle = get_or_create_vehicle(result)
-                listing_url, _ = ListingUrl.objects.get_or_create(
-                    user=user, listing_id=listing_id, defaults={"url": result.get("url") or ""}
-                )
-                vehicle_listing = VehicleListing.objects.create(
-                    user=user,
-                    vehicle=vehicle,
-                    gumtree_url=listing_url,
-                    price=sanitize_positive_price(result.get("price")),
-                    description=result.get("description"),
-                    status="pending",
-                    seller_profile_id=seller_id
-                )
-                logging.info(f"Created new vehicle_listing: {vehicle_listing}")
-            else:
+            if not result:
                 logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping")
                 continue
+
+            # No match on this ad id, but that only tells us Gumtree's OWN id for
+            # this ad is new to us — not that the physical vehicle is new. Dealers
+            # routinely let an ad expire and relist the same car, which Gumtree
+            # gives a brand new ad id. Re-check by VIN / structural attributes
+            # using the data we just fetched anyway (no extra request), scoped to
+            # this one seller, before treating it as a genuinely new vehicle.
+            matched = find_existing_vehicle(
+                VehicleListing.objects.filter(user=user, seller_profile_id=seller_id),
+                vin=result.get("vin"),
+                make=result.get("make"), model=result.get("model"), variant=result.get("variant"),
+                year=result.get("year"), color=result.get("color"), mileage=result.get("mileage"),
+                body_type=result.get("body_type"), fuel_type=result.get("fuel_type"),
+                transmission=result.get("transmission"),
+            )
+            if matched is not None:
+                logging.info(
+                    f"Listing ID {listing_id} matches existing vehicle_listing id={matched.id} "
+                    f"(ad id changing {matched.list_id!r} -> {listing_id!r}) — updating in place "
+                    f"instead of creating a duplicate row"
+                )
+                count += 1
+                if matched.status == "sold" or matched.sales:
+                    reactivate_listing(matched)
+                matched.list_id = str(listing_id)
+                matched.gumtree_profile = gumtree_profile_listing_instance
+                _apply_gumtree_update(matched, result)
+                continue
+
+            count += 1
+            vehicle_listing = VehicleListing.objects.create(
+                user=user,
+                gumtree_profile=gumtree_profile_listing_instance,
+                list_id=listing_id,
+                year=result.get("year"),
+                body_type=result.get("body_type"),
+                fuel_type=result.get("fuel_type"),
+                color=result.get("color"),
+                variant=result.get("variant"),
+                make=result.get("make"),
+                mileage=result.get("mileage"),
+                mileage_unavailable=result.get("mileage_unavailable", False),
+                model=result.get("model"),
+                price=str(result.get("price")),
+                transmission=result.get("transmission"),
+                description=result.get("description"),
+                images=result.get("image"),
+                url=result.get("url"),
+                location=result.get("location"),
+                vin=result.get("vin"),
+                status="pending",
+                is_relist=False,
+                seller_profile_id=seller_id
+            )
+            sync_listing_images(vehicle_listing, result.get("image"))
+            logging.info(f"Created new vehicle_listing: {vehicle_listing}")
         # Update GumtreeProfileListing instance with the count of processed listings
     gumtree_profile_listing_instance.processed_listings = count
     gumtree_profile_listing_instance.status = "completed"
