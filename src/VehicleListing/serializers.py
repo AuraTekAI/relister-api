@@ -180,10 +180,13 @@ def _resolve_extension_images(listing, request):
     see _gumtree_hosting_bypassed.
     """
     if _gumtree_hosting_bypassed(listing):
-        return [
+        urls = [
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
+        # Return tuple (urls, all_hosted) to match all other return paths.
+        # For bypass path, images are raw Gumtree URLs, so all_hosted=False.
+        return urls, False
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
