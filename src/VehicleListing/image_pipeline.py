@@ -238,19 +238,46 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, buil
         return ready, False
 
     variants = build_variant_bytes(image_bytes, settings.VEHICLE_IMAGE_SIZES, settings.VEHICLE_IMAGE_WEBP_QUALITY)
+
+    # ✓ CRITICAL FIX: Upload ALL WebP variants FIRST, with explicit error handling.
+    # If ANY upload fails (S3 permissions, network, credentials), re-raise the exception
+    # so Celery retries the entire task. Do NOT create HostedImage with partial/incomplete keys.
     keys = {}
     for size, (webp_bytes, width, height) in variants.items():
         key = s3_key_for(content_hash, size)
-        upload_variant(key, webp_bytes)
-        keys[size] = (key, width, height)
+        try:
+            upload_variant(key, webp_bytes)  # ← Raises exception if upload fails
+            keys[size] = (key, width, height)
+        except Exception as e:
+            # S3 upload failed (credentials, permissions, network, etc.)
+            # Re-raise so Celery retries the entire task.
+            # This prevents partial HostedImage creation with incomplete S3 keys.
+            logger.error(
+                "Failed to upload WebP variant for content_hash=%s, size=%s, key=%s: %s",
+                content_hash, size, key, str(e),
+                exc_info=True
+            )
+            raise
 
     # FB-safe JPEG copy for the extension's Marketplace upload (FB rejects our
     # WebP) — built only for custom-domain images that will actually use it.
-    upload_key = (
-        _make_and_upload_upload_variant(content_hash, image_bytes)
-        if build_upload_variant else ''
-    )
+    # Same error handling: if upload fails, re-raise to prevent partial HostedImage.
+    upload_key = ''
+    if build_upload_variant:
+        try:
+            upload_key = _make_and_upload_upload_variant(content_hash, image_bytes)
+        except Exception as e:
+            # S3 upload failed for JPEG variant. Re-raise so Celery retries.
+            logger.error(
+                "Failed to upload JPEG variant for content_hash=%s: %s",
+                content_hash, str(e),
+                exc_info=True
+            )
+            raise
 
+    # ✓ VALIDATED: All S3 uploads succeeded. Now safe to create HostedImage with
+    # complete S3 keys. If creation fails due to race condition (IntegrityError),
+    # another worker created it first; we catch that and use their record.
     large_key, large_width, large_height = keys['large']
     defaults = {
         'source_url': source_url,
