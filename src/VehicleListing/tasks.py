@@ -16,7 +16,7 @@ from VehicleListing.custom_domain_adapters import resolve_for_url
 from accounts.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from .utils import _clean_log_file
+from .utils import _clean_log_file, send_user_approval_email
 # from .utils import update_credentials_success, handle_retry_or_disable_credentials, create_or_update_relisting_entry, handle_failed_relisting, should_create_listing, should_check_images_upload_status_time, send_missing_listing_notification, send_status_reminder_email
 from django.conf import settings
 from requests.exceptions import RequestException
@@ -513,6 +513,30 @@ def check_custom_domain_profile_relisting_task(self):
 #                     credentials.save()
 #                     send_status_reminder_email(credentials)
 #                 logger.error("No facebook credentials found")
+
+@shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
+def send_user_approval_email_task(self, user_id):
+    """Send the "you're approved" email off the request thread.
+
+    Previously accounts/views.py (UserListview.update) and accounts/admin.py
+    called send_user_approval_email(user) synchronously, right on the PATCH
+    /api/users/<id>/ request that flips is_approved False->True. That
+    function's email.send() goes through relister.email_backend's
+    FlashpostEmailBackend, which makes a blocking HTTPS call to the Flashpost
+    API with up to a 15s timeout (email_backend.py REQUEST_TIMEOUT) — longer
+    than the admin webapp's 10s axios timeout. Any slowness on that call (cold
+    connection, provider latency) made the client abort with an empty-response
+    timeout error even though is_approved=True had already been committed to
+    the DB moments earlier in the same request. A second click then "worked"
+    only because the already-approved user no longer re-enters this branch.
+    Routing the send through Celery (matching profile_listings_for_approved_users
+    below) removes it from the request/response cycle entirely.
+    """
+    user_instance = User.objects.filter(id=user_id).first()
+    if not user_instance:
+        return "No user found for the given ID while sending approval email."
+    send_user_approval_email(user_instance)
+
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')
 def profile_listings_for_approved_users(self, user_id):
