@@ -594,6 +594,9 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         logging.info(f"Fetching details for listing ID: {listing_id}")
         already_exists = VehicleListing.objects.filter(list_id=listing_id, user=user, seller_profile_id=seller_id).first()
         if already_exists:
+            # Count ALL existing listings, regardless of whether we update them.
+            # This ensures count matches the total number of valid listings scraped,
+            # not just the ones eligible for updating.
             count+=1
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
             if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=1)):
@@ -635,9 +638,28 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
         else:
             logging.info(f"Listing ID {listing_id} does not exist, fetching details")
             time.sleep(random.uniform(settings.SIMPLE_DELAY_START_TIME, settings.SIMPLE_DELAY_END_TIME))
-            result = get_gumtree_listing_details(listing_id)
+
+            # Retry failed fetches up to 3 times with exponential backoff
+            # This handles race conditions (listing deleted between API calls) and
+            # temporary network/API errors.
+            result = None
+            for attempt in range(3):
+                result = get_gumtree_listing_details(listing_id)
+                if result:
+                    break
+                if attempt < 2:  # Don't sleep after the last attempt
+                    retry_delay = 2 ** attempt  # 1s, 2s, 4s
+                    logging.warning(
+                        f"Failed to fetch details for listing ID {listing_id}, "
+                        f"attempt {attempt + 1}/3, retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+
             if not result:
-                logging.error(f"Failed to fetch details for listing ID {listing_id}, skipping")
+                logging.error(
+                    f"Failed to fetch details for listing ID {listing_id} after 3 attempts, "
+                    f"skipping this listing (may have been deleted on Gumtree)"
+                )
                 continue
 
             # No match on this ad id, but that only tells us Gumtree's OWN id for
