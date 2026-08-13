@@ -565,9 +565,10 @@ class ExtensionImagePayloadTests(TestCase):
         for i in range(18):
             self._add_slot(i)
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
 
         self.assertEqual(len(urls), 18)
+        self.assertTrue(ready)
         self.assertEqual(len(set(urls)), 18, 'duplicate URLs in the extension payload')
         for url in urls:
             self.assertTrue(url.endswith('.jpg'), f'not a FB-accepted format: {url}')
@@ -579,9 +580,10 @@ class ExtensionImagePayloadTests(TestCase):
         self._add_slot(1, ready=False)
         self._add_slot(2, with_upload=False)  # hosted but pre-backfill: no JPEG yet
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
 
         self.assertEqual(len(urls), 3, 'a photo went missing from the payload')
+        self.assertFalse(ready, 'a pre-backfill/unprocessed photo must not count as publish-ready')
         self.assertTrue(urls[0].endswith('.jpg'))
         self.assertIn('custom-domain-image', urls[1])
         self.assertIn('custom-domain-image', urls[2])
@@ -590,7 +592,7 @@ class ExtensionImagePayloadTests(TestCase):
     def test_ordering_follows_slot_position(self):
         for i in (2, 0, 1):
             self._add_slot(i)
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, _ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(urls, sorted(urls, key=lambda u: int(u.split('/')[-2])))
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=False)
@@ -599,18 +601,20 @@ class ExtensionImagePayloadTests(TestCase):
         self.listing.save(update_fields=['images'])
         self._add_slot(0)
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(len(urls), 1)
         self.assertIn('custom-domain-image', urls[0])
+        self.assertFalse(ready)
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=True)
     def test_legacy_listing_without_slots_is_unaffected(self):
         self.listing.images = ['https://storage.googleapis.com/au-assets/a.jpg']
         self.listing.save(update_fields=['images'])
 
-        urls = _resolve_extension_images(self.listing, self.request)
+        urls, ready = _resolve_extension_images(self.listing, self.request)
         self.assertEqual(len(urls), 1)
         self.assertIn('custom-domain-image', urls[0])
+        self.assertFalse(ready)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -959,8 +963,9 @@ class EasyVehiclesEndToEndTests(TestCase):
                     slot.status = VehicleListingImage.STATUS_READY
                     slot.save(update_fields=['hosted_image', 'status'])
 
-                payload = _resolve_extension_images(listing, request)
+                payload, ready = _resolve_extension_images(listing, request)
 
+                self.assertTrue(ready, 'every slot was simulated as finished but images_ready is False')
                 self.assertEqual(len(payload), len(urls), 'photo count changed between scrape and publish')
                 self.assertEqual(len(set(payload)), len(payload), 'duplicate photo in the publish payload')
                 self.assertGreaterEqual(len(payload), 15, 'below the extension minimum-image threshold')
@@ -1046,18 +1051,22 @@ class UploadVariantSourceScopingTests(TestCase):
 
 
 class ExtensionPayloadGumtreeGuardTests(TestCase):
-    """Gumtree listings now ONLY ever publish OUR hosted JPEG — the raw Gumtree
-    URL is never sent to the extension, at any point. A listing whose photos
-    haven't all settled yet (still pending/processing) is withheld entirely;
-    once everything has settled, permanently-Failed photos are dropped and the
-    listing publishes with whatever is Ready.
+    """Gumtree listings prefer OUR hosted JPEG per-photo the moment it's ready,
+    and fall back to the raw Gumtree URL for anything not hosted yet (still
+    pending/processing/failed, or no image_slots at all yet) — the extension's
+    home page must always have something to display immediately, without
+    waiting on the async S3 pipeline.
 
-    All of that is true once settings.BYPASS_GUMTREE_IMAGE_HOSTING is off — see
-    _gumtree_hosting_bypassed. That flag is a separate, TEMPORARY testing
+    Facebook publishing must never actually use that raw fallback though: the
+    second return value (`images_ready`) is False whenever ANY url in the
+    payload is still a raw fallback, and the extension's publish guard
+    (publishListing.ts GUARD 1d) refuses to call Facebook until it's True. So
+    the raw-fallback URLs above only ever reach display, never Facebook.
+
+    Note: settings.BYPASS_GUMTREE_IMAGE_HOSTING is a separate, TEMPORARY testing
     kill-switch (default True) that unconditionally forces raw URLs for Gumtree
-    regardless of any of the above; it's covered on its own below and
-    explicitly disabled in the other tests so they exercise the real,
-    hosted-only policy."""
+    regardless of any of the above; it's covered separately and explicitly
+    disabled in the other tests so they exercise the real, hosted-with-fallback policy."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='gum@test.invalid', password='x')
@@ -1100,16 +1109,18 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
                 listing=listing, source_url=f'https://images.gumtree.com.au/{letter}.jpg',
                 position=i, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
         self.assertEqual(len(payload), 2)
+        self.assertTrue(ready, 'every photo is hosted — this listing must be publish-ready')
         self.assertTrue(all(u.endswith('.jpg') and 'gumtree' not in u for u in payload),
-                         'a raw Gumtree URL leaked into the payload')
+                         'a raw Gumtree URL leaked into the payload despite every photo being ready')
 
-    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
-    def test_any_still_settling_photo_withholds_the_whole_listing(self):
-        """Even one photo still pending/processing means nothing is published
-        yet — never send a partial set early."""
+    def test_still_settling_photo_falls_back_to_raw_but_blocks_publish(self):
+        """A photo still pending/processing shows its own raw Gumtree URL (for
+        display) alongside the Ready one's S3 copy, but the listing as a whole
+        is NOT publish-ready — the extension's guard must hold off Facebook
+        until this photo finishes too, never uploading the raw URL to FB."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G2', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
@@ -1123,12 +1134,14 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
             position=1, status=VehicleListingImage.STATUS_PENDING)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
-        self.assertEqual(payload, [], 'published early while a photo was still settling')
+        self.assertEqual(len(payload), 2, 'a still-processing photo should not disappear from the payload')
+        self.assertFalse(ready, 'a still-pending photo must block publish-readiness')
+        self.assertTrue(payload[0].endswith('upload.jpg'))
+        self.assertEqual(payload[1], 'https://images.gumtree.com.au/b.jpg')
 
-    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
-    def test_processing_status_also_withholds_the_listing(self):
+    def test_processing_status_also_falls_back_to_raw_and_blocks_publish(self):
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G3', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg'])
@@ -1136,12 +1149,16 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
             position=0, status=VehicleListingImage.STATUS_PROCESSING)
 
-        self.assertEqual(_resolve_extension_images(listing, self.request), [])
+        payload, ready = _resolve_extension_images(listing, self.request)
+        self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg'])
+        self.assertFalse(ready)
 
-    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
-    def test_permanently_failed_photo_is_dropped_once_everything_else_has_settled(self):
-        """Once no slot is still pending/processing, a Failed one is dropped
-        forever — it must not block the Ready photos from publishing."""
+    def test_permanently_failed_photo_falls_back_to_raw_and_blocks_publish(self):
+        """A Failed slot (every retry exhausted) still has a real Gumtree photo
+        behind it — show that instead of dropping the photo outright, but
+        still refuse to call this listing publish-ready: the extension must
+        never upload that raw URL to Facebook. Existing retry tooling
+        (retry_failed_vehicle_images) is what turns this back to Ready."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G4', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
@@ -1155,29 +1172,32 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
             position=1, status=VehicleListingImage.STATUS_FAILED)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
-        self.assertEqual(len(payload), 1)
+        self.assertEqual(len(payload), 2)
+        self.assertFalse(ready, 'a permanently-failed photo must still block publish-readiness')
         self.assertTrue(payload[0].endswith('upload.jpg'))
-        self.assertFalse(any('gumtree' in u for u in payload), 'raw Gumtree URL leaked into the payload')
+        self.assertEqual(payload[1], 'https://images.gumtree.com.au/b.jpg')
 
-    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
-    def test_gumtree_with_no_slots_yet_is_withheld_not_raw_fallback(self):
-        """Legacy/just-scraped listing with no image_slots at all yet must NOT
-        publish raw Gumtree URLs — wait for the pipeline to create and process
-        slots instead."""
+    def test_gumtree_with_no_slots_yet_falls_back_to_raw_and_blocks_publish(self):
+        """Legacy/just-scraped listing with no image_slots at all yet must
+        still display its raw Gumtree URLs immediately — the home page can't
+        wait for sync_listing_images to create and process slots — but nothing
+        is hosted yet, so this is never publish-ready."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G5', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
-        self.assertEqual(payload, [])
+        self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
+        self.assertFalse(ready)
 
-    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
-    def test_ready_hosted_image_missing_the_jpeg_variant_is_treated_as_not_ready(self):
+    def test_ready_hosted_image_missing_the_jpeg_variant_falls_back_to_raw_and_blocks_publish(self):
         """Belt-and-braces: an old HostedImage predating the JPEG variant
-        (upload_url() -> None) must be dropped, not somehow fall back raw."""
+        (upload_url() -> None) must fall back to the raw URL, not disappear,
+        and must not count as publish-ready — Facebook would otherwise get the
+        raw URL sent to it once the guard incorrectly allows the publish."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G6', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg'])
@@ -1188,7 +1208,9 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
             position=0, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
 
-        self.assertEqual(_resolve_extension_images(listing, self.request), [])
+        payload, ready = _resolve_extension_images(listing, self.request)
+        self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg'])
+        self.assertFalse(ready)
 
     @override_settings(EXTENSION_USE_HOSTED_IMAGES=False, BYPASS_GUMTREE_IMAGE_HOSTING=False)
     def test_gumtree_hosted_only_policy_is_independent_of_the_custom_domain_kill_switch(self):
@@ -1204,9 +1226,10 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
             position=0, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
         self.assertTrue(payload[0].endswith('upload.jpg'))
+        self.assertTrue(ready)
 
 
 class BackfillScopingTests(TestCase):
