@@ -292,6 +292,12 @@ def sync_listing_images(listing, image_urls):
     # listings (gumtree_profile_id is None) are unaffected. See the setting's
     # docstring in settings.py for how to revert.
     if getattr(settings, 'BYPASS_GUMTREE_IMAGE_HOSTING', False) and getattr(listing, 'gumtree_profile_id', None):
+        logger.info(
+            "BYPASS_GUMTREE_IMAGE_HOSTING enabled: skipping image slot creation for "
+            "Gumtree listing id=%s (gumtree_profile_id=%s)",
+            getattr(listing, "pk", None),
+            getattr(listing, 'gumtree_profile_id', None),
+        )
         return
     try:
         _sync_listing_images(listing, image_urls)
@@ -335,8 +341,38 @@ def _sync_listing_images(listing, image_urls):
     for position, url in enumerate(image_urls):
         slot = existing_slots.get(url)
         if slot is None:
-            slot = VehicleListingImage.objects.create(listing=listing, source_url=url, position=position)
-            new_slot_ids.append(slot.pk)
+            try:
+                # ✓ CREATE with explicit conflict handling: if a race condition
+                # creates a duplicate slot between our .all() fetch and this create,
+                # catch it and get the newly-created one instead of silently dropping
+                # this image from the listing.
+                slot = VehicleListingImage.objects.create(
+                    listing=listing,
+                    source_url=url,
+                    position=position
+                )
+                new_slot_ids.append(slot.pk)
+            except IntegrityError as e:
+                # Race condition: another process created this slot between our
+                # fetch above and this create. Get it and use it.
+                logger.warning(
+                    "IntegrityError creating image slot for listing id=%s, URL=%s "
+                    "(likely race condition); attempting to use existing slot",
+                    listing.id, url
+                )
+                try:
+                    slot = VehicleListingImage.objects.get(listing=listing, source_url=url)
+                    if slot.position != position:
+                        slot.position = position
+                        slot.save(update_fields=['position', 'updated_at'])
+                    new_slot_ids.append(slot.pk)
+                except VehicleListingImage.DoesNotExist:
+                    # Slot disappeared between our error and get attempt. Skip this image.
+                    logger.error(
+                        "Failed to create or retrieve image slot for listing id=%s, "
+                        "URL=%s after IntegrityError; image will be missing",
+                        listing.id, url
+                    )
         elif slot.position != position:
             slot.position = position
             slot.save(update_fields=['position', 'updated_at'])
