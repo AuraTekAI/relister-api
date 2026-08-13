@@ -17,37 +17,50 @@ def backfill_vehicles(apps, schema_editor):
     vehicle_by_vin = {}
     created_vehicles = 0
     created_images = 0
+    updated_listings = 0
 
     for listing in VehicleListing.objects.all().iterator(chunk_size=500):
+        # Skip if vehicle is already linked
+        if listing.vehicle_id:
+            continue
+
         vin = (listing.vin or "").strip() or None
         vehicle = vehicle_by_vin.get(vin) if vin else None
 
         if vehicle is None:
-            vehicle = Vehicle.objects.create(
+            # Use get_or_create to handle cases where Vehicle already exists
+            # (e.g., from a previous partial migration run)
+            vehicle, created = Vehicle.objects.get_or_create(
                 vin=vin,
-                make=listing.make,
-                model=listing.model,
-                year=listing.year,
-                mileage=listing.mileage,
-                transmission=listing.transmission,
-                fuel_type=listing.fuel_type,
-                body_type=listing.body_type,
-                color=listing.color,
+                defaults={
+                    "make": listing.make,
+                    "model": listing.model,
+                    "year": listing.year,
+                    "mileage": listing.mileage,
+                    "transmission": listing.transmission,
+                    "fuel_type": listing.fuel_type,
+                    "body_type": listing.body_type,
+                    "color": listing.color,
+                }
             )
-            created_vehicles += 1
+            if created:
+                created_vehicles += 1
             if vin:
                 vehicle_by_vin[vin] = vehicle
 
-            for image_url in (listing.images or []):
-                if image_url:
-                    VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
-                    created_images += 1
+            # Only create images if this is a newly created vehicle
+            if created:
+                for image_url in (listing.images or []):
+                    if image_url:
+                        VehicleImage.objects.create(vehicle=vehicle, image_url=image_url)
+                        created_images += 1
 
         listing.vehicle_id = vehicle.id
         listing.save(update_fields=["vehicle"])
+        updated_listings += 1
 
-    if created_vehicles:
-        print(f"  Created {created_vehicles} Vehicle rows and {created_images} VehicleImage rows from existing listings")
+    if created_vehicles or updated_listings:
+        print(f"  Created {created_vehicles} Vehicle rows and {created_images} VehicleImage rows; linked {updated_listings} listings to vehicles")
 
 
 def noop_reverse(apps, schema_editor):
