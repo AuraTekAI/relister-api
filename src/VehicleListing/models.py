@@ -142,14 +142,11 @@ class VehicleListing(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        # Guard against race-condition duplicates from concurrent background
-        # scrapes (an initial POST overlapping with a cron-triggered re-scrape,
-        # or rapid repeated POSTs). The orchestrator wraps create in
-        # transaction.atomic and treats IntegrityError on this constraint as
-        # "another thread won the race" — see custom_domain_scraper.py.
-        unique_together = [("user", "list_id", "seller_profile_id")]
-        # Note: Fields vin, make, model, year are now on Vehicle model, not VehicleListing.
-        # Indexes for duplicate_matching lookups would be on Vehicle, not here.
+        # Note: Guard against race-condition duplicates is handled at the application layer
+        # via transaction.atomic() in scraper code. See custom_domain_scraper.py.
+        # The list_id field (used by scrapers) does not currently exist as a separate field
+        # on VehicleListing; listings are uniquely identified via gumtree_url relationship.
+        pass
 
     def __str__(self):
         return f"{self.vehicle} ({self.user_id})"
