@@ -238,19 +238,46 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, buil
         return ready, False
 
     variants = build_variant_bytes(image_bytes, settings.VEHICLE_IMAGE_SIZES, settings.VEHICLE_IMAGE_WEBP_QUALITY)
+
+    # ✓ CRITICAL FIX: Upload ALL WebP variants FIRST, with explicit error handling.
+    # If ANY upload fails (S3 permissions, network, credentials), re-raise the exception
+    # so Celery retries the entire task. Do NOT create HostedImage with partial/incomplete keys.
     keys = {}
     for size, (webp_bytes, width, height) in variants.items():
         key = s3_key_for(content_hash, size)
-        upload_variant(key, webp_bytes)
-        keys[size] = (key, width, height)
+        try:
+            upload_variant(key, webp_bytes)  # ← Raises exception if upload fails
+            keys[size] = (key, width, height)
+        except Exception as e:
+            # S3 upload failed (credentials, permissions, network, etc.)
+            # Re-raise so Celery retries the entire task.
+            # This prevents partial HostedImage creation with incomplete S3 keys.
+            logger.error(
+                "Failed to upload WebP variant for content_hash=%s, size=%s, key=%s: %s",
+                content_hash, size, key, str(e),
+                exc_info=True
+            )
+            raise
 
     # FB-safe JPEG copy for the extension's Marketplace upload (FB rejects our
     # WebP) — built only for custom-domain images that will actually use it.
-    upload_key = (
-        _make_and_upload_upload_variant(content_hash, image_bytes)
-        if build_upload_variant else ''
-    )
+    # Same error handling: if upload fails, re-raise to prevent partial HostedImage.
+    upload_key = ''
+    if build_upload_variant:
+        try:
+            upload_key = _make_and_upload_upload_variant(content_hash, image_bytes)
+        except Exception as e:
+            # S3 upload failed for JPEG variant. Re-raise so Celery retries.
+            logger.error(
+                "Failed to upload JPEG variant for content_hash=%s: %s",
+                content_hash, str(e),
+                exc_info=True
+            )
+            raise
 
+    # ✓ VALIDATED: All S3 uploads succeeded. Now safe to create HostedImage with
+    # complete S3 keys. If creation fails due to race condition (IntegrityError),
+    # another worker created it first; we catch that and use their record.
     large_key, large_width, large_height = keys['large']
     defaults = {
         'source_url': source_url,
@@ -292,6 +319,12 @@ def sync_listing_images(listing, image_urls):
     # listings (gumtree_profile_id is None) are unaffected. See the setting's
     # docstring in settings.py for how to revert.
     if getattr(settings, 'BYPASS_GUMTREE_IMAGE_HOSTING', False) and getattr(listing, 'gumtree_profile_id', None):
+        logger.info(
+            "BYPASS_GUMTREE_IMAGE_HOSTING enabled: skipping image slot creation for "
+            "Gumtree listing id=%s (gumtree_profile_id=%s)",
+            getattr(listing, "pk", None),
+            getattr(listing, 'gumtree_profile_id', None),
+        )
         return
     try:
         _sync_listing_images(listing, image_urls)
@@ -335,8 +368,38 @@ def _sync_listing_images(listing, image_urls):
     for position, url in enumerate(image_urls):
         slot = existing_slots.get(url)
         if slot is None:
-            slot = VehicleListingImage.objects.create(listing=listing, source_url=url, position=position)
-            new_slot_ids.append(slot.pk)
+            try:
+                # ✓ CREATE with explicit conflict handling: if a race condition
+                # creates a duplicate slot between our .all() fetch and this create,
+                # catch it and get the newly-created one instead of silently dropping
+                # this image from the listing.
+                slot = VehicleListingImage.objects.create(
+                    listing=listing,
+                    source_url=url,
+                    position=position
+                )
+                new_slot_ids.append(slot.pk)
+            except IntegrityError as e:
+                # Race condition: another process created this slot between our
+                # fetch above and this create. Get it and use it.
+                logger.warning(
+                    "IntegrityError creating image slot for listing id=%s, URL=%s "
+                    "(likely race condition); attempting to use existing slot",
+                    listing.id, url
+                )
+                try:
+                    slot = VehicleListingImage.objects.get(listing=listing, source_url=url)
+                    if slot.position != position:
+                        slot.position = position
+                        slot.save(update_fields=['position', 'updated_at'])
+                    new_slot_ids.append(slot.pk)
+                except VehicleListingImage.DoesNotExist:
+                    # Slot disappeared between our error and get attempt. Skip this image.
+                    logger.error(
+                        "Failed to create or retrieve image slot for listing id=%s, "
+                        "URL=%s after IntegrityError; image will be missing",
+                        listing.id, url
+                    )
         elif slot.position != position:
             slot.position = position
             slot.save(update_fields=['position', 'updated_at'])
