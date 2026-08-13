@@ -243,7 +243,8 @@ CELERY_TIMEZONE = env('CELERY_TIMEZONE')
 REDIS_HOST = env('REDIS_HOST')
 REDIS_PORT = env('REDIS_PORT')
 REDIS_DB = env('REDIS_DB')
-REDIS_PASSWORD = env('REDIS_PASSWORD')
+# REDIS_PASSWORD is optional; Channels Redis requires plain redis:// URLs without auth
+REDIS_PASSWORD = env('REDIS_PASSWORD', default='')
 REDIS_URL = env('REDIS_URL')
 
 # CORS Settings
