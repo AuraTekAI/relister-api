@@ -461,7 +461,7 @@ EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=Fa
 # call sites that invoke them for Gumtree. Set BYPASS_GUMTREE_IMAGE_HOSTING=False
 # in the env (no code changes needed) to fully restore the S3-backed pipeline
 # for Gumtree.
-BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=True)
+BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=False)
 # When True, the EasyVehicles adapter checks each gallery photo while parsing
 # and, for any full-size URL that isn't serving, stores the slide's displayed
 # (640x480) rendition instead.
