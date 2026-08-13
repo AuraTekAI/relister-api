@@ -25,6 +25,15 @@ def _rewrite_proxy_url(url, request):
     return f"{proxy_base}?url={quote(url, safe='')}"
 
 
+def _gumtree_hosting_bypassed(listing):
+    """TEMPORARY: True when settings.BYPASS_GUMTREE_IMAGE_HOSTING is on and
+    this listing is Gumtree-sourced. Callers use this to skip
+    HostedImage/VehicleListingImage entirely and serve the raw scraped URL
+    instead — including for listings that already have hosted rows from
+    before the flag was flipped on. See settings.py for how to revert."""
+    return bool(getattr(settings, 'BYPASS_GUMTREE_IMAGE_HOSTING', False) and getattr(listing, 'gumtree_profile_id', None))
+
+
 def _resolve_storefront_images(listing, size, request, require_hosted=False):
     """
     Ordered images for the public storefront: prefer our own S3/CDN URL for
@@ -46,6 +55,15 @@ def _resolve_storefront_images(listing, size, request, require_hosted=False):
     for images actually served from our own AWS (S3/CloudFront) copy; False
     means it's still the raw/proxied external source URL.
     """
+    if _gumtree_hosting_bypassed(listing):
+        # TEMPORARY bypass: never touch VehicleListingImage/HostedImage for
+        # this listing, even if hosted rows already exist — always serve the
+        # raw Gumtree URL, storefront included.
+        return [
+            {'url': url, 'is_hosted': False}
+            for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
     slots = list(listing.image_slots.select_related('hosted_image').order_by('position'))
     if not slots:
         if require_hosted:
@@ -154,7 +172,18 @@ def _resolve_extension_images(listing, request):
     extension's publish guard waits on this instead of calling Facebook with a
     fallback URL — see the sibling Gumtree resolver's docstring for why this
     matters: display must never block on hosting finishing, but a Facebook
-    upload must never use anything but our own S3 copy."""
+    upload must never use anything but our own S3 copy.
+
+    TEMPORARY: settings.BYPASS_GUMTREE_IMAGE_HOSTING takes priority over
+    everything above for Gumtree listings, unconditionally serving the raw
+    scraped URL instead of routing to _resolve_gumtree_hosted_only_images —
+    see _gumtree_hosting_bypassed.
+    """
+    if _gumtree_hosting_bypassed(listing):
+        return [
+            url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
+            if url
+        ]
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
@@ -367,7 +396,15 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return getattr(obj.user, 'phone_number', None)
 
     def get_images(self, obj):
-        return _resolve_storefront_images(obj, 'large', self.context.get('request'), require_hosted=True)
+        # _resolve_storefront_images returns [{'url', 'is_hosted'}, ...]
+        # unwrap to plain URL strings to match ProductListSerializer.get_image()
+        # and the frontend's VehicleDetail.images: string[] contract (the
+        # frontend never reads is_hosted). Serving the raw dicts here made
+        # next/image receive an object as `src`, which it silently renders as
+        # an empty src attribute -- the "Image is missing required src
+        # property" / empty-string console errors on the vehicle detail page.
+        images = _resolve_storefront_images(obj, 'large', self.context.get('request'), require_hosted=True)
+        return [img['url'] for img in images]
 
 
 class DealerListSerializer(serializers.ModelSerializer):

@@ -1061,16 +1061,45 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
     second return value (`images_ready`) is False whenever ANY url in the
     payload is still a raw fallback, and the extension's publish guard
     (publishListing.ts GUARD 1d) refuses to call Facebook until it's True. So
-    the raw-fallback URLs above only ever reach display, never Facebook."""
+    the raw-fallback URLs above only ever reach display, never Facebook.
+
+    Note: settings.BYPASS_GUMTREE_IMAGE_HOSTING is a separate, TEMPORARY testing
+    kill-switch (default True) that unconditionally forces raw URLs for Gumtree
+    regardless of any of the above; it's covered separately and explicitly
+    disabled in the other tests so they exercise the real, hosted-with-fallback policy."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='gum@test.invalid', password='x')
         self.request = RequestFactory().get('/api/vehicle-listing/custom-domain-listings/')
         self.profile = GumtreeProfileListing.objects.create(user=self.user)
 
-    def test_all_ready_publishes_only_our_hosted_jpegs(self):
+    def test_bypass_flag_forces_raw_urls_even_when_hosted(self):
+        """TEMPORARY kill-switch (default True): while it's on, Gumtree ignores
+        the hosted-only policy entirely — never serves our JPEG, even for a
+        fully-ready photo."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G1', seller_profile_id='P', gumtree_profile=self.profile,
+            images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
+        hosted = HostedImage.objects.create(
+            content_hash='7' * 64, large_image='k/large.webp',
+            upload_image='k/upload.jpg', status=HostedImage.STATUS_READY)
+        VehicleListingImage.objects.create(
+            listing=listing, source_url='https://images.gumtree.com.au/a.jpg',
+            position=0, hosted_image=hosted, status=VehicleListingImage.STATUS_READY)
+        VehicleListingImage.objects.create(
+            listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
+            position=1, status=VehicleListingImage.STATUS_READY)
+
+        payload = _resolve_extension_images(listing, self.request)
+
+        self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg',
+                                   'https://images.gumtree.com.au/b.jpg'])
+        self.assertFalse(any('upload.jpg' in u for u in payload))
+
+    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
+    def test_all_ready_publishes_only_our_hosted_jpegs(self):
+        listing = VehicleListing.objects.create(
+            user=self.user, list_id='G1b', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
         for i, letter in enumerate('ab'):
             hosted = HostedImage.objects.create(
@@ -1183,7 +1212,7 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
         self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg'])
         self.assertFalse(ready)
 
-    @override_settings(EXTENSION_USE_HOSTED_IMAGES=False)
+    @override_settings(EXTENSION_USE_HOSTED_IMAGES=False, BYPASS_GUMTREE_IMAGE_HOSTING=False)
     def test_gumtree_hosted_only_policy_is_independent_of_the_custom_domain_kill_switch(self):
         """Gumtree must keep this policy even while custom-domain's own
         staged-rollout switch is off — the two are unrelated rollouts."""
