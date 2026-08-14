@@ -21,6 +21,22 @@ import xml.etree.ElementTree as ET
 logging = logging.getLogger('gumtree')
 
 
+def build_gumtree_listing_url(listing_id):
+    """Build the public Gumtree ad URL for an ad id.
+
+    The init-data VIP endpoint we scrape returns the ad's *fields*, not its web
+    address (and the XML fallback shape carries even less), so there is nothing
+    in the response to copy into VehicleListing.url. Gumtree's canonical ad
+    pages are /s-ad/<suburb>/<category>/<title-slug>/<adId>, but the id-only
+    form below resolves to the same ad, which is all we need to store a working
+    link back to the source listing (the custom-domain scraper stores the real
+    detail-page URL the same way).
+    """
+    if not listing_id:
+        return None
+    return f"https://www.gumtree.com.au/s-ad/{listing_id}"
+
+
 def _apply_gumtree_update(existing, result):
     """Write freshly-scraped fields from `result` onto an existing
     VehicleListing and persist. Shared by the two "refresh a stale row"
@@ -42,6 +58,11 @@ def _apply_gumtree_update(existing, result):
     existing.images = result.get("image")
     existing.location = result.get("location")
     existing.vin = result.get("vin")
+    # Backfill the source URL on refresh too — rows created before this was
+    # populated (and rows whose ad id changed on a relist) still have it blank.
+    # Guarded so a missing url in `result` never wipes a good stored one.
+    if result.get("url"):
+        existing.url = result.get("url")
     existing.is_changed = True
     existing.save()
     sync_listing_images(existing, result.get("image"))
@@ -338,7 +359,9 @@ def get_gumtree_listing_details(listing_id):
             # 17-character Vehicle Identification Number. Not every dealer
             # fills this in on Gumtree, so it's optional — None when absent.
             "vin": category_info.get("VIN"),
-            "url": ""
+            # Was hardcoded to "" — every Gumtree listing was created with a blank
+            # url column as a result. Build the ad URL from the id we already have.
+            "url": build_gumtree_listing_url(listing_id),
         }
         if not listing_details:
             logging.error(f"No listing details found for listing ID: {listing_id}")
@@ -598,6 +621,14 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             # This ensures count matches the total number of valid listings scraped,
             # not just the ones eligible for updating.
             count+=1
+            # Backfill the source URL for rows created while it was hardcoded blank.
+            # Done here rather than only in _apply_gumtree_update because most
+            # branches below skip the update entirely when nothing changed, which
+            # would leave those rows blank forever. The URL is derived from the ad
+            # id we already have, so this costs no extra request.
+            if not already_exists.url:
+                already_exists.url = build_gumtree_listing_url(listing_id)
+                already_exists.save(update_fields=['url', 'updated_at'])
             logging.info(f"Listing already exists: {already_exists} and price is {already_exists.price}")
             if (already_exists.status in ["pending", "failed","sold"] and already_exists.created_at < timezone.now() - timedelta(days=1)):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status} and already exist title is {already_exists.year} {already_exists.make} {already_exists.model} and price is {already_exists.price} and mileage is {already_exists.mileage} and location is {already_exists.location}")
