@@ -22,9 +22,23 @@ class ListingUrlAdmin(admin.ModelAdmin):
 
 class VehicleListingAdmin(admin.ModelAdmin):
     list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id', 'vehicle_id')
+    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id', 'vehicle__year', 'vehicle__make', 'vehicle__model')
     list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
     actions = ['reactivate_sold_listings']
+
+    def get_search_results(self, request, queryset, search_term):
+        """
+        Override search to handle numeric vehicle_id searches
+        Allows searching by vehicle ID (e.g., "1012", "1153")
+        """
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+
+        # If search term is numeric, also search by vehicle_id
+        if search_term.isdigit():
+            queryset = queryset | VehicleListing.objects.filter(vehicle_id=int(search_term))
+            use_distinct = True
+
+        return queryset, use_distinct
 
     @admin.action(description="Reactivate selected listings (undo sold — dealer confirmed still for sale)")
     def reactivate_sold_listings(self, request, queryset):
