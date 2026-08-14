@@ -59,8 +59,31 @@ class FacebookProfileListing(models.Model):
 
     def __str__(self):
         return f"{self.url}"
+
+class Vehicle(models.Model):
+    """Vehicle specifications - stores actual vehicle data"""
+    vin = models.CharField(max_length=17, null=True, blank=True)
+    make = models.CharField(max_length=100, null=True, blank=True)
+    model = models.CharField(max_length=100, null=True, blank=True)
+    year = models.CharField(max_length=255, null=True, blank=True)
+    mileage = models.IntegerField(null=True, blank=True)
+    transmission = models.CharField(max_length=255, null=True, blank=True)
+    fuel_type = models.CharField(max_length=255, null=True, blank=True)
+    body_type = models.CharField(max_length=255, null=True, blank=True)
+    color = models.CharField(max_length=255, null=True, blank=True)
+    variant = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'VehicleListing_vehicle'
+
+    def __str__(self):
+        return f"{self.year} {self.make} {self.model}"
+
 class VehicleListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, null=True, blank=True)
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
     gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
