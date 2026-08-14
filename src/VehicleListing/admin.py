@@ -22,7 +22,7 @@ class ListingUrlAdmin(admin.ModelAdmin):
 
 class VehicleListingAdmin(admin.ModelAdmin):
     list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
+    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id', 'vehicle_id')
     list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
     actions = ['reactivate_sold_listings']
 
