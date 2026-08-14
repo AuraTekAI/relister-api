@@ -184,9 +184,13 @@ def _resolve_extension_images(listing, request):
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
-        # Return tuple (urls, all_hosted) to match all other return paths.
-        # For bypass path, images are raw Gumtree URLs, so all_hosted=False.
-        return urls, False
+        # Return tuple (urls, ready) to match all other return paths.
+        # In bypass mode the raw Gumtree URLs ARE the intended publish payload
+        # (Gumtree's CDN is CORS-friendly and loads fine from the dealer's own
+        # browser), so report ready=True — otherwise the extension's publish
+        # guard (GUARD 1d) would wait forever for S3 copies that are
+        # deliberately never produced while this flag is on.
+        return urls, True
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
