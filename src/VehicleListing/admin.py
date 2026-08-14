@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here
-from .models import VehicleListing, ListingUrl
+from .models import VehicleListing, ListingUrl, Vehicle
 from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,HostedImage,VehicleListingImage
 from .utils import reactivate_listing
 
@@ -34,6 +34,12 @@ class VehicleListingAdmin(admin.ModelAdmin):
             count += 1
         self.message_user(request, f"Reactivated {count} listing(s).")
 
+class VehicleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'year', 'make', 'model', 'body_type', 'fuel_type', 'transmission', 'mileage', 'color', 'vin', 'created_at', 'updated_at')
+    search_fields = ('year', 'make', 'model', 'vin', 'color')
+    list_filter = ('year', 'body_type', 'fuel_type', 'transmission')
+    readonly_fields = ('created_at', 'updated_at')
+
 class GumtreeProfileListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
     search_fields = ('user__email', 'url')
@@ -63,6 +69,7 @@ class InvoiceAdmin(admin.ModelAdmin):
 
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(VehicleListing, VehicleListingAdmin)
+admin.site.register(Vehicle, VehicleAdmin)
 admin.site.register(ListingUrl, ListingUrlAdmin)
 admin.site.register(FacebookListing, FacebookListingAdmin)
 admin.site.register(FacebookUserCredentials, FacebookUserCredentialsAdmin)
