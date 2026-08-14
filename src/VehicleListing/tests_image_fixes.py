@@ -1050,6 +1050,7 @@ class UploadVariantSourceScopingTests(TestCase):
         self.assertTrue(kwargs['build_upload_variant'], 'custom-domain image skipped its JPEG variant')
 
 
+@override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
 class ExtensionPayloadGumtreeGuardTests(TestCase):
     """Gumtree listings prefer OUR hosted JPEG per-photo the moment it's ready,
     and fall back to the raw Gumtree URL for anything not hosted yet (still
@@ -1063,20 +1064,24 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
     (publishListing.ts GUARD 1d) refuses to call Facebook until it's True. So
     the raw-fallback URLs above only ever reach display, never Facebook.
 
-    Note: settings.BYPASS_GUMTREE_IMAGE_HOSTING is a separate, TEMPORARY testing
-    kill-switch (default True) that unconditionally forces raw URLs for Gumtree
-    regardless of any of the above; it's covered separately and explicitly
-    disabled in the other tests so they exercise the real, hosted-with-fallback policy."""
+    Note: settings.BYPASS_GUMTREE_IMAGE_HOSTING is a separate, TEMPORARY
+    kill-switch (default True — see settings.py for why) that unconditionally
+    forces raw URLs for Gumtree regardless of any of the above. It's disabled
+    class-wide here so every test below exercises the real,
+    hosted-with-fallback policy, and re-enabled per-test for the one case that
+    covers the bypass itself."""
 
     def setUp(self):
         self.user = User.objects.create_user(email='gum@test.invalid', password='x')
         self.request = RequestFactory().get('/api/vehicle-listing/custom-domain-listings/')
         self.profile = GumtreeProfileListing.objects.create(user=self.user)
 
+    @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=True)
     def test_bypass_flag_forces_raw_urls_even_when_hosted(self):
         """TEMPORARY kill-switch (default True): while it's on, Gumtree ignores
         the hosted-only policy entirely — never serves our JPEG, even for a
-        fully-ready photo."""
+        fully-ready photo, and reports ready=True so the publish path isn't
+        left waiting on S3 copies that are deliberately never produced."""
         listing = VehicleListing.objects.create(
             user=self.user, list_id='G1', seller_profile_id='P', gumtree_profile=self.profile,
             images=['https://images.gumtree.com.au/a.jpg', 'https://images.gumtree.com.au/b.jpg'])
@@ -1090,11 +1095,13 @@ class ExtensionPayloadGumtreeGuardTests(TestCase):
             listing=listing, source_url='https://images.gumtree.com.au/b.jpg',
             position=1, status=VehicleListingImage.STATUS_READY)
 
-        payload = _resolve_extension_images(listing, self.request)
+        payload, ready = _resolve_extension_images(listing, self.request)
 
         self.assertEqual(payload, ['https://images.gumtree.com.au/a.jpg',
                                    'https://images.gumtree.com.au/b.jpg'])
         self.assertFalse(any('upload.jpg' in u for u in payload))
+        self.assertTrue(ready, 'bypass mode must report ready — the raw Gumtree '
+                               'URL IS the intended payload while it is on')
 
     @override_settings(BYPASS_GUMTREE_IMAGE_HOSTING=False)
     def test_all_ready_publishes_only_our_hosted_jpegs(self):

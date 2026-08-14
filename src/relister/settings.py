@@ -461,7 +461,20 @@ EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=Fa
 # call sites that invoke them for Gumtree. Set BYPASS_GUMTREE_IMAGE_HOSTING=False
 # in the env (no code changes needed) to fully restore the S3-backed pipeline
 # for Gumtree.
-BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=False)
+#
+# DEFAULT TRUE: the hosted pipeline hands the extension a direct S3 URL
+# (public_url_for falls back to a virtual-hosted S3 URL because
+# AWS_CLOUDFRONT_DOMAIN is unset), and the images bucket blocks anonymous reads
+# — verified: an anonymous GET to
+# official-relister-image-storage.s3.ap-southeast-2.amazonaws.com returns
+# 403 AccessDenied, not 404 NoSuchKey. So every photo that finished the S3
+# pipeline rendered as a broken <img> on the extension's home page, and only
+# the ones still pending/failed showed at all (those fall back to the raw
+# Gumtree URL). Defaulting on keeps display working without needing an env
+# var set on each host. To go back to the S3 pipeline, front the bucket with
+# CloudFront (set AWS_CLOUDFRONT_DOMAIN) or make the vehicle-images prefix
+# publicly readable, THEN set BYPASS_GUMTREE_IMAGE_HOSTING=False.
+BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=True)
 # When True, the EasyVehicles adapter checks each gallery photo while parsing
 # and, for any full-size URL that isn't serving, stores the slide's displayed
 # (640x480) rendition instead.
