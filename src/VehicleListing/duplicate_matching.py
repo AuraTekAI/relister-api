@@ -34,7 +34,8 @@ def is_valid_vin(vin):
 
 def find_existing_vehicle(dealer_queryset, *, vin=None, make=None, model=None,
                            variant=None, year=None, color=None, mileage=None,
-                           body_type=None, fuel_type=None, transmission=None):
+                           body_type=None, fuel_type=None, transmission=None,
+                           exclude_list_ids=None):
     """Find the VehicleListing (within `dealer_queryset`) that represents the
     SAME physical vehicle as a freshly-scraped listing that did NOT match on
     `list_id` — i.e. the source's own id for this vehicle changed (a Gumtree
@@ -67,7 +68,21 @@ def find_existing_vehicle(dealer_queryset, *, vin=None, make=None, model=None,
          cheaper mistake than a wrong merge.
 
     Returns the matched VehicleListing, or None (caller should create new).
+
+    `exclude_list_ids`: ad/stock ids that are ALSO present in the current
+    scrape run. A row whose list_id is in this set belongs to an ad that is
+    still live on the profile right now — it cannot be "the old ad id for
+    this same car", because both ads exist simultaneously. Merging such a row
+    would (a) hide a genuinely distinct second vehicle behind one row, and
+    (b) make the row's list_id flip-flop between the two live ads on every
+    scrape, so only one ad's data ever survives. Rows for currently-live ads
+    are therefore never merge candidates: every ad the profile shows right
+    now keeps its own row, and merging only happens against rows whose ad has
+    disappeared (a genuine relist/renewal).
     """
+    if exclude_list_ids:
+        dealer_queryset = dealer_queryset.exclude(list_id__in=[str(i) for i in exclude_list_ids])
+
     if is_valid_vin(vin):
         by_vin = dealer_queryset.filter(vin__iexact=vin.strip()).first()
         if by_vin:

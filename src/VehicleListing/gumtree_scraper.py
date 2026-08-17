@@ -608,6 +608,13 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
     logging.info("Starting gumtree_profile_listings_thread execution")
     count = 0
     incoming_list_ids = set()
+    # Every ad id in THIS scrape, known upfront. Passed to find_existing_vehicle
+    # so rows belonging to ads that are still live on the profile are never
+    # merge candidates — merging one live ad into another live ad's row hides a
+    # real vehicle and makes the row's list_id flip-flop between the two ads on
+    # every scrape. Dedup should only fold an ad into a row whose own ad has
+    # VANISHED from the profile (a genuine relist/renewal under a new ad id).
+    all_incoming_list_ids = {str(l.get("id")) for l in listings if l.get("id")}
     for current_list in listings:
         listing_id = current_list.get("id")
         if not listing_id:
@@ -706,6 +713,10 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 year=result.get("year"), color=result.get("color"), mileage=result.get("mileage"),
                 body_type=result.get("body_type"), fuel_type=result.get("fuel_type"),
                 transmission=result.get("transmission"),
+                # Rows whose ads are still live on this profile are not merge
+                # candidates — each live ad keeps its own row (see the param's
+                # docstring in duplicate_matching.py).
+                exclude_list_ids=all_incoming_list_ids,
             )
             if matched is not None:
                 logging.info(
