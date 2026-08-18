@@ -69,6 +69,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=15, null=True, blank=True)
     gumtree_dealarship_url = models.URLField(max_length=200, null=True, blank=True)
     facebook_dealership_url = models.URLField(max_length=200, null=True, blank=True)
+    # Facebook dealership account(s) this user has logged into the extension
+    # with, e.g. ["facebook_account_1", "facebook_account_2"]. Appended at
+    # extension login (the extension reports which FB account the browser is
+    # signed into); each account is stored exactly once, in first-seen order.
+    # Existing users simply start with [] — see add_dealer_facebook_profile().
+    dealer_facebook_profile = models.JSONField(default=list, blank=True)
     custom_domain_url = models.URLField(max_length=200, null=True, blank=True)
     dealership_license_number = models.CharField(max_length=100, null=True, blank=True)
     dealership_license_phone = models.CharField(max_length=20, null=True, blank=True)
@@ -138,6 +144,31 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    def add_dealer_facebook_profile(self, accounts):
+        """Append Facebook dealership account(s) to dealer_facebook_profile.
+
+        Accepts a single value or a list. Blank values are ignored and an
+        account already present is never added twice (first-seen order is
+        kept). Works for existing users whose field is still NULL/[] — the
+        list is created on first use. Saves only when something new was
+        actually added; returns True in that case, False otherwise.
+        """
+        if not accounts:
+            return False
+        if not isinstance(accounts, (list, tuple)):
+            accounts = [accounts]
+        current = list(self.dealer_facebook_profile or [])
+        added = False
+        for account in accounts:
+            account = str(account).strip()
+            if account and account not in current:
+                current.append(account)
+                added = True
+        if added:
+            self.dealer_facebook_profile = current
+            self.save(update_fields=['dealer_facebook_profile'])
+        return added
 
 
 class NotificationPreference(models.Model):
