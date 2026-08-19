@@ -4,19 +4,18 @@ Why this exists
 ---------------
 The Vehicle table was added (migration 0052) to normalize spec attributes out
 of VehicleListing, but no application code ever CREATED or LINKED Vehicle rows
-— scrapers kept writing only the denormalized listing columns, so
+— scrapers kept writing only denormalized listing columns, so
 `listing.vehicle` stayed NULL forever and every read that followed the
-relationship found nothing (the "data is in Vehicle but the join returns
-nothing" production issue; migration 0053 then papered over it by copying data
-back onto the listing, i.e. duplication instead of a working relationship).
+relationship found nothing. Migration 0055 built the relationship + backfill;
+migration 0056 then finished the normalization by DROPPING the duplicated spec
+columns from VehicleListing entirely — Vehicle is now the only place spec data
+lives, and this module is the only code that writes it:
 
-This module is the single place that maintains the relationship:
-
-  * sync_vehicle_for_listing(listing)  — called by every scraper create/update
-    path. Ensures the listing points at a Vehicle row and that the Vehicle row
-    carries the freshest spec data.
-  * backfill_vehicles(queryset)        — one-shot linker for rows created
-    before this existed (also run by migration 0055).
+  * sync_vehicle_for_listing(listing, spec) — called by every scraper
+    create/update path with the freshly-parsed spec. Ensures the listing
+    points at a Vehicle row and that the Vehicle carries the freshest data.
+  * spec_from_result(result) — builds that spec dict from a scraper's parsed
+    `result` (its keys match the Vehicle field names one-for-one).
 
 Matching is deliberately as conservative as duplicate_matching.py: VIN first,
 then an UNAMBIGUOUS structural match, always scoped to one (user,
@@ -30,17 +29,19 @@ from .duplicate_matching import is_valid_vin, normalize_for_matching
 
 logger = logging.getLogger('vehicle_sync')
 
-# Attributes owned by Vehicle. Name-for-name identical on both models so sync
-# is a plain copy. (price/description/images/location/condition etc. stay
-# listing-only: they describe the AD, not the car.)
+# Attributes owned by Vehicle. (price/description/images/location/condition
+# etc. stay on VehicleListing: they describe the AD, not the car.)
 VEHICLE_SPEC_FIELDS = (
     'vin', 'make', 'model', 'year', 'mileage',
     'transmission', 'fuel_type', 'body_type', 'color', 'variant',
 )
 
 
-def _spec_from_listing(listing):
-    return {f: getattr(listing, f, None) for f in VEHICLE_SPEC_FIELDS}
+def spec_from_result(result):
+    """Spec dict for sync_vehicle_for_listing() from a scraper's parsed
+    `result` dict — both scrapers use the Vehicle field names as their result
+    keys, so this is a plain projection."""
+    return {f: result.get(f) for f in VEHICLE_SPEC_FIELDS}
 
 
 def _dealer_vehicles(listing):
@@ -89,21 +90,22 @@ def _find_matching_vehicle(listing, spec):
     return None  # ambiguous or nothing — caller creates a fresh Vehicle
 
 
-def sync_vehicle_for_listing(listing):
-    """Ensure `listing.vehicle` points at a Vehicle carrying the listing's
-    current spec data. Idempotent; never raises (scrapers must not die over
-    bookkeeping). Returns the Vehicle or None.
+def sync_vehicle_for_listing(listing, spec):
+    """Ensure `listing.vehicle` points at a Vehicle carrying `spec` (the
+    freshly-scraped spec data, usually spec_from_result(result)). Idempotent;
+    never raises (scrapers must not die over bookkeeping). Returns the
+    Vehicle or None.
 
     Rules:
       * listing already linked      -> push fresh spec onto ITS vehicle
                                        (Vehicle stays the source of truth as
                                        the car's data changes between scrapes)
       * matching dealer vehicle     -> link to it and refresh its spec
-      * otherwise                   -> create a new Vehicle from the listing
+      * otherwise                   -> create a new Vehicle from the spec
     """
     from .models import Vehicle
     try:
-        spec = _spec_from_listing(listing)
+        spec = {f: spec.get(f) for f in VEHICLE_SPEC_FIELDS}
 
         vehicle = listing.vehicle
         if vehicle is None:
@@ -129,20 +131,3 @@ def sync_vehicle_for_listing(listing):
         logger.exception("vehicle sync failed for listing id=%s — listing left unlinked",
                          getattr(listing, 'id', None))
         return None
-
-
-def backfill_vehicles(queryset=None, batch_size=500):
-    """Link every unlinked VehicleListing to a (possibly shared) Vehicle.
-    Safe to re-run; processes oldest-first so the first listing of a car seeds
-    the Vehicle and later duplicates attach to it. Returns (linked, created)."""
-    from .models import Vehicle, VehicleListing
-    qs = queryset if queryset is not None else VehicleListing.objects.all()
-    qs = qs.filter(vehicle__isnull=True).order_by('id')
-    linked = 0
-    created_before = Vehicle.objects.count()
-    for listing in qs.iterator(chunk_size=batch_size):
-        if sync_vehicle_for_listing(listing) is not None:
-            linked += 1
-    created = Vehicle.objects.count() - created_before
-    logger.info("backfill_vehicles: linked=%s vehicles_created=%s", linked, created)
-    return linked, created

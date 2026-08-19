@@ -11,7 +11,7 @@ from django.utils import timezone
 from .custom_domain_adapters import resolve_for_url
 from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
-from .vehicle_sync import sync_vehicle_for_listing
+from .vehicle_sync import spec_from_result, sync_vehicle_for_listing
 from .models import CustomDomainProfileListing, VehicleListing
 from .utils import reactivate_listing
 
@@ -96,27 +96,18 @@ def get_custom_domain_listings(profile_url, user):
 
 
 def _apply_listing_update(existing, result):
-    existing.year = result.get("year")
-    existing.make = result.get("make")
-    existing.model = result.get("model")
-    existing.body_type = result.get("body_type")
-    existing.fuel_type = result.get("fuel_type")
-    existing.color = result.get("color")
-    existing.variant = result.get("variant")
     existing.price = str(result.get("price")) if result.get("price") is not None else existing.price
-    existing.mileage = result.get("mileage")
     # Flag rows with no usable odometer (None/0) so the duplicate-matcher
     # knows mileage can't be used as a tie-breaker for this listing.
     existing.mileage_unavailable = result.get("mileage") in (None, 0)
-    existing.transmission = result.get("transmission")
     existing.description = result.get("description")
     existing.images = result.get("image")
     existing.location = result.get("location")
     existing.is_changed = True
     existing.save()
-    # Propagate the refreshed spec data onto the canonical Vehicle row (and
-    # link legacy rows that predate the Vehicle table). Never raises.
-    sync_vehicle_for_listing(existing)
+    # Spec attributes (make/model/year/mileage/...) live ONLY on the
+    # canonical Vehicle row — push the refreshed values there. Never raises.
+    sync_vehicle_for_listing(existing, spec_from_result(result))
     sync_listing_images(existing, result.get("image"))
 
 def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter):
@@ -212,17 +203,8 @@ def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id
                 user=user,
                 custom_domain_profile=profile_instance,
                 list_id=listing_id,
-                year=result.get("year"),
-                body_type=result.get("body_type"),
-                fuel_type=result.get("fuel_type"),
-                color=result.get("color"),
-                variant=result.get("variant"),
-                make=result.get("make"),
-                mileage=result.get("mileage"),
                 mileage_unavailable=result.get("mileage") in (None, 0),
-                model=result.get("model"),
                 price=str(result.get("price")) if result.get("price") is not None else None,
-                transmission=result.get("transmission"),
                 description=result.get("description"),
                 images=result.get("image"),
                 url=result.get("url"),
@@ -231,9 +213,10 @@ def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id
                 is_relist=False,
                 seller_profile_id=profile_id,
             )
-        # Create/link the canonical Vehicle row for this listing (VIN or
+        # Spec attributes (make/model/year/mileage/...) live ONLY on the
+        # canonical Vehicle row — create/link it from the parsed spec (VIN or
         # structural reuse within this dealer, new row otherwise).
-        sync_vehicle_for_listing(vehicle_listing)
+        sync_vehicle_for_listing(vehicle_listing, spec_from_result(result))
         sync_listing_images(vehicle_listing, result.get("image"))
         logger.info(f"Created custom domain vehicle_listing: {vehicle_listing}")
     except IntegrityError:

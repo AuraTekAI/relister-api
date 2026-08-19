@@ -3,7 +3,7 @@ from zenrows import ZenRowsClient
 from .models import VehicleListing,GumtreeProfileListing
 from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
-from .vehicle_sync import sync_vehicle_for_listing
+from .vehicle_sync import spec_from_result, sync_vehicle_for_listing
 import logging
 import time
 import random
@@ -44,21 +44,11 @@ def _apply_gumtree_update(existing, result):
     branches below and by the VIN/structural duplicate-match branch, so a
     relisted-under-a-new-ad-id vehicle is updated identically to a normal
     same-ad refresh."""
-    existing.year = result.get("year")
-    existing.make = result.get("make")
-    existing.model = result.get("model")
-    existing.body_type = result.get("body_type")
-    existing.fuel_type = result.get("fuel_type")
-    existing.color = result.get("color")
-    existing.variant = result.get("variant")
     existing.price = str(result.get("price"))
-    existing.mileage = result.get("mileage")
     existing.mileage_unavailable = result.get("mileage_unavailable", False)
-    existing.transmission = result.get("transmission")
     existing.description = result.get("description")
     existing.images = result.get("image")
     existing.location = result.get("location")
-    existing.vin = result.get("vin")
     # Backfill the source URL on refresh too — rows created before this was
     # populated (and rows whose ad id changed on a relist) still have it blank.
     # Guarded so a missing url in `result` never wipes a good stored one.
@@ -66,9 +56,9 @@ def _apply_gumtree_update(existing, result):
         existing.url = result.get("url")
     existing.is_changed = True
     existing.save()
-    # Propagate the refreshed spec data onto the canonical Vehicle row (and
-    # link legacy rows that predate the Vehicle table). Never raises.
-    sync_vehicle_for_listing(existing)
+    # Spec attributes (make/model/year/mileage/vin/...) live ONLY on the
+    # canonical Vehicle row — push the refreshed values there. Never raises.
+    sync_vehicle_for_listing(existing, spec_from_result(result))
     sync_listing_images(existing, result.get("image"))
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -741,29 +731,20 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 user=user,
                 gumtree_profile=gumtree_profile_listing_instance,
                 list_id=listing_id,
-                year=result.get("year"),
-                body_type=result.get("body_type"),
-                fuel_type=result.get("fuel_type"),
-                color=result.get("color"),
-                variant=result.get("variant"),
-                make=result.get("make"),
-                mileage=result.get("mileage"),
                 mileage_unavailable=result.get("mileage_unavailable", False),
-                model=result.get("model"),
                 price=str(result.get("price")),
-                transmission=result.get("transmission"),
                 description=result.get("description"),
                 images=result.get("image"),
                 url=result.get("url"),
                 location=result.get("location"),
-                vin=result.get("vin"),
                 status="pending",
                 is_relist=False,
                 seller_profile_id=seller_id
             )
-            # Create/link the canonical Vehicle row for this listing (VIN or
-            # structural reuse within this dealer, new row otherwise).
-            sync_vehicle_for_listing(vehicle_listing)
+            # Spec attributes (make/model/year/mileage/vin/...) live ONLY on
+            # the canonical Vehicle row — create/link it from the parsed spec
+            # (VIN or structural reuse within this dealer, new row otherwise).
+            sync_vehicle_for_listing(vehicle_listing, spec_from_result(result))
             sync_listing_images(vehicle_listing, result.get("image"))
             logging.info(f"Created new vehicle_listing: {vehicle_listing}")
         # Update GumtreeProfileListing instance with the count of processed listings

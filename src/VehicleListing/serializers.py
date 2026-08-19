@@ -251,16 +251,15 @@ _AU_STATE_FULL_NAMES = {
 
 
 class VehicleSpecSourcingMixin:
-    """Resolve vehicle-spec attributes through the VehicleListing→Vehicle
-    relationship instead of trusting the listing's denormalized copies.
+    """Source vehicle-spec attributes from the canonical Vehicle row.
 
-    This is the fix for the "request queries VehicleListing but the data lives
-    in Vehicle" bug: when a listing is linked to a Vehicle, the Vehicle's
-    values win for every spec field present in the output; a legacy/unlinked
-    row (vehicle=None) falls back to its own columns, so old data keeps
-    working unchanged. Done in to_representation (not per-field overrides) so
-    the response SHAPE is byte-for-byte identical for the extension and
-    storefront — only the source of truth changes.
+    VehicleListing's duplicated spec columns were dropped (migration 0056), so
+    they no longer appear in ModelSerializer field introspection — this mixin
+    injects them into the output from `instance.vehicle` instead, keeping the
+    response SHAPE byte-for-byte identical for the extension and storefront:
+    the same keys, now always fed by the single source of truth. An unlinked
+    row (vehicle=None — shouldn't exist post-backfill) serializes the keys as
+    null rather than crashing.
 
     Views serializing many rows should .select_related('vehicle') — the mixin
     then adds zero extra queries.
@@ -269,26 +268,21 @@ class VehicleSpecSourcingMixin:
         'vin', 'make', 'model', 'year', 'mileage',
         'transmission', 'fuel_type', 'body_type', 'color', 'variant',
     )
+    # Serializers that expose only a subset of the spec keys (the storefront
+    # Product shapes) narrow this; None means "all of VEHICLE_SPEC_FIELDS".
+    SPEC_OUTPUT_FIELDS = None
 
     @staticmethod
     def resolve_spec(obj, field):
-        """One spec attribute for `obj`, preferring the linked Vehicle."""
+        """One spec attribute for `obj`, read off the linked Vehicle."""
         vehicle = getattr(obj, 'vehicle', None)
-        if vehicle is not None:
-            value = getattr(vehicle, field, None)
-            if value is not None:
-                return value
-        return getattr(obj, field, None)
+        return getattr(vehicle, field, None) if vehicle is not None else None
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         vehicle = getattr(instance, 'vehicle', None)
-        if vehicle is not None:
-            for field in self.VEHICLE_SPEC_FIELDS:
-                if field in data:
-                    value = getattr(vehicle, field, None)
-                    if value is not None:
-                        data[field] = value
+        for field in (self.SPEC_OUTPUT_FIELDS or self.VEHICLE_SPEC_FIELDS):
+            data[field] = getattr(vehicle, field, None) if vehicle is not None else None
         return data
 
 
@@ -406,12 +400,18 @@ class ProductListSerializer(VehicleSpecSourcingMixin, serializers.ModelSerialize
     name = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
 
+    # Spec keys injected from the linked Vehicle by the mixin (they are no
+    # longer model fields, so they can't appear in Meta.fields) — same output
+    # keys as before the columns were dropped.
+    SPEC_OUTPUT_FIELDS = (
+        'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+        'mileage', 'transmission', 'color',
+    )
+
     class Meta:
         model = VehicleListing
         fields = [
             'id', 'name', 'image', 'price',
-            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
-            'mileage', 'transmission', 'color',
             'description', 'location', 'total_view_count',
         ]
 
@@ -430,13 +430,20 @@ class ProductDetailSerializer(VehicleSpecSourcingMixin, serializers.ModelSeriali
     images = serializers.SerializerMethodField()
     dealer_phone = serializers.SerializerMethodField()
 
+    # Spec keys injected from the linked Vehicle by the mixin — same output
+    # keys as before the duplicated columns were dropped (no color/vin here,
+    # matching the original shape).
+    SPEC_OUTPUT_FIELDS = (
+        'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+        'transmission', 'mileage',
+    )
+
     class Meta:
         model = VehicleListing
         fields = [
             'id', 'name', 'images', 'price',
-            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
-            'description', 'location', 'condition', 'transmission',
-            'mileage', 'exterior_colour', 'interior_colour', 'dealer_phone',
+            'description', 'location', 'condition',
+            'exterior_colour', 'interior_colour', 'dealer_phone',
         ]
 
     def get_name(self, obj):

@@ -1910,7 +1910,7 @@ def get_products_by_category(request, category):
     """
     products = VehicleListing.objects.filter(
         is_listed=True,
-        make__iexact=category
+        vehicle__make__iexact=category
     ).select_related('vehicle').order_by('-updated_at')
 
     if not products.exists():
@@ -1994,35 +1994,42 @@ def get_popular_vehicles(request):
     return JsonResponse({'results': serializer.data}, status=200)
 
 
-# Numeric-range params: (query param prefix, model field, cast target field name).
+# Spec attributes live on the canonical Vehicle row (VehicleListing's
+# duplicated columns were dropped in migration 0056), so filters on them go
+# through the listing→vehicle join — hence the query-param → ORM-path maps
+# below. price/location stay listing-own columns (they describe the ad).
+#
 # price/year are stored as CharField (scrapers normalize them to plain digit
 # strings, e.g. "45000", but the column itself has no numeric constraint) so a
 # min/max range needs an explicit Cast rather than a plain __gte/__lte, which
 # would otherwise compare lexicographically. The regex guard excludes any
 # legacy/dirty non-digit values instead of letting the Cast error out.
-_NUMERIC_RANGE_FIELDS = {
-    'year': 'year',
-    'mileage': 'mileage',
-    'price': 'price',
+#
+# Exact (case-insensitive) equality per value — dropdown-style filters with a
+# small, clean set of values in the data (e.g. transmission is always
+# "Automatic"/"Manual"); repeat/comma-separate the param for an OR match.
+_EXACT_MULTI_FIELDS = {
+    'transmission': 'vehicle__transmission',
+    'body_type': 'vehicle__body_type',
 }
-# Fields matched with an exact (case-insensitive) equality check per value —
-# these are dropdown-style filters with a small, clean set of values in the
-# data (e.g. transmission is always "Automatic"/"Manual"), so the frontend
-# sends one of a known value (repeat/comma-separate the param for an OR match).
-_EXACT_MULTI_FIELDS = ['transmission', 'body_type']
-# Fields matched with a partial (case-insensitive) substring check per value —
-# these carry free-text/compound values in the data (e.g. model is a full
-# trim string like "Outlander ES ZL", fuel_type is "Petrol - Unleaded"), so an
-# exact match would almost never hit; substring match is what users expect
-# when typing a make/model/colour into a search box.
-_PARTIAL_MULTI_FIELDS = ['make', 'model', 'fuel_type', 'color', 'location']
+# Partial (case-insensitive) substring per value — free-text/compound values
+# in the data (e.g. model is a full trim string like "Outlander ES ZL",
+# fuel_type is "Petrol - Unleaded"), so an exact match would almost never
+# hit; substring match is what users expect when typing into a search box.
+_PARTIAL_MULTI_FIELDS = {
+    'make': 'vehicle__make',
+    'model': 'vehicle__model',
+    'fuel_type': 'vehicle__fuel_type',
+    'color': 'vehicle__color',
+    'location': 'location',
+}
 
 ORDERING_OPTIONS = {
     'newest': '-updated_at',
     'price_asc': 'price_int',
     'price_desc': '-price_int',
-    'mileage_asc': 'mileage',
-    'mileage_desc': '-mileage',
+    'mileage_asc': 'vehicle__mileage',
+    'mileage_desc': '-vehicle__mileage',
     'year_asc': 'year_int',
     'year_desc': '-year_int',
 }
@@ -2072,40 +2079,42 @@ def search_products(request):
             errors[param_name] = 'must be an integer'
             return None
 
-    # Filters below match on the listing's denormalized spec columns — these
-    # are kept in lockstep with the canonical Vehicle row by
-    # vehicle_sync.sync_vehicle_for_listing(), and they carry the search
-    # indexes. Output still resolves through the Vehicle relationship (see
+    # Spec filters match on the canonical Vehicle row through the
+    # listing→vehicle join (the listing's own duplicated spec columns were
+    # dropped in migration 0056; vehicle_vin_idx/vehicle_mmy_idx carry the
+    # lookups). Output resolves through the same relationship (see
     # VehicleSpecSourcingMixin), hence the select_related.
     products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle')
 
     name = params.get('name')
     if name:
         products = products.filter(
-            Q(make__icontains=name) | Q(model__icontains=name) | Q(variant__icontains=name)
+            Q(vehicle__make__icontains=name)
+            | Q(vehicle__model__icontains=name)
+            | Q(vehicle__variant__icontains=name)
         )
 
-    for field in _EXACT_MULTI_FIELDS:
-        values = multi_values(field)
+    for param, path in _EXACT_MULTI_FIELDS.items():
+        values = multi_values(param)
         if values:
             match = Q()
             for value in values:
-                match |= Q(**{f'{field}__iexact': value})
+                match |= Q(**{f'{path}__iexact': value})
             products = products.filter(match)
 
-    for field in _PARTIAL_MULTI_FIELDS:
-        values = multi_values(field)
+    for param, path in _PARTIAL_MULTI_FIELDS.items():
+        values = multi_values(param)
         if values:
             match = Q()
             for value in values:
-                match |= Q(**{f'{field}__icontains': value})
+                match |= Q(**{f'{path}__icontains': value})
             products = products.filter(match)
 
     years = multi_values('year')
     if years:
         match = Q()
         for year in years:
-            match |= Q(year__iexact=year)
+            match |= Q(vehicle__year__iexact=year)
         products = products.filter(match)
 
     range_filters = {
@@ -2117,8 +2126,8 @@ def search_products(request):
     needs_year_cast = any(range_filters['year'])
     needs_price_cast = any(range_filters['price'])
     if needs_year_cast:
-        products = products.filter(year__regex=r'^\d+$').annotate(
-            year_int=Cast('year', output_field=IntegerField())
+        products = products.filter(vehicle__year__regex=r'^\d+$').annotate(
+            year_int=Cast('vehicle__year', output_field=IntegerField())
         )
     if needs_price_cast:
         products = products.filter(price__regex=r'^\d+$').annotate(
@@ -2133,9 +2142,9 @@ def search_products(request):
 
     range_min, range_max = range_filters['mileage']
     if range_min is not None:
-        products = products.filter(mileage__gte=range_min)
+        products = products.filter(vehicle__mileage__gte=range_min)
     if range_max is not None:
-        products = products.filter(mileage__lte=range_max)
+        products = products.filter(vehicle__mileage__lte=range_max)
 
     range_min, range_max = range_filters['price']
     if range_min is not None:
@@ -2151,8 +2160,8 @@ def search_products(request):
             price_int=Cast('price', output_field=IntegerField())
         )
     elif ordering in ('year_asc', 'year_desc') and not needs_year_cast:
-        products = products.filter(year__regex=r'^\d+$').annotate(
-            year_int=Cast('year', output_field=IntegerField())
+        products = products.filter(vehicle__year__regex=r'^\d+$').annotate(
+            year_int=Cast('vehicle__year', output_field=IntegerField())
         )
 
     limit = parse_int('limit')
