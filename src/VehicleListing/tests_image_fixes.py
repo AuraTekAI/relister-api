@@ -24,6 +24,7 @@ import os
 from unittest import mock
 
 from django.core.management import call_command
+from django.conf import settings
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.client import RequestFactory
 from PIL import Image
@@ -779,9 +780,34 @@ class HostedUrlTests(SimpleTestCase):
         self.assertEqual(public_url_for('vehicle-images/ab/hash/upload.jpg'),
                          'https://images.test.invalid/vehicle-images/ab/hash/upload.jpg')
 
-    @override_settings(AWS_CLOUDFRONT_DOMAIN='', AWS_VEHICLE_IMAGE_BUCKET='b', AWS_VEHICLE_IMAGE_REGION='ap-southeast-2')
-    def test_direct_s3_url_used_without_cdn(self):
-        self.assertEqual(public_url_for('k'), 'https://b.s3.ap-southeast-2.amazonaws.com/k')
+    @override_settings(
+        AWS_CLOUDFRONT_DOMAIN='',
+        AWS_VEHICLE_IMAGE_BUCKET='test-image-bucket',
+        AWS_VEHICLE_IMAGE_REGION='ap-southeast-2',
+        AWS_VEHICLE_IMAGE_ACCESS_KEY_ID='AKIAtest',
+        AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY='secrettest',
+    )
+    def test_presigned_s3_url_used_without_cdn(self):
+        """No CloudFront -> a *presigned* URL, not a bare virtual-hosted one.
+        The bucket 403s anonymous reads, so an unsigned URL is unfetchable by
+        both the extension's home-page <img> and its Facebook photo upload."""
+        url = public_url_for('k')
+        self.assertTrue(url.startswith('https://test-image-bucket.s3.ap-southeast-2.amazonaws.com/k?'), url)
+        self.assertIn('X-Amz-Signature=', url)
+        self.assertIn('X-Amz-Algorithm=AWS4-HMAC-SHA256', url)  # SigV4, not the SigV2 default
+        self.assertIn(f'X-Amz-Expires={settings.VEHICLE_IMAGE_PRESIGNED_URL_TTL}', url)
+
+    @override_settings(
+        AWS_CLOUDFRONT_DOMAIN='',
+        AWS_VEHICLE_IMAGE_BUCKET='test-image-bucket',
+        AWS_VEHICLE_IMAGE_REGION='ap-southeast-2',
+        VEHICLE_IMAGE_PRESIGN_URLS=False,
+    )
+    def test_unsigned_s3_url_when_presigning_disabled(self):
+        """Kill-switch returns to the plain virtual-hosted URL, which the
+        bucket does serve today (public prefix + CORS *)."""
+        self.assertEqual(public_url_for('k'),
+                         'https://test-image-bucket.s3.ap-southeast-2.amazonaws.com/k')
 
     def test_upload_key_sits_beside_the_webp_variants(self):
         digest = 'a' * 64

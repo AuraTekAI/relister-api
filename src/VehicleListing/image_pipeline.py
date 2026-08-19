@@ -20,6 +20,7 @@ import io
 import logging
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -162,13 +163,44 @@ def s3_key_for(content_hash, size, ext='webp'):
     return f"{prefix}/{content_hash[:2]}/{content_hash}/{size}.{ext}"
 
 
+# Cached per credential/region triple. public_url_for presigns one URL per
+# photo, so an extension home-page response asks for a client dozens of times;
+# building a fresh boto3 client each time costs ~100ms of session/config setup
+# apiece. Keying on the settings triple (rather than a bare module global) keeps
+# override_settings in tests honest — a changed bucket region builds its own
+# client instead of silently reusing the first one.
+_s3_client_cache = {}
+
+
 def _s3_client():
-    return boto3.client(
-        's3',
-        aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_VEHICLE_IMAGE_REGION,
+    cache_key = (
+        settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+        settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+        settings.AWS_VEHICLE_IMAGE_REGION,
     )
+    client = _s3_client_cache.get(cache_key)
+    if client is None:
+        client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_VEHICLE_IMAGE_REGION,
+            # Both settings matter only for generate_presigned_url, and both are
+            # wrong by default. Botocore still presigns with SigV2 unless told
+            # otherwise, which signs against the global us-east-1 endpoint and
+            # in path style: the bucket is in ap-southeast-2, so that URL comes
+            # back as a cross-region redirect rather than the image. SigV4 plus
+            # virtual addressing yields the regional
+            # https://<bucket>.s3.<region>.amazonaws.com/<key>?X-Amz-... form
+            # that resolves directly. Harmless for put_object/delete_objects,
+            # which already resolved the regional endpoint on their own.
+            config=BotoConfig(
+                signature_version='s3v4',
+                s3={'addressing_style': 'virtual'},
+            ),
+        )
+        _s3_client_cache[cache_key] = client
+    return client
 
 
 def upload_variant(key, body_bytes, content_type='image/webp'):
@@ -196,11 +228,38 @@ def delete_variants_from_s3(hosted_image):
 
 
 def public_url_for(key):
+    """Fetchable URL for one S3 object.
+
+    CloudFront path (AWS_CLOUDFRONT_DOMAIN set) is unchanged: a plain CDN URL,
+    no signing, because the distribution fronts the bucket with its own access.
+
+    Without CloudFront we sign the URL (unless VEHICLE_IMAGE_PRESIGN_URLS is
+    off). Both consumers fetch these URLs anonymously from outside our
+    infrastructure — the extension home page as an <img>, and the Facebook
+    publish as a `fetch()` issued from the Facebook tab itself (see
+    fillVehicleForm.ts uploadPhotos, which downloads each photo and uploads the
+    blob). Signing makes that work whatever the bucket policy happens to be.
+    See settings.VEHICLE_IMAGE_PRESIGN_URLS for why it is belt-and-braces
+    rather than strictly required today.
+
+    Returns None if signing fails, which every caller already treats as "not
+    hosted yet" and falls back to the raw scraped source URL for.
+    """
     if not key:
         return None
     if settings.AWS_CLOUDFRONT_DOMAIN:
         return f"https://{settings.AWS_CLOUDFRONT_DOMAIN}/{key}"
-    return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
+    if not getattr(settings, 'VEHICLE_IMAGE_PRESIGN_URLS', True):
+        return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
+    try:
+        return _s3_client().generate_presigned_url(
+            'get_object',
+            Params={'Bucket': settings.AWS_VEHICLE_IMAGE_BUCKET, 'Key': key},
+            ExpiresIn=settings.VEHICLE_IMAGE_PRESIGNED_URL_TTL,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        logger.error("Failed to presign S3 URL for key %s: %s", key, exc)
+        return None
 
 
 def _make_and_upload_upload_variant(content_hash, image_bytes):

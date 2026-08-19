@@ -412,6 +412,30 @@ AWS_S3_VEHICLE_IMAGE_PREFIX = env('AWS_S3_VEHICLE_IMAGE_PREFIX', default='vehicl
 # or a custom domain like images.autorelister.com.au). Left blank in dev to fall
 # back to a direct virtual-hosted S3 URL; set in production.
 AWS_CLOUDFRONT_DOMAIN = env('AWS_CLOUDFRONT_DOMAIN', default='')
+# When True (and no CloudFront distribution is configured), public_url_for
+# signs each S3 image URL instead of emitting a bare virtual-hosted one.
+#
+# NOTE ON WHY THIS IS OPTIONAL: the vehicle-images prefix is in fact already
+# publicly readable and already serves CORS `Access-Control-Allow-Origin: *`
+# — verified 2026-08-19 by fetching a real object unsigned from an off-origin
+# request: HTTP 200, image/jpeg, with the CORS headers present. An earlier
+# note in this file claimed the bucket denied anonymous reads based on a 403
+# from s3.../vehicle-images/<nonexistent-key>; that was a false signal. S3
+# answers 403 rather than 404 for a missing key whenever the caller lacks
+# s3:ListBucket, so a 403 there says nothing about whether real objects are
+# readable. They are.
+#
+# Signing is kept on anyway because it is correct regardless of what the
+# bucket policy says, so a future policy tightening can't silently break
+# publishing. Set VEHICLE_IMAGE_PRESIGN_URLS=False to go back to plain
+# unsigned URLs (no code change needed) — verified to work today.
+VEHICLE_IMAGE_PRESIGN_URLS = env.bool('VEHICLE_IMAGE_PRESIGN_URLS', default=True)
+# Lifetime of those presigned URLs. Must comfortably outlast the gap between
+# the extension fetching a listing from the API and finishing its Facebook
+# upload — a bulk relist run works through its queue for hours, and an expired
+# URL would surface as a silently dropped photo. 12h is generous for that and
+# still far short of a link being worth passing around. SigV4 caps this at 7 days.
+VEHICLE_IMAGE_PRESIGNED_URL_TTL = env.int('VEHICLE_IMAGE_PRESIGNED_URL_TTL', default=12 * 60 * 60)
 # Max width in px for each generated WebP variant. Keys must stay exactly
 # 'thumbnail'/'medium'/'large' — image_pipeline.get_or_create_ready_hosted_image
 # indexes the render result by these names.
@@ -462,19 +486,26 @@ EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=Fa
 # in the env (no code changes needed) to fully restore the S3-backed pipeline
 # for Gumtree.
 #
-# DEFAULT TRUE: the hosted pipeline hands the extension a direct S3 URL
-# (public_url_for falls back to a virtual-hosted S3 URL because
-# AWS_CLOUDFRONT_DOMAIN is unset), and the images bucket blocks anonymous reads
-# — verified: an anonymous GET to
+# DEFAULT FALSE as of the presigned-URL change: Gumtree listings use the S3
+# pipeline again.
+#
+# This flag defaulted True only because the images bucket blocks anonymous
+# reads — an anonymous GET to
 # official-relister-image-storage.s3.ap-southeast-2.amazonaws.com returns
-# 403 AccessDenied, not 404 NoSuchKey. So every photo that finished the S3
-# pipeline rendered as a broken <img> on the extension's home page, and only
-# the ones still pending/failed showed at all (those fall back to the raw
-# Gumtree URL). Defaulting on keeps display working without needing an env
-# var set on each host. To go back to the S3 pipeline, front the bucket with
-# CloudFront (set AWS_CLOUDFRONT_DOMAIN) or make the vehicle-images prefix
-# publicly readable, THEN set BYPASS_GUMTREE_IMAGE_HOSTING=False.
-BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=True)
+# 403 AccessDenied, not 404 NoSuchKey — so a hosted photo rendered as a broken
+# <img> on the extension's home page and, less visibly, could not be uploaded
+# to Facebook either (the extension fetches each URL itself from the Facebook
+# tab). public_url_for now issues presigned GET URLs instead of bare
+# virtual-hosted ones, so both of those work without a bucket policy change or
+# a CloudFront distribution, and the bypass is no longer needed.
+#
+# With it off, _resolve_gumtree_hosted_only_images resolves each photo
+# per-slot: the raw Gumtree URL shows on the home page the moment a listing is
+# scraped, and each photo switches to its S3 copy as the async pipeline
+# finishes it — which is the URL the extension then uploads to Facebook.
+# Set BYPASS_GUMTREE_IMAGE_HOSTING=True in the env to fall back to serving raw
+# Gumtree URLs everywhere again (no code change needed).
+BYPASS_GUMTREE_IMAGE_HOSTING = env.bool('BYPASS_GUMTREE_IMAGE_HOSTING', default=False)
 # When True, the EasyVehicles adapter checks each gallery photo while parsing
 # and, for any full-size URL that isn't serving, stores the slide's displayed
 # (640x480) rendition instead.
