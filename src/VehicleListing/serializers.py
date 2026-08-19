@@ -250,7 +250,49 @@ _AU_STATE_FULL_NAMES = {
 }
 
 
-class VehicleListingSerializer(serializers.ModelSerializer):
+class VehicleSpecSourcingMixin:
+    """Resolve vehicle-spec attributes through the VehicleListing→Vehicle
+    relationship instead of trusting the listing's denormalized copies.
+
+    This is the fix for the "request queries VehicleListing but the data lives
+    in Vehicle" bug: when a listing is linked to a Vehicle, the Vehicle's
+    values win for every spec field present in the output; a legacy/unlinked
+    row (vehicle=None) falls back to its own columns, so old data keeps
+    working unchanged. Done in to_representation (not per-field overrides) so
+    the response SHAPE is byte-for-byte identical for the extension and
+    storefront — only the source of truth changes.
+
+    Views serializing many rows should .select_related('vehicle') — the mixin
+    then adds zero extra queries.
+    """
+    VEHICLE_SPEC_FIELDS = (
+        'vin', 'make', 'model', 'year', 'mileage',
+        'transmission', 'fuel_type', 'body_type', 'color', 'variant',
+    )
+
+    @staticmethod
+    def resolve_spec(obj, field):
+        """One spec attribute for `obj`, preferring the linked Vehicle."""
+        vehicle = getattr(obj, 'vehicle', None)
+        if vehicle is not None:
+            value = getattr(vehicle, field, None)
+            if value is not None:
+                return value
+        return getattr(obj, field, None)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        vehicle = getattr(instance, 'vehicle', None)
+        if vehicle is not None:
+            for field in self.VEHICLE_SPEC_FIELDS:
+                if field in data:
+                    value = getattr(vehicle, field, None)
+                    if value is not None:
+                        data[field] = value
+        return data
+
+
+class VehicleListingSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     relisting_dates = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     images_ready = serializers.SerializerMethodField()
@@ -359,7 +401,7 @@ class CustomDomainVehicleListingSerializer(VehicleListingSerializer):
         return bool(obj.images)
 
 
-class ProductListSerializer(serializers.ModelSerializer):
+class ProductListSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     """Lightweight, public-facing shape for storefront product grids/cards."""
     name = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
@@ -374,14 +416,15 @@ class ProductListSerializer(serializers.ModelSerializer):
         ]
 
     def get_name(self, obj):
-        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+        parts = [self.resolve_spec(obj, f) for f in ('year', 'make', 'model')]
+        return ' '.join(str(part) for part in parts if part)
 
     def get_image(self, obj):
         images = _resolve_storefront_images(obj, 'medium', self.context.get('request'), require_hosted=True)
         return images[0]['url'] if images else None
 
 
-class ProductDetailSerializer(serializers.ModelSerializer):
+class ProductDetailSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     """Public single-product detail shape, keyed by the slug lookup endpoint."""
     name = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
@@ -397,7 +440,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_name(self, obj):
-        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+        parts = [self.resolve_spec(obj, f) for f in ('year', 'make', 'model')]
+        return ' '.join(str(part) for part in parts if part)
 
     def get_dealer_phone(self, obj):
         return getattr(obj.user, 'phone_number', None)

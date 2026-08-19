@@ -61,7 +61,16 @@ class FacebookProfileListing(models.Model):
         return f"{self.url}"
 
 class Vehicle(models.Model):
-    """Vehicle specifications - stores actual vehicle data"""
+    """The physical vehicle — canonical owner of the spec attributes
+    (vin/make/model/year/variant/body/fuel/transmission/color/mileage).
+
+    One Vehicle can be referenced by MANY VehicleListing rows (the same car
+    re-scraped from Gumtree and a dealer's own site, or relisted under a new
+    source ad id). Rows are created/linked/updated exclusively through
+    vehicle_sync.sync_vehicle_for_listing() so spec data always has a single
+    source of truth; VehicleListing keeps denormalized copies of these fields
+    only as a scrape snapshot (see the note on VehicleListing below).
+    """
     vin = models.CharField(max_length=17, null=True, blank=True)
     make = models.CharField(max_length=100, null=True, blank=True)
     model = models.CharField(max_length=100, null=True, blank=True)
@@ -82,8 +91,24 @@ class Vehicle(models.Model):
         return f"{self.year} {self.make} {self.model}"
 
 class VehicleListing(models.Model):
+    """One marketplace representation (a Gumtree ad, a dealer-site stock page)
+    of a physical Vehicle.
+
+    Spec attributes (make/model/year/...) are OWNED by the linked `vehicle`
+    row — API reads resolve them through the relationship (see
+    serializers.VehicleSpecSourcingMixin). The same-named columns kept here are
+    a denormalized scrape snapshot retained for backward compatibility, for the
+    dedup indexes below (vl_dealer_vin_idx / vl_dealer_mmy_idx) and for legacy
+    rows that predate the Vehicle table; scraper writes keep both in sync via
+    vehicle_sync.sync_vehicle_for_listing(). Do not read spec fields directly
+    off this model in new API code — follow the relationship.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, null=True, blank=True)
+    # SET_NULL (not CASCADE): a Vehicle row is bookkeeping — deleting one must
+    # never destroy the dealer's listing rows, their images or relist history.
+    vehicle = models.ForeignKey(
+        Vehicle, on_delete=models.SET_NULL, null=True, blank=True, related_name='listings'
+    )
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
     gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)

@@ -3,6 +3,7 @@ from zenrows import ZenRowsClient
 from .models import VehicleListing,GumtreeProfileListing
 from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
+from .vehicle_sync import sync_vehicle_for_listing
 import logging
 import time
 import random
@@ -65,6 +66,9 @@ def _apply_gumtree_update(existing, result):
         existing.url = result.get("url")
     existing.is_changed = True
     existing.save()
+    # Propagate the refreshed spec data onto the canonical Vehicle row (and
+    # link legacy rows that predate the Vehicle table). Never raises.
+    sync_vehicle_for_listing(existing)
     sync_listing_images(existing, result.get("image"))
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -757,6 +761,9 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 is_relist=False,
                 seller_profile_id=seller_id
             )
+            # Create/link the canonical Vehicle row for this listing (VIN or
+            # structural reuse within this dealer, new row otherwise).
+            sync_vehicle_for_listing(vehicle_listing)
             sync_listing_images(vehicle_listing, result.get("image"))
             logging.info(f"Created new vehicle_listing: {vehicle_listing}")
         # Update GumtreeProfileListing instance with the count of processed listings

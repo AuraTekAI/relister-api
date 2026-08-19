@@ -1067,7 +1067,7 @@ def get_user_gumtree_profile_vehicle_listings(request):
     vehicle_listings = VehicleListing.objects.filter(
         user=user,
         gumtree_profile=gumtree_profile
-    ).select_related('gumtree_profile').order_by('-updated_at')
+    ).select_related('gumtree_profile', 'vehicle').order_by('-updated_at')
 
     serializer = VehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
     return JsonResponse({
@@ -1102,7 +1102,7 @@ def get_user_custom_domain_profile_vehicle_listings(request):
     vehicle_listings = VehicleListing.objects.filter(
         user=user,
         custom_domain_profile=custom_domain_profile
-    ).select_related('custom_domain_profile').order_by('-updated_at')
+    ).select_related('custom_domain_profile', 'vehicle').order_by('-updated_at')
 
     serializer = CustomDomainVehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
     return JsonResponse({
@@ -1776,7 +1776,7 @@ def get_old_vehicle_listings(request):
             is_relist=False,
             sales=False,
             user=user
-        ).order_by("listed_on")
+        ).select_related('vehicle').order_by("listed_on")
         
         # Serialize the listings using the existing serializer. Request context
         # is required so DNA image URLs get rewritten to the proxy — the extension
@@ -1883,7 +1883,7 @@ def get_all_products(request):
     except ValueError:
         return JsonResponse({'error': 'limit and offset must be integers'}, status=400)
 
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-updated_at')
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-updated_at')
     total_count = products.count()
     page = products[offset:offset + limit]
 
@@ -1911,7 +1911,7 @@ def get_products_by_category(request, category):
     products = VehicleListing.objects.filter(
         is_listed=True,
         make__iexact=category
-    ).order_by('-updated_at')
+    ).select_related('vehicle').order_by('-updated_at')
 
     if not products.exists():
         return JsonResponse({
@@ -1936,7 +1936,7 @@ def get_product_by_slug(request, name, vehicle_id):
     `vehicle_id` (the trailing integer) — `name` is decorative and never
     validated against the row's actual make/model/year.
     """
-    product = VehicleListing.objects.select_related('user').filter(pk=vehicle_id, is_listed=True).first()
+    product = VehicleListing.objects.select_related('user', 'vehicle').filter(pk=vehicle_id, is_listed=True).first()
     if not product:
         return JsonResponse({'error': 'Product not found'}, status=404)
 
@@ -1975,7 +1975,7 @@ def get_latest_arrivals(request):
     Public, unauthenticated list of the 4 most recently added vehicles,
     e.g. GET /api/vehicle-listing/latest-arrivals/
     """
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
@@ -1988,7 +1988,7 @@ def get_popular_vehicles(request):
     Public, unauthenticated list of the 4 most-viewed vehicles, e.g.
     GET /api/vehicle-listing/popular-vehicles/
     """
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-total_view_count', '-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
@@ -2072,7 +2072,12 @@ def search_products(request):
             errors[param_name] = 'must be an integer'
             return None
 
-    products = VehicleListing.objects.filter(is_listed=True)
+    # Filters below match on the listing's denormalized spec columns — these
+    # are kept in lockstep with the canonical Vehicle row by
+    # vehicle_sync.sync_vehicle_for_listing(), and they carry the search
+    # indexes. Output still resolves through the Vehicle relationship (see
+    # VehicleSpecSourcingMixin), hence the select_related.
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle')
 
     name = params.get('name')
     if name:

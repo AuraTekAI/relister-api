@@ -1,7 +1,14 @@
-# Generated migration to add missing ForeignKey fields that were in the model but missing from the database
+# HISTORICAL NO-OP (kept so databases that recorded this name stay consistent).
+#
+# This migration originally re-ADDED the gumtree_profile / facebook_profile /
+# custom_domain_profile / custom_domain_url ForeignKeys — but every one of those
+# fields has been part of the migration state since 0001_initial (and the
+# 0024 dnacarsales→custom_domain rename). Applying it on any freshly-migrated
+# database therefore failed with `DuplicateColumn: gumtree_profile_id`, which is
+# exactly what broke fresh deploys and made the test suite unable to build its
+# database. The fields were never missing; the operations were removed.
 
-from django.db import migrations, models
-import django.db.models.deletion
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
@@ -10,25 +17,4 @@ class Migration(migrations.Migration):
         ('VehicleListing', '0044_fbverificationevent'),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name='vehiclelisting',
-            name='gumtree_profile',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='VehicleListing.gumtreeprofilelisting'),
-        ),
-        migrations.AddField(
-            model_name='vehiclelisting',
-            name='facebook_profile',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='VehicleListing.facebookprofilelisting'),
-        ),
-        migrations.AddField(
-            model_name='vehiclelisting',
-            name='custom_domain_profile',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='VehicleListing.customdomainprofilelisting'),
-        ),
-        migrations.AddField(
-            model_name='vehiclelisting',
-            name='custom_domain_url',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='custom_domain_vehicle_listings', to='VehicleListing.listingurl'),
-        ),
-    ]
+    operations = []
