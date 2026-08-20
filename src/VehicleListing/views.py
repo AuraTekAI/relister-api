@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent,VehicleListingImage
+from .image_pipeline import ensure_listing_image_ingest
+from .serializers import _resolve_extension_images
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -1109,6 +1111,55 @@ def get_user_custom_domain_profile_vehicle_listings(request):
         'count': vehicle_listings.count(),
         'custom_domain_url': custom_domain_url,
         'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_listing_images_status(request, listing_id):
+    """Lazy image pipeline's publish-time trigger + progress report.
+
+    The extension calls this right BEFORE publishing one specific listing
+    (publishListing.ts GUARD 2b) and polls it until `ingest_complete` is true.
+    Each call idempotently queues the S3 ingest for THIS listing's photos —
+    nothing is downloaded or stored for any other listing, which is what keeps
+    S3 usage proportional to what actually gets published (scrape time creates
+    bookkeeping slots only; see image_pipeline.sync_listing_images).
+
+    Response:
+      ingest_complete — every photo reached a terminal state (ready/failed);
+                        the wait-loop key. True as well for listings with no
+                        tracked slots (e.g. hosting bypassed), so the extension
+                        never blocks on a listing the pipeline doesn't manage.
+      images          — the exact URL list the extension should publish with
+                        (hosted S3 copies where ready, source fallback else),
+                        refreshed AFTER ingestion so the caller can replace the
+                        stale URLs it fetched with the listing collection.
+      images_ready    — true only when every URL in `images` is our S3 copy.
+    """
+    listing = VehicleListing.objects.filter(pk=listing_id, user=request.user).first()
+    if not listing:
+        return JsonResponse({'error': 'Listing not found'}, status=404)
+
+    queued_now = ensure_listing_image_ingest(listing)
+
+    counts = {status: 0 for status, _label in VehicleListingImage.STATUS_CHOICES}
+    for row in listing.image_slots.values('status').annotate(n=Count('id')):
+        counts[row['status']] = row['n']
+    total = sum(counts.values())
+    in_flight = counts['pending'] + counts['queued'] + counts['processing']
+
+    urls, images_ready = _resolve_extension_images(listing, request)
+    return JsonResponse({
+        'listing_id': listing.id,
+        'total': total,
+        'ready': counts['ready'],
+        'failed': counts['failed'],
+        'in_flight': in_flight,
+        'queued_now': queued_now,
+        'ingest_complete': in_flight == 0,
+        'images': urls,
+        'images_ready': images_ready,
     }, status=200)
 
 

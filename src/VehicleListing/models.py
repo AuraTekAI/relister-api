@@ -531,11 +531,17 @@ class VehicleListingImage(models.Model):
     what guarantees an unchanged photo is never re-downloaded or re-enqueued.
     """
     STATUS_PENDING = 'pending'
+    # Claimed by ensure_listing_image_ingest(): a Celery task has been enqueued
+    # for this slot but hasn't started (or is between retry attempts). Distinct
+    # from 'pending' so the lazy publish-time trigger is idempotent — repeated
+    # polls of the images-status endpoint never enqueue the same slot twice.
+    STATUS_QUEUED = 'queued'
     STATUS_PROCESSING = 'processing'
     STATUS_READY = 'ready'
     STATUS_FAILED = 'failed'
     STATUS_CHOICES = [
         (STATUS_PENDING, 'Pending'),
+        (STATUS_QUEUED, 'Queued'),
         (STATUS_PROCESSING, 'Processing'),
         (STATUS_READY, 'Ready'),
         (STATUS_FAILED, 'Failed'),

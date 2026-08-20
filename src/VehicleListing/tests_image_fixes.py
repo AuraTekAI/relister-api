@@ -447,6 +447,7 @@ class ImageProxyRetryTests(SimpleTestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # Issue 4 (second half) — duplicates must not be reintroduced downstream
 # ─────────────────────────────────────────────────────────────────────────────
+@override_settings(IMAGE_INGEST_ON_SCRAPE=True)  # these tests cover the (optional) eager path
 class SyncListingImagesTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email='dealer@test.invalid', password='x')
@@ -497,6 +498,7 @@ class SyncListingImagesTests(TestCase):
             sync_listing_images(self.listing, ['https://x.invalid/a.jpg'])  # must not raise
 
 
+@override_settings(IMAGE_INGEST_ON_SCRAPE=True)  # eager path — see SyncListingImagesTests
 class SyncListingImagesAutocommitTests(TransactionTestCase):
     """Same reconcile, but under production's autocommit semantics.
 

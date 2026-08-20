@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    get_listing_images_status,
     get_user_gumtree_profile_vehicle_listings,
     update_vehicle_listing_listed_on,
     update_vehicle_listing_is_changed,
@@ -57,6 +58,10 @@ urlpatterns = [
     path('categories/<str:category>/', get_products_by_category, name='get_products_by_category'),
     path('vehicle/<str:name>-<int:vehicle_id>/', get_product_by_slug, name='get_product_by_slug'),
     path('vehicle/<int:vehicle_id>/increment-view/', increment_product_view_count, name='increment_product_view_count'),
+    # Lazy image pipeline: the extension calls this right before publishing one
+    # listing — it queues that listing's S3 ingest (idempotent) and reports
+    # progress + the fresh hosted URLs to publish with.
+    path('listing/<int:listing_id>/images-status/', get_listing_images_status, name='get_listing_images_status'),
     path('latest-arrivals/', get_latest_arrivals, name='get_latest_arrivals'),
     path('popular-vehicles/', get_popular_vehicles, name='get_popular_vehicles'),
     path('search/', search_products, name='search_products'),

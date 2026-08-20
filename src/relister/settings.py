@@ -468,6 +468,16 @@ VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', def
 # fix on. Flip back to False to instantly revert to the old proxy-everything path.
 EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
 
+# Lazy image pipeline (default): scraping only records image slots — the
+# actual download + S3 upload for a listing's photos is deferred until that
+# ONE listing is about to be published (extension hits
+# /api/vehicle-listing/listing/<id>/images-status/, which queues its ingest).
+# Prevents a scrape of 50 products × 20 photos from storing ~1,000 images
+# upfront for listings that may never be published. Set True to restore the
+# old eager behaviour (enqueue every photo at scrape time) — env-only flip,
+# no code deploy needed.
+IMAGE_INGEST_ON_SCRAPE = env.bool('IMAGE_INGEST_ON_SCRAPE', default=False)
+
 # ── TEMPORARY: bypass the S3 hosted-image pipeline for Gumtree listings ────
 # For testing, Gumtree-sourced listings skip HostedImage/VehicleListingImage
 # ingestion entirely: no download/convert/upload Celery work runs for new

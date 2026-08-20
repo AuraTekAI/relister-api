@@ -3,12 +3,15 @@ Vehicle photo ingestion pipeline: download a scraped image once, convert it to
 three WebP sizes, upload to our own S3 bucket, and record it so the storefront
 API can serve it instead of the original Gumtree/dealer URL.
 
-Call graph:
+Call graph (lazy, publish-time ingestion — the default):
   gumtree_scraper.py / custom_domain_scraper.py
-      -> sync_listing_images(listing, urls)      [diff against existing slots, enqueue new ones]
+      -> sync_listing_images(listing, urls)      [diff against existing slots; slots stay 'pending']
+  views.get_listing_images_status (extension calls it right before publishing ONE listing)
+      -> ensure_listing_image_ingest(listing)    [claims that listing's slots, enqueues]
           -> tasks.process_vehicle_listing_image_task (Celery, per slot)
               -> download_image_bytes -> content_hash_for -> get_or_create_ready_hosted_image
                   -> build_variant_bytes -> upload_variant (S3)
+(Set IMAGE_INGEST_ON_SCRAPE=True to restore eager enqueueing at scrape time.)
 
 Deletion is the mirror image: VehicleListing.image_slots cascade-delete with
 their listing, VehicleListing/signals.py notices each slot's post_delete and
@@ -22,8 +25,12 @@ import logging
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.utils import timezone
 from PIL import Image, ImageOps
 from zenrows import ZenRowsClient
 
@@ -467,7 +474,16 @@ def _sync_listing_images(listing, image_urls):
     if stale_urls:
         VehicleListingImage.objects.filter(listing=listing, source_url__in=stale_urls).delete()
 
-    if new_slot_ids:
+    # LAZY PIPELINE (default): slots are created as bookkeeping only — no
+    # download/S3 upload happens at scrape time. Ingestion for a listing is
+    # triggered on demand, right before THAT listing is published, via
+    # ensure_listing_image_ingest() (called by the images-status endpoint the
+    # extension polls before each publish). This is deliberate: scraping 50
+    # products × 20 photos used to enqueue ~1,000 downloads/uploads upfront,
+    # storing images for listings that might never be published. Set
+    # IMAGE_INGEST_ON_SCRAPE=True in the env to restore the old eager
+    # behaviour (no code deploy needed).
+    if new_slot_ids and getattr(settings, 'IMAGE_INGEST_ON_SCRAPE', False):
         from .tasks import process_vehicle_listing_image_task
 
         # Stagger by 1 second per image within this listing (countdown=index)
@@ -479,3 +495,53 @@ def _sync_listing_images(listing, image_urls):
                 process_vehicle_listing_image_task.apply_async(args=[pk], countdown=index)
 
         transaction.on_commit(_enqueue)
+
+
+# A slot claimed as queued/processing whose task apparently died (worker
+# restart, lost broker message) is re-claimable after this long. Generous on
+# purpose: the ingest task's own retry backoff can legitimately keep a slot
+# in-flight for tens of minutes (retry_backoff_max=600 × max_retries=5).
+STALE_INGEST_AGE = timedelta(hours=1)
+
+
+def ensure_listing_image_ingest(listing):
+    """Queue the S3 ingest tasks for THIS listing's unprocessed photos.
+
+    The lazy-pipeline trigger: called (repeatedly — it's idempotent) by the
+    images-status endpoint when the extension is about to publish `listing`.
+    Only this listing's photos are downloaded/stored; nothing is queued for
+    any other listing, which is what keeps S3 usage proportional to what
+    actually gets published.
+
+    Claims slots atomically (pending → queued) so concurrent polls can't
+    double-enqueue, and re-claims queued/processing slots untouched for over
+    STALE_INGEST_AGE — a task lost to a worker restart must not block the
+    listing forever. Returns how many slots were (re-)queued.
+    """
+    from .models import VehicleListingImage
+    from .tasks import process_vehicle_listing_image_task
+
+    now = timezone.now()
+    stale_cutoff = now - STALE_INGEST_AGE
+    claimable_pks = list(
+        VehicleListingImage.objects.filter(listing=listing).filter(
+            Q(status=VehicleListingImage.STATUS_PENDING)
+            | Q(status__in=[VehicleListingImage.STATUS_QUEUED,
+                            VehicleListingImage.STATUS_PROCESSING],
+                updated_at__lt=stale_cutoff)
+        ).values_list('pk', flat=True)
+    )
+    if not claimable_pks:
+        return 0
+
+    VehicleListingImage.objects.filter(pk__in=claimable_pks).update(
+        status=VehicleListingImage.STATUS_QUEUED, updated_at=now
+    )
+
+    def _enqueue():
+        # Same 1s-per-image stagger rationale as the (optional) eager path.
+        for index, pk in enumerate(claimable_pks):
+            process_vehicle_listing_image_task.apply_async(args=[pk], countdown=index)
+
+    transaction.on_commit(_enqueue)
+    return len(claimable_pks)
