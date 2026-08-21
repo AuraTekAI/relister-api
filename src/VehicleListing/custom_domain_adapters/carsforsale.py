@@ -229,16 +229,35 @@ class CarsForSaleAdapter(DomainAdapter):
     def _title(year, make, model, variant):
         return " ".join(str(p) for p in (year, make, model, variant) if p)
 
+    _LOCATION_RE = re.compile(r"([A-Za-z][A-Za-z .'-]{1,40}),\s*(WA|NSW|VIC|QLD|SA|TAS|ACT|NT)\b")
+
     def discover_dealer_location(self, profile_url):
         """Best-effort dealer suburb/state from the showroom (used at signup to
         fill the listing `location`, which per-listing is null here). Returns
-        None when nothing is certain — never a guess."""
+        None when nothing is certain — never a guess.
+
+        The showroom header renders the dealer name and the "Suburb, STATE"
+        line as SIBLING elements (`.showroom-header > h_/p`). Joining the whole
+        page with spaces used to merge them ("A&H AUTOHUB Welshpool, WA"), and
+        the suburb capture swallowed the dealer name ("H AUTOHUB Welshpool" —
+        the '&' is all that stopped it taking the full name). So: read the
+        header's own <p> first, and keep the whole-page fallback joined with
+        newlines so a match can never span two elements."""
         html = _render(profile_url or self.profile_url)
         if not html:
             return None
-        text = BeautifulSoup(html, "html.parser").get_text(" ")
-        m = re.search(r"([A-Za-z][A-Za-z .'-]{1,40}),\s*(WA|NSW|VIC|QLD|SA|TAS|ACT|NT)\b", text)
-        if m:
+        soup = BeautifulSoup(html, "html.parser")
+
+        header = soup.find(class_="showroom-header")
+        candidates = [p.get_text(" ") for p in header.find_all("p")] if header else []
+        # \n as the joiner: the suburb charset has no newline, so text from two
+        # different elements (dealer name + address) can't fuse into one match.
+        candidates.append(soup.get_text("\n"))
+
+        for text in candidates:
+            m = self._LOCATION_RE.search(text or "")
+            if not m:
+                continue
             suburb, state = _clean(m.group(1)), normalize_au_state(m.group(2))
             if suburb and state:
                 return {"suburb": suburb, "state": state}
