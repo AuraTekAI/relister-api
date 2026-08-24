@@ -4,7 +4,7 @@ import re
 
 import requests
 
-from .base import DomainAdapter
+from .base import DomainAdapter, carssr_image_urls
 from ..make_normalizer import normalize_make
 
 logger = logging.getLogger("custom_domain")
@@ -106,14 +106,23 @@ def _extract_car_object(rsc: str) -> dict | None:
     return None
 
 
-def _extract_images(rsc: str) -> list[str]:
-    """Pull image URLs out of the carSSR images array."""
-    images = []
-    for m in re.finditer(r'"image"\s*:\s*\{\s*"url"\s*:\s*"([^"]+)"', rsc):
-        url = m.group(1)
-        if url and url not in images and "/photo/" in url and "thumb" not in url:
-            images.append(url)
-    return images
+def _accept_image(url: str) -> bool:
+    """Buckingham's real gallery photos live under /photo/; thumbnails are
+    separate renditions of the same image and would publish as duplicates."""
+    return "/photo/" in url and "thumb" not in url
+
+
+def _extract_images(car: dict | None, rsc: str) -> list[str]:
+    """Pull image URLs out of THIS vehicle's carSSR images array.
+
+    Scoped to the parsed `car` object. Previously this regexed the whole
+    decoded RSC payload, which also carries the dealer's related/similar
+    stock — so a listing collected other vehicles' photos alongside its own.
+    See carssr_image_urls() in base.py for the full rationale.
+    """
+    return carssr_image_urls(
+        car, rsc, accept=_accept_image, logger=logger, context="buckinghamautos"
+    )
 
 
 class BuckinghamAutosAdapter(DomainAdapter):
@@ -236,7 +245,7 @@ class BuckinghamAutosAdapter(DomainAdapter):
         transmission = car.get("simple_transmission") or car.get("trans")
         colour = _normalize_color(car.get("colour"))
 
-        images = _extract_images(rsc)
+        images = _extract_images(car, rsc)
         description = car.get("description") or ""
         # Mirror the DNA adapter's rule: only prepend the mileage line when
         # the carSSR payload actually has per-vehicle copy. ~98% of

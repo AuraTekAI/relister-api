@@ -17,6 +17,7 @@ VirtualYard's multi-dealer marketplace: dealers live under
 Everything parsed maps to an existing field via the standard `result` dict; no
 new column/table is introduced.
 """
+import copy
 import logging
 import re
 
@@ -197,13 +198,44 @@ class CarsForSaleAdapter(DomainAdapter):
         node = soup.find(class_=re.compile(r"\bdetails-price\b"))
         return _digits(node.get_text(" ")) if node else None
 
+    # Blocks that carry OTHER vehicles' photos: the dealer's full stock
+    # carousel ("stacked carousel seller-all") and the usual
+    # related/similar/recently-viewed rails. Used only on the fallback path
+    # below, where we no longer have the hero carousel to scope to.
+    _FOREIGN_STOCK_CLASS_RE = re.compile(
+        r"seller-all|related|similar|recommend|also-like|recently-viewed|other-stock",
+        re.I,
+    )
+
     def _parse_images(self, soup):
         """Full-size JPGs for THIS vehicle only. The hero carousel is
         `div.swiper.vehicle`; the dealer's other stock sits in a separate
         `stacked carousel seller-all` block, so scoping to the hero keeps
-        unrelated cars' photos out. The JPG is in `data-cache`."""
+        unrelated cars' photos out. The JPG is in `data-cache`.
+
+        When the hero carousel can't be found (template change), we must NOT
+        fall back to the whole page as-is: `seller-all` holds the dealer's
+        entire inventory, so that fallback attached other vehicles' photos to
+        this listing (an Alto ending up with Corolla/Nissan images). Instead,
+        strip the known foreign-stock blocks out of a COPY of the tree and scan
+        what's left — still degraded, but it can't borrow another car's photos.
+        """
         hero = soup.find("div", class_=lambda c: bool(c) and "swiper" in c and "vehicle" in c)
-        scope = hero if hero else soup
+        if hero is not None:
+            scope = hero
+        else:
+            logger.warning(
+                "carsforsale: hero carousel (div.swiper.vehicle) not found — "
+                "falling back to a page scan with the dealer's other-stock "
+                "blocks removed. Check the detail-page template."
+            )
+            scope = copy.copy(soup)
+            for node in scope.find_all(
+                class_=lambda c: bool(c) and self._FOREIGN_STOCK_CLASS_RE.search(
+                    " ".join(c) if isinstance(c, list) else str(c)
+                )
+            ):
+                node.decompose()
         seen, urls = set(), []
         for el in scope.find_all(["img", "source", "div", "a"]):
             for attr in ("data-cache", "data-src", "src", "href"):

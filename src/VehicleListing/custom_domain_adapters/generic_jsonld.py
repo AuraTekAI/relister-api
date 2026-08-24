@@ -22,7 +22,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .base import DomainAdapter, normalize_au_state
+from .base import DomainAdapter, carssr_image_urls, normalize_au_state
 from ..make_normalizer import normalize_make
 
 logger = logging.getLogger("custom_domain")
@@ -309,20 +309,22 @@ def _extract_car_object(rsc: str) -> dict | None:
     return None
 
 
-def _extract_carssr_images(rsc: str) -> list[str]:
-    """Pull image URLs out of the carSSR images array. Each image is encoded
-    as `"image":{"url":"..."}`. Thumbnails are dropped."""
-    images: list[str] = []
-    seen: set[str] = set()
-    for m in re.finditer(r'"image"\s*:\s*\{\s*"url"\s*:\s*"([^"]+)"', rsc):
-        url = m.group(1)
-        if not url or url in seen:
-            continue
-        if "thumb" in url.lower():
-            continue
-        seen.add(url)
-        images.append(url)
-    return images
+def _extract_carssr_images(car: dict | None, rsc: str) -> list[str]:
+    """Pull image URLs out of THIS vehicle's carSSR images array. Each image is
+    encoded as `"image":{"url":"..."}`. Thumbnails are dropped.
+
+    Scoped to the parsed `car` object. Previously this regexed the whole
+    decoded RSC payload, which on these dealer-platform pages also carries the
+    related/similar/recently-viewed stock — so an Alto's listing collected the
+    Corolla's and Nissan's photos too. See carssr_image_urls() in base.py.
+    """
+    return carssr_image_urls(
+        car,
+        rsc,
+        accept=lambda url: "thumb" not in url.lower(),
+        logger=logger,
+        context="generic carSSR",
+    )
 
 
 def _dealer_location_from_blocks(blocks: list[dict]) -> str | None:
@@ -390,7 +392,7 @@ def _parse_via_carssr(html: str, stock_url: str, listing_id: str) -> dict | None
         mileage_text = f"Mileage: {mileage}km"
         if mileage_text.lower() not in description.lower():
             description = f"{mileage_text}\n{description}".strip()
-    images = _extract_carssr_images(rsc)
+    images = _extract_carssr_images(car, rsc)
     title = car.get("name") or " ".join(
         str(p) for p in (year, make, model, badge) if p
     )
