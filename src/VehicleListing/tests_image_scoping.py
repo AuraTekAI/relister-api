@@ -152,81 +152,9 @@ class CarssrFallbackTests(SimpleTestCase):
     def test_non_dict_car_object_does_not_raise(self):
         self.assertEqual(carssr_image_urls(None, "{}"), [])
 
-
-# carsforsale.com.au detail page with the hero carousel MISSING (the template
-# change that triggered the whole-page fallback), plus the dealer's full-stock
-# block that the fallback used to harvest.
-CARSFORSALE_NO_HERO = """
-<html><body>
-  <h1 class="cardTitle">2013 SUZUKI ALTO<br><small>GL</small></h1>
-  <span class="details-price">$7,990</span>
-  <div class="gallery-fallback">
-    <img data-cache="https://virtualyard.com.au/photos/alto_a.jpg">
-    <img data-cache="https://virtualyard.com.au/photos/alto_b.jpg">
-  </div>
-  <div class="stacked carousel seller-all">
-    <img data-cache="https://virtualyard.com.au/photos/corolla_x.jpg">
-    <img data-cache="https://virtualyard.com.au/photos/nissan_y.jpg">
-  </div>
-</body></html>
-"""
-
-CARSFORSALE_WITH_HERO = """
-<html><body>
-  <h1 class="cardTitle">2013 SUZUKI ALTO<br><small>GL</small></h1>
-  <span class="details-price">$7,990</span>
-  <div class="swiper vehicle">
-    <img data-cache="https://virtualyard.com.au/photos/alto_a.jpg">
-    <img data-cache="https://virtualyard.com.au/photos/alto_b.jpg">
-  </div>
-  <div class="stacked carousel seller-all">
-    <img data-cache="https://virtualyard.com.au/photos/corolla_x.jpg">
-  </div>
-</body></html>
-"""
-
-
-class CarsForSaleImageScopingTests(SimpleTestCase):
-    def setUp(self):
-        self.adapter = CarsForSaleAdapter(
-            "https://carsforsale.com.au/showroom/mad-man-motors/cZS0__o4ZhSR9oNG06YeoQ"
-        )
-
-    def _images(self, html):
-        from bs4 import BeautifulSoup
-
-        return self.adapter._parse_images(BeautifulSoup(html, "html.parser"))
-
-    def test_hero_scoping_excludes_dealer_stock(self):
-        images = self._images(CARSFORSALE_WITH_HERO)
-        self.assertEqual(
-            images,
-            [
-                "https://virtualyard.com.au/photos/alto_a.jpg",
-                "https://virtualyard.com.au/photos/alto_b.jpg",
-            ],
-        )
-
-    def test_fallback_without_hero_still_excludes_dealer_stock(self):
-        """The regression: with no hero carousel the old code scanned the whole
-        page and picked up `seller-all`, attaching a Corolla and a Nissan photo
-        to this Alto."""
-        images = self._images(CARSFORSALE_NO_HERO)
-
-        self.assertIn("https://virtualyard.com.au/photos/alto_a.jpg", images)
-        self.assertIn("https://virtualyard.com.au/photos/alto_b.jpg", images)
-        self.assertNotIn("https://virtualyard.com.au/photos/corolla_x.jpg", images)
-        self.assertNotIn("https://virtualyard.com.au/photos/nissan_y.jpg", images)
-
-    def test_fallback_does_not_mutate_the_caller_s_soup(self):
-        """The fallback decomposes foreign-stock nodes, so it must work on a
-        copy — other parsers (title, price, specs) read the same soup after."""
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(CARSFORSALE_NO_HERO, "html.parser")
-        self.adapter._parse_images(soup)
-        self.assertIsNotNone(
-            soup.find(class_="seller-all"),
-            "foreign-stock block was removed from the caller's tree",
-        )
-        self.assertIsNotNone(soup.find(class_="cardTitle"))
+# NOTE: the carsforsale.com.au image-scoping tests that used to live here were
+# built on a synthetic page whose gallery was `div.swiper.vehicle`. Captured
+# live HTML later disproved that: those containers are the related-stock rails,
+# and the real gallery is `div.vehicle-hero-carousel` inside the SPA's
+# `page-current` container. CarsForSale image ownership is now covered against a
+# real saved detail page in tests_carsforsale_image_ownership.py.

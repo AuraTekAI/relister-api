@@ -17,7 +17,6 @@ VirtualYard's multi-dealer marketplace: dealers live under
 Everything parsed maps to an existing field via the standard `result` dict; no
 new column/table is introduced.
 """
-import copy
 import logging
 import re
 
@@ -128,10 +127,27 @@ class CarsForSaleAdapter(DomainAdapter):
             return None
         soup = BeautifulSoup(html, "html.parser")
 
-        year, make, model, variant = self._parse_title(soup)
-        spec = self._parse_spec(soup)
-        price = self._parse_price(soup)
-        images = self._parse_images(soup)
+        # Read EVERY field from the SPA's current-vehicle container, never the
+        # whole document. The rendered DOM also contains the page we navigated
+        # from — on this showroom that is 169 other cars' cards — so a
+        # document-wide `find()` picks whichever vehicle happens to come first
+        # in the markup. That is how the Swift at .../mVSN-4GYZ4ygOsnslJCYgQ
+        # got stored as a "2016 Nissan SERENA" at the Serena's price while
+        # carrying the Swift's own photos and VIN: the gallery was read from one
+        # vehicle and the identity from another. See _current_vehicle_page.
+        scope = self._current_vehicle_page(soup)
+        if scope is None:
+            logger.warning(
+                "carsforsale: no 'page-current vehicle' container for %s — falling "
+                "back to the whole document, which can mix in another vehicle's "
+                "details. Check the detail-page template.", stock_url,
+            )
+            scope = soup
+
+        year, make, model, variant = self._parse_title(scope)
+        spec = self._parse_spec(scope)
+        price = self._parse_price(scope)
+        images = self._parse_images(scope)
         make, model = normalize_make(make, model)
         mileage = spec.get("mileage")
 
@@ -160,7 +176,12 @@ class CarsForSaleAdapter(DomainAdapter):
         """`.cardTitle` = `<h1>YEAR MAKE MODEL<br><small>VARIANT</small></h1>`.
         The MAKE MODEL stream is returned as `make`; normalize_make peels the
         canonical make prefix off (handles multi-word makes like Land Rover)."""
-        node = soup.find(class_=re.compile(r"\bcardTitle\b"))
+        # The vehicle's own title is an <h1>; the `cardTitle` class is reused by
+        # every related-vehicle card in the same container, so prefer the h1 and
+        # only fall back to the first cardTitle of any tag.
+        node = soup.find("h1", class_=re.compile(r"\bcardTitle\b")) or soup.find(
+            class_=re.compile(r"\bcardTitle\b")
+        )
         if not node:
             return None, None, None, None
         small = node.find("small")
@@ -184,6 +205,12 @@ class CarsForSaleAdapter(DomainAdapter):
             value = _clean(after.get_text(" ")) if after else None
             if not value:
                 continue
+            # FIRST occurrence wins: within the vehicle's container the primary
+            # spec table comes first, and later repeats are secondary/expanded
+            # blocks (e.g. a second "Fuel Type" row rendered as "DIESEL"
+            # instead of "Diesel"). Last-wins let those override the clean value.
+            if key in out:
+                continue
             if key == "mileage":
                 out["mileage"] = _digits(value)
             elif key == "body_type":  # "5D WAGON" → drop door-count prefix
@@ -202,52 +229,143 @@ class CarsForSaleAdapter(DomainAdapter):
     # carousel ("stacked carousel seller-all") and the usual
     # related/similar/recently-viewed rails. Used only on the fallback path
     # below, where we no longer have the hero carousel to scope to.
-    _FOREIGN_STOCK_CLASS_RE = re.compile(
-        r"seller-all|related|similar|recommend|also-like|recently-viewed|other-stock",
-        re.I,
-    )
+    # The photo carousel for the vehicle being viewed. Confirmed against the
+    # live hydrated DOM (2026-08): `div.vehicle-hero-carousel.open-fullscreen`,
+    # holding one `div.swiper-zoom-container` per photo.
+    _HERO_CLASS = "vehicle-hero-carousel"
+    _SLIDE_CLASS = "swiper-zoom-container"
+    # Per-slide renditions, best first. `data-cache`/`data-desktopcache` are the
+    # full-size JPGs on virtualyard.com.au; `data-mobilecache` is a smaller JPG
+    # of the SAME photo. Taking one per slide is what stops a 25-photo gallery
+    # being stored as 50 near-duplicates (the *-src attrs are WebP on
+    # storage.googleapis.com, which Facebook rejects, so they are not used).
+    _SLIDE_ATTRS = ("data-cache", "data-desktopcache", "data-mobilecache")
+
+    @staticmethod
+    def _current_vehicle_page(soup):
+        """The Framework7 container for the vehicle actually being viewed.
+
+        carsforsale.com.au is an SPA: the rendered DOM keeps the page we came
+        FROM alongside the one we asked for —
+        `div.page.automatic.home.with-hero.page-previous` (the showroom, ~190
+        other cars) plus `div.page.automatic.vehicle.page-current` (this
+        vehicle). Anything read with a document-wide `soup.find()` can
+        therefore come from a different car.
+
+        Returns None when the container isn't present, so callers can fall back
+        and log rather than silently widening their scope.
+        """
+        def classes(value):
+            return value if isinstance(value, list) else str(value).split()
+
+        return soup.find(
+            "div",
+            class_=lambda c: bool(c) and "page-current" in classes(c) and "vehicle" in classes(c),
+        )
 
     def _parse_images(self, soup):
-        """Full-size JPGs for THIS vehicle only. The hero carousel is
-        `div.swiper.vehicle`; the dealer's other stock sits in a separate
-        `stacked carousel seller-all` block, so scoping to the hero keeps
-        unrelated cars' photos out. The JPG is in `data-cache`.
+        """Full-size JPGs for THIS vehicle only.
 
-        When the hero carousel can't be found (template change), we must NOT
-        fall back to the whole page as-is: `seller-all` holds the dealer's
-        entire inventory, so that fallback attached other vehicles' photos to
-        this listing (an Alto ending up with Corolla/Nissan images). Instead,
-        strip the known foreign-stock blocks out of a COPY of the tree and scan
-        what's left — still degraded, but it can't borrow another car's photos.
+        IMPORTANT — `div.swiper.vehicle` is NOT this vehicle's gallery.
+        Verified against the live hydrated page: those containers are the
+        related-stock rails ("similar vehicles", "more from this dealer"). On a
+        2019 Toyota C-HR detail page there were two of them, holding photos of a
+        Ford Ranger, a Corolla and two other C-HRs — and NONE of the car being
+        scraped. Scoping to them is what stored other vehicles' photos against
+        every carsforsale listing (an Alto showing Corolla/Nissan images).
+
+        The real gallery is `div.vehicle-hero-carousel`, one
+        `div.swiper-zoom-container` per photo, each carrying the full-size JPG
+        in `data-cache` and the slide index in `data-imgno`.
+
+        There is deliberately NO whole-page fallback: a page-wide photo scan is
+        exactly what pulled in the related rails (227 photo URLs on that one
+        C-HR page, only 25 of them the C-HR's). If the gallery can't be located
+        we return nothing and log an error — the listing then trips the
+        extension's two-image minimum and is skipped, which is the safe
+        outcome. Publishing another vehicle's photos is not.
         """
-        hero = soup.find("div", class_=lambda c: bool(c) and "swiper" in c and "vehicle" in c)
-        if hero is not None:
-            scope = hero
-        else:
-            logger.warning(
-                "carsforsale: hero carousel (div.swiper.vehicle) not found — "
-                "falling back to a page scan with the dealer's other-stock "
-                "blocks removed. Check the detail-page template."
-            )
-            scope = copy.copy(soup)
-            for node in scope.find_all(
-                class_=lambda c: bool(c) and self._FOREIGN_STOCK_CLASS_RE.search(
-                    " ".join(c) if isinstance(c, list) else str(c)
+        # Scope to the SPA's CURRENT vehicle page first. Navigating
+        # vehicle -> vehicle leaves the previous car's detail page (and its own
+        # hero gallery) in the DOM, and a document-wide lookup can pick that
+        # one — the same class of mistake as the related rails, just harder to
+        # spot. Everything below therefore searches inside `scope`.
+        # `soup` here is normally already the current-vehicle container (see
+        # parse_listing). Re-resolving is harmless and keeps this method correct
+        # when called with a whole document, e.g. from tests or a REPL.
+        scope = self._current_vehicle_page(soup) or soup
+
+        def is_hero(value):
+            classes = value if isinstance(value, list) else str(value).split()
+            return self._HERO_CLASS in classes
+
+        hero = scope.find(class_=lambda c: bool(c) and is_hero(c))
+        slides = hero.find_all(class_=self._SLIDE_CLASS) if hero is not None else []
+        if not slides:
+            # `swiper-zoom-container` only ever appears inside a hero gallery,
+            # so within `scope` it is a safe secondary anchor if the wrapper
+            # class is renamed.
+            slides = scope.find_all(class_=self._SLIDE_CLASS)
+            if slides:
+                logger.warning(
+                    "carsforsale: '%s' wrapper not found — falling back to "
+                    "'%s' slides within the current vehicle page. Check the "
+                    "detail-page template.",
+                    self._HERO_CLASS, self._SLIDE_CLASS,
                 )
-            ):
-                node.decompose()
+        if not slides:
+            logger.error(
+                "carsforsale: could not locate this vehicle's photo gallery "
+                "('%s' / '%s') — returning no images rather than risking "
+                "another vehicle's photos. The detail-page template has changed.",
+                self._HERO_CLASS, self._SLIDE_CLASS,
+            )
+            return []
+
+        def slide_index(slide):
+            img = slide.find("img")
+            raw = img.get("data-imgno") if img is not None else None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 10**6  # unnumbered slides sort last, order otherwise kept
+
+        # One canonical full-size JPG per slide, in the gallery's own order.
         seen, urls = set(), []
-        for el in scope.find_all(["img", "source", "div", "a"]):
-            for attr in ("data-cache", "data-src", "src", "href"):
-                val = el.get(attr)
-                if val and _PHOTO_RE.fullmatch(val.strip()) and val.strip() not in seen:
-                    seen.add(val.strip())
-                    urls.append(val.strip())
-        if not urls:  # fallback: regex the (hero-scoped) markup directly
-            for u in _PHOTO_RE.findall(str(scope)):
-                if u not in seen:
-                    seen.add(u)
-                    urls.append(u)
+        alts = {}
+        for slide in sorted(slides, key=slide_index):
+            img = slide.find("img")
+            if img is None:
+                continue
+            chosen = None
+            for attr in self._SLIDE_ATTRS:
+                val = (img.get(attr) or "").strip()
+                if val and _PHOTO_RE.fullmatch(val):
+                    chosen = val
+                    break
+            if not chosen or chosen in seen:
+                continue
+            seen.add(chosen)
+            urls.append(chosen)
+            alts[chosen] = _clean(img.get("alt")) or ""
+
+        # Every slide in a vehicle's gallery carries that vehicle's own `alt`
+        # (e.g. "2019 TOYOTA C-HR TOYOTA CHR HYBRID"). More than one distinct
+        # alt means the scope picked up a foreign slide, so keep only the
+        # dominant vehicle's photos. Format-agnostic: it compares alts to each
+        # other, never to a parsed make/model.
+        distinct = {a for a in alts.values() if a}
+        if len(distinct) > 1:
+            dominant = max(distinct, key=lambda a: sum(1 for v in alts.values() if v == a))
+            dropped = [u for u in urls if alts.get(u) and alts[u] != dominant]
+            if dropped:
+                logger.warning(
+                    "carsforsale: gallery scope contained %d photo(s) belonging to "
+                    "another vehicle (alts=%s) — dropping them, keeping %r",
+                    len(dropped), sorted(distinct), dominant,
+                )
+                urls = [u for u in urls if not alts.get(u) or alts[u] == dominant]
+
         return urls[:_MAX_IMAGES]
 
     def _parse_description(self, soup):

@@ -41,21 +41,55 @@ DETAIL_HTML = """
   <meta name="description" content="FOR SALE: 2015 Nissan Serena Hybrid, 8-seater family van.">
   <meta property="og:image" content="https://virtualyard.com.au/photos/HERO0.jpg">
 </head><body>
+  <!-- The SPA keeps the page we navigated FROM in the DOM. Its cards use the
+       same cardTitle/details-price classes and come FIRST in the markup, so a
+       document-wide find() reads THIS car instead of the one requested. -->
+  <div class="page automatic home with-hero page-previous">
+    <h3 class="cardTitle">2022 VOLKSWAGEN AMAROK<br><small>W580X</small></h3>
+    <span class="details-price">$61,990</span>
+    <img data-cache="https://virtualyard.com.au/photos/PREVPAGECAR.jpg">
+  </div>
+
+  <div class="page automatic vehicle page-current">
   <h1 class="line-clamp cardTitle">2015 NISSAN SERENA<br><small>HIGHWAY STAR G (HYBRID) C26</small></h1>
   <div class="vehicle-details-price"><span class="details-price">$18,990</span></div>
 
-  <div class="swiper vehicle swiper-initialized">
-    <div class="swiper-slide slidex vehicle">
-      <img src="https://storage.googleapis.com/au-assets/thumb0.webp"
-           data-cache="https://virtualyard.com.au/photos/PHOTO0.jpg">
+  <!-- The REAL gallery for this vehicle: `vehicle-hero-carousel`, one
+       `swiper-zoom-container` per photo, full-size JPG in data-cache, order in
+       data-imgno. Confirmed against the live hydrated page. -->
+  <div class="vehicle-hero-carousel open-fullscreen">
+    <div class="swiper-slide">
+      <div class="swiper-zoom-container">
+        <img alt="2015 NISSAN SERENA HIGHWAY STAR G"
+             src="https://storage.googleapis.com/au-assets/thumb0.webp"
+             data-cache="https://virtualyard.com.au/photos/PHOTO0.jpg"
+             data-mobilecache="https://virtualyard.com.au/photos/PHOTO0_SMALL.jpg"
+             data-imgno="1">
+      </div>
     </div>
-    <div class="swiper-slide slidex vehicle">
-      <img src="https://storage.googleapis.com/au-assets/thumb1.webp"
-           data-cache="https://virtualyard.com.au/photos/PHOTO1.jpg">
+    <div class="swiper-slide">
+      <div class="swiper-zoom-container">
+        <img alt="2015 NISSAN SERENA HIGHWAY STAR G"
+             src="https://storage.googleapis.com/au-assets/thumb1.webp"
+             data-cache="https://virtualyard.com.au/photos/PHOTO1.jpg"
+             data-imgno="2">
+      </div>
     </div>
     <!-- duplicate photo must dedupe -->
+    <div class="swiper-slide">
+      <div class="swiper-zoom-container">
+        <img alt="2015 NISSAN SERENA HIGHWAY STAR G"
+             data-cache="https://virtualyard.com.au/photos/PHOTO0.jpg"
+             data-imgno="3">
+      </div>
+    </div>
+  </div>
+
+  <!-- `swiper vehicle` is NOT the gallery — it is the related-stock rail.
+       Verified live: on a real detail page these hold entirely different cars. -->
+  <div class="swiper vehicle swiper-initialized">
     <div class="swiper-slide slidex vehicle">
-      <img data-cache="https://virtualyard.com.au/photos/PHOTO0.jpg">
+      <img data-cache="https://virtualyard.com.au/photos/RAILCAR1.jpg">
     </div>
   </div>
 
@@ -74,19 +108,28 @@ DETAIL_HTML = """
   <div class="stacked carousel seller-all">
     <img data-cache="https://virtualyard.com.au/photos/OTHERCAR9.jpg">
   </div>
+  </div><!-- /page-current -->
 </body></html>
 """
 
 # Multi-word make, to prove resolve_make peels "Land Rover" off correctly.
 LANDROVER_DETAIL = """
 <html><head><meta name="description" content="Evoque"></head><body>
+  <div class="page automatic vehicle page-current">
   <h1 class="cardTitle">2016 LAND ROVER RANGE ROVER EVOQUE<br><small>SD4 PURE</small></h1>
   <span class="details-price">$29,990</span>
-  <div class="swiper vehicle">
-    <img data-cache="https://virtualyard.com.au/photos/L1.jpg">
-    <img data-cache="https://virtualyard.com.au/photos/L2.jpg">
+  <div class="vehicle-hero-carousel">
+    <div class="swiper-zoom-container">
+      <img alt="2016 LAND ROVER RANGE ROVER EVOQUE"
+           data-cache="https://virtualyard.com.au/photos/L1.jpg" data-imgno="1">
+    </div>
+    <div class="swiper-zoom-container">
+      <img alt="2016 LAND ROVER RANGE ROVER EVOQUE"
+           data-cache="https://virtualyard.com.au/photos/L2.jpg" data-imgno="2">
+    </div>
   </div>
   <div class="item-title">Odometer</div><div class="item-after">90,000 km</div>
+  </div>
 </body></html>
 """
 
@@ -162,12 +205,31 @@ class ParseTests(SimpleTestCase):
         with _patch_render(DETAIL_HTML):
             r = self.adapter.parse_listing(
                 "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111")
-        # PHOTO0 + PHOTO1 (PHOTO0 duplicate collapsed); OTHERCAR9 excluded.
+        # PHOTO0 + PHOTO1 (PHOTO0's duplicate slide collapsed), in data-imgno
+        # order. One canonical URL per slide, so PHOTO0_SMALL — another
+        # rendition of the same photo — is not a second entry.
         self.assertEqual(r["image"], [
             "https://virtualyard.com.au/photos/PHOTO0.jpg",
             "https://virtualyard.com.au/photos/PHOTO1.jpg",
         ])
-        self.assertTrue(all("OTHERCAR" not in u for u in r["image"]))
+        # Nothing from the related-stock rail, the dealer's other stock, or the
+        # previous page the SPA left in the DOM.
+        for marker in ("RAILCAR", "OTHERCAR", "PREVPAGECAR", "PHOTO0_SMALL"):
+            self.assertTrue(
+                all(marker not in u for u in r["image"]),
+                f"{marker} leaked into this vehicle's images",
+            )
+
+    def test_identity_is_read_from_the_current_page_not_the_previous_one(self):
+        """The SPA leaves the previous page in the DOM and its cards come first
+        in the markup, so a document-wide find() picks the wrong vehicle."""
+        with _patch_render(DETAIL_HTML):
+            r = self.adapter.parse_listing(
+                "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111")
+        self.assertEqual(r["make"], "Nissan")
+        self.assertEqual(r["price"], 18990)
+        self.assertNotEqual(r["make"], "Volkswagen")
+        self.assertNotEqual(r["price"], 61990)
 
     def test_description_from_meta(self):
         with _patch_render(DETAIL_HTML):
