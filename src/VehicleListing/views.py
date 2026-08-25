@@ -1149,6 +1149,23 @@ def get_listing_images_status(request, listing_id):
     total = sum(counts.values())
     in_flight = counts['pending'] + counts['queued'] + counts['processing']
 
+    # S3 URLs of the images that ACTUALLY reached S3 (status=ready), in display
+    # order, skipping any that failed to upload. This is what the extension
+    # publishes with — S3 URLs only, never the proxy fallback. Failed images are
+    # simply omitted, so a couple of bad photos don't block the whole product.
+    hosted_images = []
+    ready_slots = (
+        listing.image_slots
+        .filter(status=VehicleListingImage.STATUS_READY, hosted_image__isnull=False)
+        .select_related('hosted_image')
+        .order_by('position')
+    )
+    for slot in ready_slots:
+        url = slot.hosted_image.upload_url()
+        # Only the FB-safe JPEG/PNG upload variant is valid for Marketplace.
+        if url and url.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
+            hosted_images.append(url)
+
     urls, images_ready = _resolve_extension_images(listing, request)
     return JsonResponse({
         'listing_id': listing.id,
@@ -1158,6 +1175,9 @@ def get_listing_images_status(request, listing_id):
         'in_flight': in_flight,
         'queued_now': queued_now,
         'ingest_complete': in_flight == 0,
+        # `hosted_images`: ready-only S3 URLs (failed images skipped) — the
+        # publish payload. `images`/`images_ready` kept for compatibility.
+        'hosted_images': hosted_images,
         'images': urls,
         'images_ready': images_ready,
     }, status=200)
