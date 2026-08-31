@@ -158,6 +158,13 @@ class VehicleListing(models.Model):
     transmission = _vehicle_spec_property('transmission')
     vin = _vehicle_spec_property('vin')
     price = models.CharField(max_length=255,null=True,blank=True)
+    # Dealer stock number as advertised on the source listing. Kept here (not on
+    # Vehicle) because it identifies the AD/inventory entry, like list_id and url,
+    # not the physical car's spec. Gumtree dealers expose it as a detail attribute
+    # but it is optional there, so listings without one store "1" — the column is
+    # never blank, which is why it's a non-null CharField with default "1"
+    # (alphanumeric stock codes like "A1234" are common, so not an integer).
+    stock_number = models.CharField(max_length=255, default='1')
     # True when a custom-domain scrape could not determine a usable odometer
     # (missing or 0). Mileage is the tie-breaker the extension uses to tell
     # apart several cars that share a title; this flag marks the rows where
