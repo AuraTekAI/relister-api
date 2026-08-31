@@ -2,6 +2,7 @@ from urllib.parse import urlparse
 
 from .base import DomainAdapter
 from .buckinghamautos import BuckinghamAutosAdapter
+from .carsforsale import MARKETPLACE_HOSTS as CARSFORSALE_HOSTS, CarsForSaleAdapter
 from .dnacarsales import DNACarSalesAdapter
 from .easyvehiclesaustralia import EasyVehiclesAustraliaAdapter
 from .generic_jsonld import GenericJsonLdAdapter
@@ -34,6 +35,13 @@ def resolve_for_url(url: str) -> DomainAdapter | None:
     host = _host_of(url)
     if not host:
         return None
+    # carsforsale.com.au is a MULTI-dealer marketplace, not one dealer's site —
+    # a shared singleton would collapse every dealer onto one seller_profile_id.
+    # Hand each registered showroom URL its own dealer-scoped instance (HOST ==
+    # carsforsale.com.au/showroom/<dealer-slug>). Kept out of _REGISTRY for the
+    # same reason the generic adapter is: it's per-URL, not per-host.
+    if host in CARSFORSALE_HOSTS:
+        return CarsForSaleAdapter(url)
     specific = _REGISTRY.get(host)
     if specific:
         return specific

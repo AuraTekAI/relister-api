@@ -1064,6 +1064,36 @@ def get_user_gumtree_profile_vehicle_listings(request):
     ).first()
 
     if not gumtree_profile:
+        # FIRST-LOAD FIX: a newly-approved dealer hits this endpoint before the
+        # approval-time scrape (profile_listings_for_approved_users) has created
+        # their GumtreeProfileListing row — which used to return a bare 404 and
+        # show an error on the extension home page, even though a retry a few
+        # minutes later worked. Instead: if this really is the user's own Gumtree
+        # URL, kick off that scrape on demand and return an empty "processing"
+        # result (200) so the extension shows an empty grid (no error) and fills
+        # in as the scrape completes. Only fall back to 404 when the URL isn't
+        # the user's configured profile (a genuinely invalid request).
+        user_gumtree_url = getattr(user, 'gumtree_dealarship_url', None)
+        if user_gumtree_url and user_gumtree_url == gumtree_profile_url:
+            # Dedupe: only dispatch once per user+url per few minutes so repeated
+            # polls while the scrape runs don't enqueue it again.
+            from django.core.cache import cache
+            dispatch_key = f'gumtree_scrape_kickoff:{user.id}'
+            if not cache.get(dispatch_key):
+                cache.set(dispatch_key, True, timeout=300)  # 5 min
+                try:
+                    from .tasks import profile_listings_for_approved_users
+                    profile_listings_for_approved_users.delay(user.id)
+                    logger.info(f"Kicked off Gumtree scrape on first load for user {user.id}")
+                except Exception as exc:
+                    logger.error(f"Could not dispatch Gumtree scrape for user {user.id}: {exc}")
+            return JsonResponse({
+                'count': 0,
+                'gumtree_profile_url': gumtree_profile_url,
+                'results': [],
+                'status': 'processing',
+                'message': 'Your Gumtree listings are being fetched. This can take a few minutes — they will appear automatically.'
+            }, status=200)
         return JsonResponse({'error': 'Gumtree profile not found or does not belong to user'}, status=404)
 
     vehicle_listings = VehicleListing.objects.filter(
@@ -1149,6 +1179,23 @@ def get_listing_images_status(request, listing_id):
     total = sum(counts.values())
     in_flight = counts['pending'] + counts['queued'] + counts['processing']
 
+    # S3 URLs of the images that ACTUALLY reached S3 (status=ready), in display
+    # order, skipping any that failed to upload. This is what the extension
+    # publishes with — S3 URLs only, never the proxy fallback. Failed images are
+    # simply omitted, so a couple of bad photos don't block the whole product.
+    hosted_images = []
+    ready_slots = (
+        listing.image_slots
+        .filter(status=VehicleListingImage.STATUS_READY, hosted_image__isnull=False)
+        .select_related('hosted_image')
+        .order_by('position')
+    )
+    for slot in ready_slots:
+        url = slot.hosted_image.upload_url()
+        # Only the FB-safe JPEG/PNG upload variant is valid for Marketplace.
+        if url and url.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
+            hosted_images.append(url)
+
     urls, images_ready = _resolve_extension_images(listing, request)
     return JsonResponse({
         'listing_id': listing.id,
@@ -1158,6 +1205,9 @@ def get_listing_images_status(request, listing_id):
         'in_flight': in_flight,
         'queued_now': queued_now,
         'ingest_complete': in_flight == 0,
+        # `hosted_images`: ready-only S3 URLs (failed images skipped) — the
+        # publish payload. `images`/`images_ready` kept for compatibility.
+        'hosted_images': hosted_images,
         'images': urls,
         'images_ready': images_ready,
     }, status=200)

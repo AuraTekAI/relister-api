@@ -523,6 +523,14 @@ def ensure_listing_image_ingest(listing):
 
     now = timezone.now()
     stale_cutoff = now - STALE_INGEST_AGE
+    # Claim never-started (pending) slots and lost-in-flight (stale
+    # queued/processing) ones. FAILED is deliberately TERMINAL and NOT
+    # re-claimed here: the ingest task already retries transient upload errors
+    # internally (autoretry_for, up to max_retries) before marking a slot
+    # FAILED — "try again". Once a slot is FAILED it is skipped, so ingestion
+    # can actually COMPLETE (in_flight → 0) instead of a permanently-bad image
+    # being re-queued forever and blocking the publish. The publish then goes
+    # ahead with the images that DID reach S3.
     claimable_pks = list(
         VehicleListingImage.objects.filter(listing=listing).filter(
             Q(status=VehicleListingImage.STATUS_PENDING)
