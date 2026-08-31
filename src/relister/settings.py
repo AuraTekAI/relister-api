@@ -248,6 +248,12 @@ REDIS_URL = env('REDIS_URL')
 
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development
+# The Chrome extension calls the API from a chrome-extension://<id> origin. With
+# DEBUG=False, CORS_ALLOW_ALL_ORIGINS is False, so that origin gets no
+# Access-Control-Allow-Origin header and the browser blocks the response — the
+# extension then reports "Network error". Allow any chrome-extension origin so the
+# extension works in production/testing builds too.
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^chrome-extension://.*$"]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
     "http://localhost:3000",
