@@ -371,9 +371,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 )
 
         # Optional: the extension includes which Facebook dealership account the
-        # browser is currently signed into. Append-only and deduped (see
-        # User.add_dealer_facebook_profile); wrapped so a malformed value can
-        # never fail an otherwise-valid login.
+        # browser is currently signed into. Stored newest-first and deduped —
+        # an account we already have moves back to the top rather than being
+        # inserted again (see User.add_dealer_facebook_profile); wrapped so a
+        # malformed value can never fail an otherwise-valid login.
         try:
             request = self.context.get('request')
             fb_account = request.data.get('dealer_facebook_profile') if request else None
