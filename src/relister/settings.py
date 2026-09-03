@@ -468,11 +468,23 @@ VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT = env('VEHICLE_IMAGE_DOWNLOAD_RATE_LIMIT', def
 #
 # The pipeline now stores an FB-safe JPEG upload variant (HostedImage.upload_image)
 # that _resolve_extension_images serves; images without it yet fall back to the
-# proxy automatically. DEFAULT FALSE for a controlled rollout: apply the
-# migration and run `manage.py backfill_upload_variants` first, then set
-# EXTENSION_USE_HOSTED_IMAGES=True in the env (no code deploy needed) to turn the
-# fix on. Flip back to False to instantly revert to the old proxy-everything path.
-EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=False)
+# proxy automatically.
+#
+# DEFAULT TRUE: the staged rollout is complete, so custom-domain dealers
+# (carsforsale/virtualyard, DNA, Buckingham, easyvehicles) now publish our own
+# S3 copy — the same path Gumtree listings already take. Previously this was
+# False, which meant the publish-time ingest uploaded every photo to S3 and the
+# extension was then handed the raw dealer URL anyway, discarding the upload.
+#
+# Requires `manage.py backfill_upload_variants` to have run: a photo hosted
+# before the upload variant existed serves upload_url() -> None, falls back to
+# the proxy, and holds `images_ready` False — which the extension's publish
+# guard waits on. Photos ingested by the current lazy pipeline always get the
+# variant, so this only affects images hosted before that change.
+#
+# Set EXTENSION_USE_HOSTED_IMAGES=False in the env to instantly revert to the
+# old proxy-everything path (no code deploy needed).
+EXTENSION_USE_HOSTED_IMAGES = env.bool('EXTENSION_USE_HOSTED_IMAGES', default=True)
 
 # Lazy image pipeline (default): scraping only records image slots — the
 # actual download + S3 upload for a listing's photos is deferred until that
