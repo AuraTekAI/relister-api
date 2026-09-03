@@ -16,7 +16,7 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
-from .custom_domain_adapters import resolve_for_url
+from .custom_domain_adapters import any_needs_image_proxy, resolve_for_url
 from .custom_domain_adapters.carsforsale import CarsForSaleAdapter
 
 SHOWROOM_URL = "https://carsforsale.com.au/showroom/mad-man-motors/cZS0__o4ZhSR9oNG06YeoQ"
@@ -267,3 +267,40 @@ class ParseTests(SimpleTestCase):
                     "year", "make", "model", "variant", "body_type", "fuel_type",
                     "color", "transmission", "vin", "mileage", "mileage_unavailable", "url"):
             self.assertIn(key, r)
+
+
+class CarsForSaleImageProxyDecisionTests(SimpleTestCase):
+    """carsforsale photos must reach the extension straight from
+    virtualyard.com.au, never through custom_domain_image_proxy.
+
+    virtualyard.com.au answers with `Access-Control-Allow-Origin: *`, so the
+    browser can load it directly, and CarsForSaleAdapter says exactly that via
+    KNOWN_HOSTS + needs_image_proxy() -> False. But the adapter is deliberately
+    kept out of _REGISTRY (per-URL, see resolve_for_url) and
+    any_needs_image_proxy() consulted _REGISTRY only, so its verdict was the
+    unknown-host default: proxy. Specs rendered on the extension home page and
+    photos did not, because the proxy hop was the only step that could fail.
+    """
+
+    def test_virtualyard_photo_host_is_not_proxied(self):
+        self.assertFalse(any_needs_image_proxy(
+            "https://virtualyard.com.au/photos/p39EYiIvzFSX0sA7kedXcxpYOa4.jpg"
+        ))
+
+    def test_carsforsale_own_hosts_are_not_proxied(self):
+        for host in ("carsforsale.com.au", "www.carsforsale.com.au"):
+            with self.subTest(host=host):
+                self.assertFalse(any_needs_image_proxy(f"https://{host}/img/a.jpg"))
+
+    def test_adapter_declaration_and_resolver_agree(self):
+        # The regression was these two disagreeing: the adapter said "no proxy",
+        # the resolver said "proxy".
+        url = "https://virtualyard.com.au/photos/x.jpg"
+        adapter = CarsForSaleAdapter(
+            "https://carsforsale.com.au/showroom/mad-man-motors/cZS0")
+        self.assertFalse(adapter.needs_image_proxy(url))
+        self.assertEqual(adapter.needs_image_proxy(url), any_needs_image_proxy(url))
+
+    def test_unknown_host_still_proxied(self):
+        # The default must be unchanged for genuinely unknown CDNs.
+        self.assertTrue(any_needs_image_proxy("https://some-random-cdn.example/a.jpg"))

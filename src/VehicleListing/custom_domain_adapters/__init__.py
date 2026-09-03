@@ -86,7 +86,8 @@ def any_needs_image_proxy(url: str) -> bool:
          proxy. (DNA's same-origin images.)
       3. If the image URL's host is in any specific adapter's `KNOWN_HOSTS`
          (its dealership host or any CDN it owns), trust that adapter's
-         decision — i.e. don't proxy. (Buckingham's Cloudfront CDN.)
+         decision — i.e. don't proxy. (Buckingham's Cloudfront CDN,
+         carsforsale's virtualyard.com.au photo host.)
       4. Otherwise, the host is unknown — proxy by default to avoid CORS
          issues for generic-scraped sites.
     """
@@ -100,6 +101,18 @@ def any_needs_image_proxy(url: str) -> bool:
     for adapter in _REGISTRY.values():
         if host in adapter.KNOWN_HOSTS:
             return False
+    # CarsForSaleAdapter is deliberately NOT in _REGISTRY (it is per-URL — see
+    # resolve_for_url) but it still owns image hosts, above all
+    # virtualyard.com.au, which serves its photos with
+    # `Access-Control-Allow-Origin: *` and needs no proxy at all. Consulting
+    # _REGISTRY alone meant that declaration was never seen: every carsforsale
+    # photo fell through to the unknown-host default below, so the extension
+    # home page loaded each one via custom_domain_image_proxy — a server-side
+    # refetch of a CDN the browser can read directly, and the only step in the
+    # chain that can fail. Registry membership decides how a dealer URL is
+    # resolved; it must not decide whether an image host is known.
+    if host in CarsForSaleAdapter.KNOWN_HOSTS:
+        return False
     return True
 
 
