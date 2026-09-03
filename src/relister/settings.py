@@ -253,6 +253,11 @@ CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ])
+# The browser extension calls the API from a chrome-extension://<id> origin. Allow it
+# even when DEBUG=False (django-cors-headers echoes the specific origin back, which is
+# required because CORS_ALLOW_CREDENTIALS is True). Committed to code so it survives
+# every container down/up and git reset — a manual server edit gets wiped otherwise.
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^chrome-extension://.*$"]
 
 # Optional: If you need to allow specific HTTP methods
 CORS_ALLOW_METHODS = [
