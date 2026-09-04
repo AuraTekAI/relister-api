@@ -22,7 +22,11 @@ class ListingUrlAdmin(admin.ModelAdmin):
 
 class VehicleListingAdmin(admin.ModelAdmin):
     list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id', 'vehicle__year', 'vehicle__make', 'vehicle__model')
+    # Spec columns were dropped from VehicleListing (migration 0056) — spec
+    # searches go through the vehicle relation; list_display's year/make/model
+    # still render via the model's read-only delegate properties.
+    search_fields = ('user__email', 'status', 'list_id', 'seller_profile_id', 'vehicle__year', 'vehicle__make', 'vehicle__model')
+    list_select_related = ('user', 'vehicle')
     list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
     actions = ['reactivate_sold_listings']
 
@@ -71,7 +75,7 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
-    search_fields = ('user__email',"listing__year","listing__make","listing__model",)
+    search_fields = ('user__email',"listing__vehicle__year","listing__vehicle__make","listing__vehicle__model",)
     list_filter = ('user',"listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):

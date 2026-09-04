@@ -3,6 +3,7 @@ from zenrows import ZenRowsClient
 from .models import VehicleListing,GumtreeProfileListing
 from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
+from .vehicle_sync import spec_from_result, sync_vehicle_for_listing
 import logging
 import time
 import random
@@ -37,27 +38,57 @@ def build_gumtree_listing_url(listing_id):
     return f"https://www.gumtree.com.au/s-ad/{listing_id}"
 
 
+# Stored when a Gumtree ad advertises no stock number at all (most private
+# sellers don't) — stock_number is a non-null column, so it always gets a value.
+DEFAULT_STOCK_NUMBER = "1"
+
+# Gumtree has no single canonical label for the dealer stock number: it arrives
+# in the ad's detail attributes under whichever key the dealer's feed used.
+# Listed most-specific first and matched with punctuation/case stripped, so
+# "Stock No." and "STOCK NUMBER" both resolve.
+_STOCK_NUMBER_LABELS = (
+    "dealerstocknumber",
+    "dealerstockno",
+    "stocknumber",
+    "stockno",
+    "stockid",
+    "stockcode",
+    "stock",
+)
+
+
+def extract_stock_number(category_info):
+    """Pull the dealer stock number out of a Gumtree ad's detail attributes.
+
+    `category_info` is the {name: value} map built from the ad's categoryInfo
+    block (same shape for the JSON and XML response bodies). Returns
+    DEFAULT_STOCK_NUMBER when the ad carries no stock number.
+    """
+    normalized = {}
+    for name, value in (category_info or {}).items():
+        if not name:
+            continue
+        # setdefault: if two labels normalize the same, keep the first Gumtree sent.
+        normalized.setdefault(re.sub(r"[^a-z0-9]", "", str(name).lower()), value)
+    for label in _STOCK_NUMBER_LABELS:
+        value = normalized.get(label)
+        if value is not None and str(value).strip():
+            return str(value).strip()[:255]
+    return DEFAULT_STOCK_NUMBER
+
+
 def _apply_gumtree_update(existing, result):
     """Write freshly-scraped fields from `result` onto an existing
     VehicleListing and persist. Shared by the two "refresh a stale row"
     branches below and by the VIN/structural duplicate-match branch, so a
     relisted-under-a-new-ad-id vehicle is updated identically to a normal
     same-ad refresh."""
-    existing.year = result.get("year")
-    existing.make = result.get("make")
-    existing.model = result.get("model")
-    existing.body_type = result.get("body_type")
-    existing.fuel_type = result.get("fuel_type")
-    existing.color = result.get("color")
-    existing.variant = result.get("variant")
     existing.price = str(result.get("price"))
-    existing.mileage = result.get("mileage")
+    existing.stock_number = result.get("stock_number") or DEFAULT_STOCK_NUMBER
     existing.mileage_unavailable = result.get("mileage_unavailable", False)
-    existing.transmission = result.get("transmission")
     existing.description = result.get("description")
     existing.images = result.get("image")
     existing.location = result.get("location")
-    existing.vin = result.get("vin")
     # Backfill the source URL on refresh too — rows created before this was
     # populated (and rows whose ad id changed on a relist) still have it blank.
     # Guarded so a missing url in `result` never wipes a good stored one.
@@ -65,6 +96,9 @@ def _apply_gumtree_update(existing, result):
         existing.url = result.get("url")
     existing.is_changed = True
     existing.save()
+    # Spec attributes (make/model/year/mileage/vin/...) live ONLY on the
+    # canonical Vehicle row — push the refreshed values there. Never raises.
+    sync_vehicle_for_listing(existing, spec_from_result(result))
     sync_listing_images(existing, result.get("image"))
 def extract_seller_id(profile_url):
     """Extract the seller ID from a Facebook Marketplace profile URL."""
@@ -359,6 +393,9 @@ def get_gumtree_listing_details(listing_id):
             # 17-character Vehicle Identification Number. Not every dealer
             # fills this in on Gumtree, so it's optional — None when absent.
             "vin": category_info.get("VIN"),
+            # Dealer stock number advertised on the ad; "1" when it has none
+            # (see extract_stock_number).
+            "stock_number": extract_stock_number(category_info),
             # Was hardcoded to "" — every Gumtree listing was created with a blank
             # url column as a result. Build the ad URL from the id we already have.
             "url": build_gumtree_listing_url(listing_id),
@@ -737,26 +774,21 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                 user=user,
                 gumtree_profile=gumtree_profile_listing_instance,
                 list_id=listing_id,
-                year=result.get("year"),
-                body_type=result.get("body_type"),
-                fuel_type=result.get("fuel_type"),
-                color=result.get("color"),
-                variant=result.get("variant"),
-                make=result.get("make"),
-                mileage=result.get("mileage"),
                 mileage_unavailable=result.get("mileage_unavailable", False),
-                model=result.get("model"),
                 price=str(result.get("price")),
-                transmission=result.get("transmission"),
+                stock_number=result.get("stock_number") or DEFAULT_STOCK_NUMBER,
                 description=result.get("description"),
                 images=result.get("image"),
                 url=result.get("url"),
                 location=result.get("location"),
-                vin=result.get("vin"),
                 status="pending",
                 is_relist=False,
                 seller_profile_id=seller_id
             )
+            # Spec attributes (make/model/year/mileage/vin/...) live ONLY on
+            # the canonical Vehicle row — create/link it from the parsed spec
+            # (VIN or structural reuse within this dealer, new row otherwise).
+            sync_vehicle_for_listing(vehicle_listing, spec_from_result(result))
             sync_listing_images(vehicle_listing, result.get("image"))
             logging.info(f"Created new vehicle_listing: {vehicle_listing}")
         # Update GumtreeProfileListing instance with the count of processed listings

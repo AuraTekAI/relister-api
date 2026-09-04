@@ -1,4 +1,15 @@
+# HISTORICAL NO-OP (kept so databases that recorded this name stay consistent).
+#
+# This migration originally ran raw `ALTER TABLE ... RENAME COLUMN
+# "gumtree_profile_id_id" TO "gumtree_profile_id"` (and four siblings) to undo
+# the damage done by 0050's phantom model whose FK fields were misnamed
+# `*_id`, producing `*_id_id` columns. With 0050 reduced to a no-op those
+# broken columns are never created, so on every correctly-migrated database
+# these renames would FAIL (the source column doesn't exist). The operations
+# were removed.
+
 from django.db import migrations
+
 
 class Migration(migrations.Migration):
 
@@ -6,30 +17,4 @@ class Migration(migrations.Migration):
         ('VehicleListing', '0053_populate_vehiclelisting_from_vehicle'),
     ]
 
-    operations = [
-        # Fix facebook_profile: database has facebook_profile_id_id but should be facebook_profile_id
-        migrations.RunSQL(
-            sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "facebook_profile_id_id" TO "facebook_profile_id";',
-            reverse_sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "facebook_profile_id" TO "facebook_profile_id_id";'
-        ),
-        # Fix custom_domain_profile
-        migrations.RunSQL(
-            sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "custom_domain_profile_id_id" TO "custom_domain_profile_id";',
-            reverse_sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "custom_domain_profile_id" TO "custom_domain_profile_id_id";'
-        ),
-        # Fix custom_domain_url
-        migrations.RunSQL(
-            sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "custom_domain_url_id_id" TO "custom_domain_url_id";',
-            reverse_sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "custom_domain_url_id" TO "custom_domain_url_id_id";'
-        ),
-        # Fix gumtree_profile
-        migrations.RunSQL(
-            sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "gumtree_profile_id_id" TO "gumtree_profile_id";',
-            reverse_sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "gumtree_profile_id" TO "gumtree_profile_id_id";'
-        ),
-        # Fix gumtree_url
-        migrations.RunSQL(
-            sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "gumtree_url_id_id" TO "gumtree_url_id";',
-            reverse_sql='ALTER TABLE "VehicleListing_vehiclelisting" RENAME COLUMN "gumtree_url_id" TO "gumtree_url_id_id";'
-        ),
-    ]
+    operations = []

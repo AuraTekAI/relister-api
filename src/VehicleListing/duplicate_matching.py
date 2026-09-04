@@ -80,11 +80,18 @@ def find_existing_vehicle(dealer_queryset, *, vin=None, make=None, model=None,
     now keeps its own row, and merging only happens against rows whose ad has
     disappeared (a genuine relist/renewal).
     """
+    # Spec attributes live on the canonical Vehicle row (VehicleListing's
+    # duplicated columns were dropped in migration 0056) — every lookup below
+    # goes through the listing→vehicle join; the candidate attribute reads
+    # (c.variant, c.mileage, ...) resolve through the same relation via the
+    # model's read-only delegates, so select_related keeps this one query.
+    dealer_queryset = dealer_queryset.select_related('vehicle')
+
     if exclude_list_ids:
         dealer_queryset = dealer_queryset.exclude(list_id__in=[str(i) for i in exclude_list_ids])
 
     if is_valid_vin(vin):
-        by_vin = dealer_queryset.filter(vin__iexact=vin.strip()).first()
+        by_vin = dealer_queryset.filter(vehicle__vin__iexact=vin.strip()).first()
         if by_vin:
             return by_vin
         # A valid-looking VIN with no match is still strong evidence this is
@@ -96,9 +103,9 @@ def find_existing_vehicle(dealer_queryset, *, vin=None, make=None, model=None,
         return None
 
     candidates = list(dealer_queryset.filter(
-        make__iexact=str(make).strip(),
-        model__iexact=str(model).strip(),
-        year=str(year).strip(),
+        vehicle__make__iexact=str(make).strip(),
+        vehicle__model__iexact=str(model).strip(),
+        vehicle__year=str(year).strip(),
     ))
     if not candidates:
         return None
