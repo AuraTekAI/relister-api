@@ -23,12 +23,24 @@ from .models import (
     CustomDomainProfileListing,
     FacebookListing,
     GumtreeProfileListing,
+    Vehicle,
     VehicleListing,
     VehicleListingImage,
 )
 
 
 REAL_VIN = "1HGCM82633A123456"
+
+# Spec attributes live on Vehicle since migration 0056 — test rows are built
+# as a Vehicle + a listing linked to it (mirroring what vehicle_sync produces).
+SPEC_FIELDS = ('vin', 'make', 'model', 'year', 'mileage',
+               'transmission', 'fuel_type', 'body_type', 'color', 'variant')
+
+
+def create_listing_with_vehicle(**kwargs):
+    spec = {f: kwargs.pop(f) for f in SPEC_FIELDS if f in kwargs}
+    vehicle = Vehicle.objects.create(**spec)
+    return VehicleListing.objects.create(vehicle=vehicle, **kwargs)
 
 
 class ValidVinTests(SimpleTestCase):
@@ -76,7 +88,7 @@ class FindExistingVehicleTests(TestCase):
             price='12990', mileage=50000,
         )
         defaults.update(kwargs)
-        return VehicleListing.objects.create(**defaults)
+        return create_listing_with_vehicle(**defaults)
 
     def dealer_qs(self):
         return VehicleListing.objects.filter(user=self.user, seller_profile_id='dealer.example.com')
@@ -136,7 +148,7 @@ class FindExistingVehicleTests(TestCase):
 
     def test_never_matches_across_dealers(self):
         other_user = User.objects.create_user(email='other@test.invalid', password='x')
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=other_user, seller_profile_id='dealer.example.com', list_id='X',
             make='Mazda', model='MAZDA3 NEO', year='2013', color='White', vin=REAL_VIN,
         )
@@ -172,7 +184,7 @@ class CustomDomainDuplicatePreventionTests(TestCase):
         return adapter
 
     def test_relisted_vehicle_with_new_token_updates_existing_row_not_a_new_one(self):
-        existing = VehicleListing.objects.create(
+        existing = create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='old-token',
             custom_domain_profile=self.profile,
             make='Mazda', model='MAZDA3 NEO', variant='Neo', year='2013', color='White',
@@ -203,7 +215,7 @@ class CustomDomainDuplicatePreventionTests(TestCase):
         self.assertEqual(VehicleListing.objects.get(user=self.user).make, 'Toyota')
 
     def test_reappearing_after_being_marked_sold_is_reactivated(self):
-        existing = VehicleListing.objects.create(
+        existing = create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='old-token',
             custom_domain_profile=self.profile,
             make='Mazda', model='MAZDA3 NEO', variant='Neo', year='2013', color='White',
@@ -239,7 +251,7 @@ class GumtreeDuplicatePreventionTests(TestCase):
 
     @mock.patch('VehicleListing.gumtree_scraper.get_gumtree_listing_details')
     def test_relisted_ad_with_new_id_updates_existing_row_not_a_new_one(self, mock_details):
-        existing = VehicleListing.objects.create(
+        existing = create_listing_with_vehicle(
             user=self.user, seller_profile_id='seller-1', list_id='old-ad-id',
             gumtree_profile=self.profile,
             make='Mazda', model='MAZDA3 NEO', variant='Neo', year='2013', color='White',
@@ -270,11 +282,11 @@ class GumtreeDuplicatePreventionTests(TestCase):
 
     @mock.patch('VehicleListing.gumtree_scraper.get_gumtree_listing_details')
     def test_two_ambiguous_candidates_create_a_new_row_rather_than_guess(self, mock_details):
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='seller-1', list_id='ad-a',
             make='Mazda', model='MAZDA3 NEO', year='2013', color='White', mileage=40000,
         )
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='seller-1', list_id='ad-b',
             make='Mazda', model='MAZDA3 NEO', year='2013', color='White', mileage=42000,
         )
@@ -294,11 +306,11 @@ class MergeDuplicateVehicleListingsCommandTests(TestCase):
         self.user = User.objects.create_user(email='dealer@test.invalid', password='x')
 
     def test_dry_run_changes_nothing(self):
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='a', vin=REAL_VIN,
             make='Mazda', model='MAZDA3 NEO', year='2013',
         )
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='b', vin=REAL_VIN,
             make='Mazda', model='MAZDA3 NEO', year='2013',
         )
@@ -308,11 +320,11 @@ class MergeDuplicateVehicleListingsCommandTests(TestCase):
         self.assertIn('Would merge', out.getvalue())
 
     def test_apply_merges_vin_duplicates_and_repoints_relations(self):
-        older = VehicleListing.objects.create(
+        older = create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='a', vin=REAL_VIN,
             make='Mazda', model='MAZDA3 NEO', year='2013', facebook_listing_id='fb-123',
         )
-        newer = VehicleListing.objects.create(
+        newer = create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='b', vin=REAL_VIN,
             make='Mazda', model='MAZDA3 NEO', year='2013',
         )
@@ -334,11 +346,11 @@ class MergeDuplicateVehicleListingsCommandTests(TestCase):
         self.assertEqual(image.listing_id, survivor.pk)
 
     def test_ambiguous_group_is_left_untouched(self):
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='a',
             make='Mazda', model='MAZDA3 NEO', year='2013', color='White', mileage=10000,
         )
-        VehicleListing.objects.create(
+        create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='b',
             make='Mazda', model='MAZDA3 NEO', year='2013', color='White', mileage=90000,
         )

@@ -59,8 +59,84 @@ class FacebookProfileListing(models.Model):
 
     def __str__(self):
         return f"{self.url}"
+
+class Vehicle(models.Model):
+    """The physical vehicle — canonical owner of the spec attributes
+    (vin/make/model/year/variant/body/fuel/transmission/color/mileage).
+
+    One Vehicle can be referenced by MANY VehicleListing rows (the same car
+    re-scraped from Gumtree and a dealer's own site, or relisted under a new
+    source ad id). Rows are created/linked/updated exclusively through
+    vehicle_sync.sync_vehicle_for_listing() so spec data always has a single
+    source of truth; VehicleListing keeps denormalized copies of these fields
+    only as a scrape snapshot (see the note on VehicleListing below).
+    """
+    vin = models.CharField(max_length=17, null=True, blank=True)
+    make = models.CharField(max_length=100, null=True, blank=True)
+    model = models.CharField(max_length=100, null=True, blank=True)
+    year = models.CharField(max_length=255, null=True, blank=True)
+    mileage = models.IntegerField(null=True, blank=True)
+    transmission = models.CharField(max_length=255, null=True, blank=True)
+    fuel_type = models.CharField(max_length=255, null=True, blank=True)
+    body_type = models.CharField(max_length=255, null=True, blank=True)
+    color = models.CharField(max_length=255, null=True, blank=True)
+    variant = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'VehicleListing_vehicle'
+        # Moved here from VehicleListing when its duplicated spec columns were
+        # dropped (migration 0056): duplicate_matching / vehicle_sync now match
+        # by VIN and make/model/year THROUGH the listing→vehicle join, and the
+        # storefront search filters hit these columns too.
+        indexes = [
+            models.Index(fields=['vin'], name='vehicle_vin_idx'),
+            models.Index(fields=['make', 'model', 'year'], name='vehicle_mmy_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.year} {self.make} {self.model}"
+
+
+def _vehicle_spec_property(field):
+    """Read-only delegate: `listing.<field>` reads `listing.vehicle.<field>`.
+
+    The identically-named columns that used to sit on VehicleListing were
+    dropped in migration 0056 — Vehicle is the ONLY place spec data lives, so a
+    stale local copy can no longer exist. These delegates keep every existing
+    READ site (logging, __str__, admin list_display, the scrapers' change
+    detection) working unchanged. There is deliberately no setter: writes must
+    go through vehicle_sync.sync_vehicle_for_listing(listing, spec), and any
+    leftover `listing.make = ...` assignment fails loudly instead of silently
+    diverging from the canonical row.
+    """
+    def getter(self):
+        if self.vehicle_id is None:
+            return None
+        return getattr(self.vehicle, field)
+    getter.__name__ = field
+    return property(getter)
+
 class VehicleListing(models.Model):
+    """One marketplace representation (a Gumtree ad, a dealer-site stock page)
+    of a physical Vehicle.
+
+    Spec attributes (make/model/year/...) are OWNED by the linked `vehicle`
+    row and live ONLY there — the duplicated columns this table used to carry
+    were dropped in migration 0056. `listing.make` etc. still read naturally
+    via the read-only delegates declared below (see _vehicle_spec_property);
+    writes go exclusively through vehicle_sync.sync_vehicle_for_listing().
+    Fields kept here (price, description, images, location, condition,
+    exterior/interior_colour, mileage_unavailable, ...) describe the AD or the
+    scrape, not the car.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
+    # SET_NULL (not CASCADE): a Vehicle row is bookkeeping — deleting one must
+    # never destroy the dealer's listing rows, their images or relist history.
+    vehicle = models.ForeignKey(
+        Vehicle, on_delete=models.SET_NULL, null=True, blank=True, related_name='listings'
+    )
     gumtree_url = models.ForeignKey(ListingUrl, on_delete=models.CASCADE,null=True,blank=True)
     gumtree_profile = models.ForeignKey(GumtreeProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     facebook_profile = models.ForeignKey(FacebookProfileListing, on_delete=models.CASCADE,null=True,blank=True)
@@ -68,15 +144,27 @@ class VehicleListing(models.Model):
     custom_domain_profile = models.ForeignKey(CustomDomainProfileListing, on_delete=models.CASCADE,null=True,blank=True)
     
     list_id = models.CharField(max_length=255)
-    year = models.CharField(max_length=255,null=True,blank=True)
-    body_type = models.CharField(max_length=255,null=True,blank=True)
-    fuel_type = models.CharField(max_length=255,null=True,blank=True)
-    color = models.CharField(max_length=255,null=True,blank=True)
-    variant = models.CharField(max_length=255,null=True,blank=True)
-    make = models.CharField(max_length=100,null=True,blank=True)
-    model = models.CharField(max_length=100,null=True,blank=True)
+    # Spec attributes — read-only delegates to the canonical Vehicle row (the
+    # duplicated columns were dropped in migration 0056; see
+    # _vehicle_spec_property above for why there is no setter).
+    year = _vehicle_spec_property('year')
+    body_type = _vehicle_spec_property('body_type')
+    fuel_type = _vehicle_spec_property('fuel_type')
+    color = _vehicle_spec_property('color')
+    variant = _vehicle_spec_property('variant')
+    make = _vehicle_spec_property('make')
+    model = _vehicle_spec_property('model')
+    mileage = _vehicle_spec_property('mileage')
+    transmission = _vehicle_spec_property('transmission')
+    vin = _vehicle_spec_property('vin')
     price = models.CharField(max_length=255,null=True,blank=True)
-    mileage = models.IntegerField(null=True,blank=True)
+    # Dealer stock number as advertised on the source listing. Kept here (not on
+    # Vehicle) because it identifies the AD/inventory entry, like list_id and url,
+    # not the physical car's spec. Gumtree dealers expose it as a detail attribute
+    # but it is optional there, so listings without one store "1" — the column is
+    # never blank, which is why it's a non-null CharField with default "1"
+    # (alphanumeric stock codes like "A1234" are common, so not an integer).
+    stock_number = models.CharField(max_length=255, default='1')
     # True when a custom-domain scrape could not determine a usable odometer
     # (missing or 0). Mileage is the tie-breaker the extension uses to tell
     # apart several cars that share a title; this flag marks the rows where
@@ -84,17 +172,10 @@ class VehicleListing(models.Model):
     # Gumtree rows always carry a parsed odometer (the scrape drops a listing
     # rather than store it blank), so this stays False for them.
     mileage_unavailable = models.BooleanField(default=False)
-    # 17-character Vehicle Identification Number, captured from Gumtree's
-    # "VIN" category field when a dealer has filled it in — optional because
-    # not every Gumtree listing carries one. Needed for the separate VIN
-    # database project: only listings with a VIN are eligible to display in
-    # Google (per that project's requirement).
-    vin = models.CharField(max_length=17, null=True, blank=True)
     exterior_colour = models.CharField(max_length=255,null=True,blank=True)
     interior_colour = models.CharField(max_length=255,null=True,blank=True)
     description = models.TextField(null=True,blank=True)
     condition = models.CharField(max_length=255,null=True,blank=True)
-    transmission=models.CharField(max_length=255,null=True,blank=True)
     images = models.JSONField(null=True,blank=True)  # Store image URLs as JSON
     location = models.CharField(max_length=255,null=True,blank=True)
     url = models.URLField(null=True,blank=True)
@@ -128,14 +209,10 @@ class VehicleListing(models.Model):
         # transaction.atomic and treats IntegrityError on this constraint as
         # "another thread won the race" — see custom_domain_scraper.py.
         unique_together = [("user", "list_id", "seller_profile_id")]
-        # Support duplicate_matching.find_existing_vehicle()'s lookups (same
-        # dealer + VIN, or same dealer + make/model/year) without a full scan
-        # of the dealer's rows. Index-only — no new column — so this is safe
-        # to add without touching existing data or the create()/update() paths.
-        indexes = [
-            models.Index(fields=['user', 'seller_profile_id', 'vin'], name='vl_dealer_vin_idx'),
-            models.Index(fields=['user', 'seller_profile_id', 'make', 'model', 'year'], name='vl_dealer_mmy_idx'),
-        ]
+        # duplicate_matching.find_existing_vehicle()'s lookups now join through
+        # `vehicle` — the supporting indexes live on Vehicle (vehicle_vin_idx /
+        # vehicle_mmy_idx) since migration 0056 dropped the duplicated spec
+        # columns this table used to index.
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model}"
@@ -461,11 +538,17 @@ class VehicleListingImage(models.Model):
     what guarantees an unchanged photo is never re-downloaded or re-enqueued.
     """
     STATUS_PENDING = 'pending'
+    # Claimed by ensure_listing_image_ingest(): a Celery task has been enqueued
+    # for this slot but hasn't started (or is between retry attempts). Distinct
+    # from 'pending' so the lazy publish-time trigger is idempotent — repeated
+    # polls of the images-status endpoint never enqueue the same slot twice.
+    STATUS_QUEUED = 'queued'
     STATUS_PROCESSING = 'processing'
     STATUS_READY = 'ready'
     STATUS_FAILED = 'failed'
     STATUS_CHOICES = [
         (STATUS_PENDING, 'Pending'),
+        (STATUS_QUEUED, 'Queued'),
         (STATUS_PROCESSING, 'Processing'),
         (STATUS_READY, 'Ready'),
         (STATUS_FAILED, 'Failed'),

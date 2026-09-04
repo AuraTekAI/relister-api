@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here
-from .models import VehicleListing, ListingUrl
+from .models import VehicleListing, ListingUrl, Vehicle
 from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,HostedImage,VehicleListingImage
 from .utils import reactivate_listing
 
@@ -22,9 +22,27 @@ class ListingUrlAdmin(admin.ModelAdmin):
 
 class VehicleListingAdmin(admin.ModelAdmin):
     list_display = ('id','user', 'year', 'make', 'model', 'status', 'list_id','seller_profile_id','rate','is_relist','is_changed','has_images','sales','sold_at','listed_on','retry_count', 'created_at', 'updated_at')
-    search_fields = ('user__email', 'year', 'make', 'model','status','list_id','seller_profile_id')
+    # Spec columns were dropped from VehicleListing (migration 0056) — spec
+    # searches go through the vehicle relation; list_display's year/make/model
+    # still render via the model's read-only delegate properties.
+    search_fields = ('user__email', 'status', 'list_id', 'seller_profile_id', 'vehicle__year', 'vehicle__make', 'vehicle__model')
+    list_select_related = ('user', 'vehicle')
     list_filter = ('user','status', 'is_relist', 'is_changed', 'has_images', 'sales',)
     actions = ['reactivate_sold_listings']
+
+    def get_search_results(self, request, queryset, search_term):
+        """
+        Override search to handle numeric vehicle_id searches
+        Allows searching by vehicle ID (e.g., "1012", "1153")
+        """
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+
+        # If search term is numeric, also search by vehicle_id
+        if search_term.isdigit():
+            queryset = queryset | VehicleListing.objects.filter(vehicle_id=int(search_term))
+            use_distinct = True
+
+        return queryset, use_distinct
 
     @admin.action(description="Reactivate selected listings (undo sold — dealer confirmed still for sale)")
     def reactivate_sold_listings(self, request, queryset):
@@ -33,6 +51,12 @@ class VehicleListingAdmin(admin.ModelAdmin):
             reactivate_listing(listing)
             count += 1
         self.message_user(request, f"Reactivated {count} listing(s).")
+
+class VehicleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'year', 'make', 'model', 'body_type', 'fuel_type', 'transmission', 'mileage', 'color', 'vin', 'created_at', 'updated_at')
+    search_fields = ('year', 'make', 'model', 'vin', 'color')
+    list_filter = ('year', 'body_type', 'fuel_type', 'transmission')
+    readonly_fields = ('created_at', 'updated_at')
 
 class GumtreeProfileListingAdmin(admin.ModelAdmin):
     list_display = ('user', 'url', 'status', 'profile_id', 'total_listings', 'processed_listings', 'created_at', 'updated_at')
@@ -51,7 +75,7 @@ class FacebookProfileListingAdmin(admin.ModelAdmin):
 
 class RelistingFacebooklistingAdmin(admin.ModelAdmin):
     list_display = ("user","listing","relisting_date","status","last_relisting_status","created_at","updated_at")
-    search_fields = ('user__email',"listing__year","listing__make","listing__model",)
+    search_fields = ('user__email',"listing__vehicle__year","listing__vehicle__make","listing__vehicle__model",)
     list_filter = ('user',"listing__status",)
     ordering = ('-relisting_date',)
 class InvoiceAdmin(admin.ModelAdmin):
@@ -63,6 +87,7 @@ class InvoiceAdmin(admin.ModelAdmin):
 
 admin.site.register(Invoice, InvoiceAdmin)
 admin.site.register(VehicleListing, VehicleListingAdmin)
+admin.site.register(Vehicle, VehicleAdmin)
 admin.site.register(ListingUrl, ListingUrlAdmin)
 admin.site.register(FacebookListing, FacebookListingAdmin)
 admin.site.register(FacebookUserCredentials, FacebookUserCredentialsAdmin)

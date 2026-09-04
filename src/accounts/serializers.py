@@ -370,6 +370,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     code='account_suspended',
                 )
 
+        # Optional: the extension includes which Facebook dealership account the
+        # browser is currently signed into. Stored newest-first and deduped —
+        # an account we already have moves back to the top rather than being
+        # inserted again (see User.add_dealer_facebook_profile); wrapped so a
+        # malformed value can never fail an otherwise-valid login.
+        try:
+            request = self.context.get('request')
+            fb_account = request.data.get('dealer_facebook_profile') if request else None
+            if fb_account:
+                user.add_dealer_facebook_profile(fb_account)
+        except Exception:
+            pass
+
         try:
             sub = user.subscription
             subscription_data = {

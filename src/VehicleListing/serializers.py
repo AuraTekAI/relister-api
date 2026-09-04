@@ -184,9 +184,13 @@ def _resolve_extension_images(listing, request):
             url for url in (_rewrite_proxy_url(u, request) for u in (listing.images or []))
             if url
         ]
-        # Return tuple (urls, all_hosted) to match all other return paths.
-        # For bypass path, images are raw Gumtree URLs, so all_hosted=False.
-        return urls, False
+        # Return tuple (urls, ready) to match all other return paths.
+        # In bypass mode the raw Gumtree URLs ARE the intended publish payload
+        # (Gumtree's CDN is CORS-friendly and loads fine from the dealer's own
+        # browser), so report ready=True — otherwise the extension's publish
+        # guard (GUARD 1d) would wait forever for S3 copies that are
+        # deliberately never produced while this flag is on.
+        return urls, True
     is_gumtree = bool(getattr(listing, 'gumtree_profile_id', None)
                       or getattr(listing, 'gumtree_url_id', None))
 
@@ -246,7 +250,43 @@ _AU_STATE_FULL_NAMES = {
 }
 
 
-class VehicleListingSerializer(serializers.ModelSerializer):
+class VehicleSpecSourcingMixin:
+    """Source vehicle-spec attributes from the canonical Vehicle row.
+
+    VehicleListing's duplicated spec columns were dropped (migration 0056), so
+    they no longer appear in ModelSerializer field introspection — this mixin
+    injects them into the output from `instance.vehicle` instead, keeping the
+    response SHAPE byte-for-byte identical for the extension and storefront:
+    the same keys, now always fed by the single source of truth. An unlinked
+    row (vehicle=None — shouldn't exist post-backfill) serializes the keys as
+    null rather than crashing.
+
+    Views serializing many rows should .select_related('vehicle') — the mixin
+    then adds zero extra queries.
+    """
+    VEHICLE_SPEC_FIELDS = (
+        'vin', 'make', 'model', 'year', 'mileage',
+        'transmission', 'fuel_type', 'body_type', 'color', 'variant',
+    )
+    # Serializers that expose only a subset of the spec keys (the storefront
+    # Product shapes) narrow this; None means "all of VEHICLE_SPEC_FIELDS".
+    SPEC_OUTPUT_FIELDS = None
+
+    @staticmethod
+    def resolve_spec(obj, field):
+        """One spec attribute for `obj`, read off the linked Vehicle."""
+        vehicle = getattr(obj, 'vehicle', None)
+        return getattr(vehicle, field, None) if vehicle is not None else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        vehicle = getattr(instance, 'vehicle', None)
+        for field in (self.SPEC_OUTPUT_FIELDS or self.VEHICLE_SPEC_FIELDS):
+            data[field] = getattr(vehicle, field, None) if vehicle is not None else None
+        return data
+
+
+class VehicleListingSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     relisting_dates = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     images_ready = serializers.SerializerMethodField()
@@ -355,45 +395,60 @@ class CustomDomainVehicleListingSerializer(VehicleListingSerializer):
         return bool(obj.images)
 
 
-class ProductListSerializer(serializers.ModelSerializer):
+class ProductListSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     """Lightweight, public-facing shape for storefront product grids/cards."""
     name = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
+
+    # Spec keys injected from the linked Vehicle by the mixin (they are no
+    # longer model fields, so they can't appear in Meta.fields) — same output
+    # keys as before the columns were dropped.
+    SPEC_OUTPUT_FIELDS = (
+        'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+        'mileage', 'transmission', 'color',
+    )
 
     class Meta:
         model = VehicleListing
         fields = [
             'id', 'name', 'image', 'price',
-            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
-            'mileage', 'transmission', 'color',
             'description', 'location', 'total_view_count',
         ]
 
     def get_name(self, obj):
-        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+        parts = [self.resolve_spec(obj, f) for f in ('year', 'make', 'model')]
+        return ' '.join(str(part) for part in parts if part)
 
     def get_image(self, obj):
         images = _resolve_storefront_images(obj, 'medium', self.context.get('request'), require_hosted=True)
         return images[0]['url'] if images else None
 
 
-class ProductDetailSerializer(serializers.ModelSerializer):
+class ProductDetailSerializer(VehicleSpecSourcingMixin, serializers.ModelSerializer):
     """Public single-product detail shape, keyed by the slug lookup endpoint."""
     name = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     dealer_phone = serializers.SerializerMethodField()
 
+    # Spec keys injected from the linked Vehicle by the mixin — same output
+    # keys as before the duplicated columns were dropped (no color/vin here,
+    # matching the original shape).
+    SPEC_OUTPUT_FIELDS = (
+        'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
+        'transmission', 'mileage',
+    )
+
     class Meta:
         model = VehicleListing
         fields = [
             'id', 'name', 'images', 'price',
-            'year', 'body_type', 'fuel_type', 'variant', 'make', 'model',
-            'description', 'location', 'condition', 'transmission',
-            'mileage', 'exterior_colour', 'interior_colour', 'dealer_phone',
+            'description', 'location', 'condition',
+            'exterior_colour', 'interior_colour', 'dealer_phone',
         ]
 
     def get_name(self, obj):
-        return ' '.join(str(part) for part in [obj.year, obj.make, obj.model] if part)
+        parts = [self.resolve_spec(obj, f) for f in ('year', 'make', 'model')]
+        return ' '.join(str(part) for part in parts if part)
 
     def get_dealer_phone(self, obj):
         return getattr(obj.user, 'phone_number', None)

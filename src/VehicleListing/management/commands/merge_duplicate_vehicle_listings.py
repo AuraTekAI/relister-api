@@ -44,9 +44,15 @@ MAX_MILEAGE_GAP_FOR_DUPLICATE = 1000
 # status, listed_on, sold_at, relist_count, retry_count — the canonical's OWN
 # lifecycle state wins; a duplicate's copy of those is not "extra data", it's a
 # competing (and by definition less-authoritative) history.
-BACKFILL_FIELDS = [
-    'vin', 'variant', 'color', 'body_type', 'fuel_type', 'transmission',
-    'description', 'location', 'mileage', 'price', 'images', 'url',
+#
+# Split by owner since migration 0056: spec attributes live only on the
+# canonical Vehicle row (VehicleListing's copies are read-only delegates), so
+# they are gap-filled vehicle→vehicle, everything else listing→listing.
+LISTING_BACKFILL_FIELDS = [
+    'description', 'location', 'price', 'images', 'url',
+]
+VEHICLE_BACKFILL_FIELDS = [
+    'vin', 'variant', 'color', 'body_type', 'fuel_type', 'transmission', 'mileage',
 ]
 
 
@@ -92,6 +98,7 @@ class Command(BaseCommand):
             dealer_qs = (
                 VehicleListing.objects
                 .filter(user_id=user_id, seller_profile_id=seller_profile_id)
+                .select_related('vehicle')  # spec reads below resolve via the vehicle relation
                 .annotate(
                     _image_count=Count('image_slots', distinct=True),
                     _fb_history_count=Count('facebooklisting', distinct=True),
@@ -244,10 +251,28 @@ class Command(BaseCommand):
 
             # Fill gaps only — never overwrite data the canonical already has.
             changed_fields = []
-            for field in BACKFILL_FIELDS:
+            for field in LISTING_BACKFILL_FIELDS:
                 if not getattr(canonical, field) and getattr(dup, field):
                     setattr(canonical, field, getattr(dup, field))
                     changed_fields.append(field)
+
+            # Spec attributes live on the Vehicle rows. If the canonical has no
+            # vehicle at all, inherit the duplicate's; otherwise gap-fill the
+            # canonical's vehicle from the duplicate's. (The duplicate's own
+            # Vehicle row, if any, is left in place once orphaned — harmless,
+            # and vehicle_sync can re-link it on a future scrape.)
+            if canonical.vehicle_id is None and dup.vehicle_id is not None:
+                canonical.vehicle_id = dup.vehicle_id
+                changed_fields.append('vehicle_id')
+            elif canonical.vehicle_id and dup.vehicle_id and canonical.vehicle_id != dup.vehicle_id:
+                vehicle_changed = []
+                for field in VEHICLE_BACKFILL_FIELDS:
+                    if not getattr(canonical.vehicle, field) and getattr(dup.vehicle, field):
+                        setattr(canonical.vehicle, field, getattr(dup.vehicle, field))
+                        vehicle_changed.append(field)
+                if vehicle_changed:
+                    canonical.vehicle.save(update_fields=vehicle_changed + ['updated_at'])
+
             if changed_fields:
                 canonical.save(update_fields=changed_fields)
 

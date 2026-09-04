@@ -40,3 +40,20 @@ AWS_VEHICLE_IMAGE_BUCKET = 'test-vehicle-images'
 AWS_VEHICLE_IMAGE_REGION = 'ap-southeast-2'
 AWS_S3_VEHICLE_IMAGE_PREFIX = 'vehicle-images/'
 AWS_CLOUDFRONT_DOMAIN = 'images.test.invalid'
+
+# Throttle counters live in the cache, and the locmem cache above persists
+# across tests in one process — with the production rates (login: 5/minute,
+# keyed by IP) the 6th login POST anywhere in a suite run starts drawing 429s
+# and unrelated tests fail. Effectively disable rate limits under test; the
+# throttle classes themselves still execute, so misconfigured scopes would
+# still blow up loudly.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '10000/minute',
+        'user': '10000/minute',
+        'login': '10000/minute',
+        'register': '10000/minute',
+        'password_reset': '10000/minute',
+    },
+}

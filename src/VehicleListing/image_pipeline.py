@@ -3,12 +3,15 @@ Vehicle photo ingestion pipeline: download a scraped image once, convert it to
 three WebP sizes, upload to our own S3 bucket, and record it so the storefront
 API can serve it instead of the original Gumtree/dealer URL.
 
-Call graph:
+Call graph (lazy, publish-time ingestion — the default):
   gumtree_scraper.py / custom_domain_scraper.py
-      -> sync_listing_images(listing, urls)      [diff against existing slots, enqueue new ones]
+      -> sync_listing_images(listing, urls)      [diff against existing slots; slots stay 'pending']
+  views.get_listing_images_status (extension calls it right before publishing ONE listing)
+      -> ensure_listing_image_ingest(listing)    [claims that listing's slots, enqueues]
           -> tasks.process_vehicle_listing_image_task (Celery, per slot)
               -> download_image_bytes -> content_hash_for -> get_or_create_ready_hosted_image
                   -> build_variant_bytes -> upload_variant (S3)
+(Set IMAGE_INGEST_ON_SCRAPE=True to restore eager enqueueing at scrape time.)
 
 Deletion is the mirror image: VehicleListing.image_slots cascade-delete with
 their listing, VehicleListing/signals.py notices each slot's post_delete and
@@ -20,9 +23,14 @@ import io
 import logging
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.utils import timezone
 from PIL import Image, ImageOps
 from zenrows import ZenRowsClient
 
@@ -162,13 +170,44 @@ def s3_key_for(content_hash, size, ext='webp'):
     return f"{prefix}/{content_hash[:2]}/{content_hash}/{size}.{ext}"
 
 
+# Cached per credential/region triple. public_url_for presigns one URL per
+# photo, so an extension home-page response asks for a client dozens of times;
+# building a fresh boto3 client each time costs ~100ms of session/config setup
+# apiece. Keying on the settings triple (rather than a bare module global) keeps
+# override_settings in tests honest — a changed bucket region builds its own
+# client instead of silently reusing the first one.
+_s3_client_cache = {}
+
+
 def _s3_client():
-    return boto3.client(
-        's3',
-        aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_VEHICLE_IMAGE_REGION,
+    cache_key = (
+        settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+        settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+        settings.AWS_VEHICLE_IMAGE_REGION,
     )
+    client = _s3_client_cache.get(cache_key)
+    if client is None:
+        client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_VEHICLE_IMAGE_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_VEHICLE_IMAGE_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_VEHICLE_IMAGE_REGION,
+            # Both settings matter only for generate_presigned_url, and both are
+            # wrong by default. Botocore still presigns with SigV2 unless told
+            # otherwise, which signs against the global us-east-1 endpoint and
+            # in path style: the bucket is in ap-southeast-2, so that URL comes
+            # back as a cross-region redirect rather than the image. SigV4 plus
+            # virtual addressing yields the regional
+            # https://<bucket>.s3.<region>.amazonaws.com/<key>?X-Amz-... form
+            # that resolves directly. Harmless for put_object/delete_objects,
+            # which already resolved the regional endpoint on their own.
+            config=BotoConfig(
+                signature_version='s3v4',
+                s3={'addressing_style': 'virtual'},
+            ),
+        )
+        _s3_client_cache[cache_key] = client
+    return client
 
 
 def upload_variant(key, body_bytes, content_type='image/webp'):
@@ -196,11 +235,38 @@ def delete_variants_from_s3(hosted_image):
 
 
 def public_url_for(key):
+    """Fetchable URL for one S3 object.
+
+    CloudFront path (AWS_CLOUDFRONT_DOMAIN set) is unchanged: a plain CDN URL,
+    no signing, because the distribution fronts the bucket with its own access.
+
+    Without CloudFront we sign the URL (unless VEHICLE_IMAGE_PRESIGN_URLS is
+    off). Both consumers fetch these URLs anonymously from outside our
+    infrastructure — the extension home page as an <img>, and the Facebook
+    publish as a `fetch()` issued from the Facebook tab itself (see
+    fillVehicleForm.ts uploadPhotos, which downloads each photo and uploads the
+    blob). Signing makes that work whatever the bucket policy happens to be.
+    See settings.VEHICLE_IMAGE_PRESIGN_URLS for why it is belt-and-braces
+    rather than strictly required today.
+
+    Returns None if signing fails, which every caller already treats as "not
+    hosted yet" and falls back to the raw scraped source URL for.
+    """
     if not key:
         return None
     if settings.AWS_CLOUDFRONT_DOMAIN:
         return f"https://{settings.AWS_CLOUDFRONT_DOMAIN}/{key}"
-    return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
+    if not getattr(settings, 'VEHICLE_IMAGE_PRESIGN_URLS', True):
+        return f"https://{settings.AWS_VEHICLE_IMAGE_BUCKET}.s3.{settings.AWS_VEHICLE_IMAGE_REGION}.amazonaws.com/{key}"
+    try:
+        return _s3_client().generate_presigned_url(
+            'get_object',
+            Params={'Bucket': settings.AWS_VEHICLE_IMAGE_BUCKET, 'Key': key},
+            ExpiresIn=settings.VEHICLE_IMAGE_PRESIGNED_URL_TTL,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        logger.error("Failed to presign S3 URL for key %s: %s", key, exc)
+        return None
 
 
 def _make_and_upload_upload_variant(content_hash, image_bytes):
@@ -408,7 +474,16 @@ def _sync_listing_images(listing, image_urls):
     if stale_urls:
         VehicleListingImage.objects.filter(listing=listing, source_url__in=stale_urls).delete()
 
-    if new_slot_ids:
+    # LAZY PIPELINE (default): slots are created as bookkeeping only — no
+    # download/S3 upload happens at scrape time. Ingestion for a listing is
+    # triggered on demand, right before THAT listing is published, via
+    # ensure_listing_image_ingest() (called by the images-status endpoint the
+    # extension polls before each publish). This is deliberate: scraping 50
+    # products × 20 photos used to enqueue ~1,000 downloads/uploads upfront,
+    # storing images for listings that might never be published. Set
+    # IMAGE_INGEST_ON_SCRAPE=True in the env to restore the old eager
+    # behaviour (no code deploy needed).
+    if new_slot_ids and getattr(settings, 'IMAGE_INGEST_ON_SCRAPE', False):
         from .tasks import process_vehicle_listing_image_task
 
         # Stagger by 1 second per image within this listing (countdown=index)
@@ -420,3 +495,61 @@ def _sync_listing_images(listing, image_urls):
                 process_vehicle_listing_image_task.apply_async(args=[pk], countdown=index)
 
         transaction.on_commit(_enqueue)
+
+
+# A slot claimed as queued/processing whose task apparently died (worker
+# restart, lost broker message) is re-claimable after this long. Generous on
+# purpose: the ingest task's own retry backoff can legitimately keep a slot
+# in-flight for tens of minutes (retry_backoff_max=600 × max_retries=5).
+STALE_INGEST_AGE = timedelta(hours=1)
+
+
+def ensure_listing_image_ingest(listing):
+    """Queue the S3 ingest tasks for THIS listing's unprocessed photos.
+
+    The lazy-pipeline trigger: called (repeatedly — it's idempotent) by the
+    images-status endpoint when the extension is about to publish `listing`.
+    Only this listing's photos are downloaded/stored; nothing is queued for
+    any other listing, which is what keeps S3 usage proportional to what
+    actually gets published.
+
+    Claims slots atomically (pending → queued) so concurrent polls can't
+    double-enqueue, and re-claims queued/processing slots untouched for over
+    STALE_INGEST_AGE — a task lost to a worker restart must not block the
+    listing forever. Returns how many slots were (re-)queued.
+    """
+    from .models import VehicleListingImage
+    from .tasks import process_vehicle_listing_image_task
+
+    now = timezone.now()
+    stale_cutoff = now - STALE_INGEST_AGE
+    # Claim never-started (pending) slots and lost-in-flight (stale
+    # queued/processing) ones. FAILED is deliberately TERMINAL and NOT
+    # re-claimed here: the ingest task already retries transient upload errors
+    # internally (autoretry_for, up to max_retries) before marking a slot
+    # FAILED — "try again". Once a slot is FAILED it is skipped, so ingestion
+    # can actually COMPLETE (in_flight → 0) instead of a permanently-bad image
+    # being re-queued forever and blocking the publish. The publish then goes
+    # ahead with the images that DID reach S3.
+    claimable_pks = list(
+        VehicleListingImage.objects.filter(listing=listing).filter(
+            Q(status=VehicleListingImage.STATUS_PENDING)
+            | Q(status__in=[VehicleListingImage.STATUS_QUEUED,
+                            VehicleListingImage.STATUS_PROCESSING],
+                updated_at__lt=stale_cutoff)
+        ).values_list('pk', flat=True)
+    )
+    if not claimable_pks:
+        return 0
+
+    VehicleListingImage.objects.filter(pk__in=claimable_pks).update(
+        status=VehicleListingImage.STATUS_QUEUED, updated_at=now
+    )
+
+    def _enqueue():
+        # Same 1s-per-image stagger rationale as the (optional) eager path.
+        for index, pk in enumerate(claimable_pks):
+            process_vehicle_listing_image_task.apply_async(args=[pk], countdown=index)
+
+    transaction.on_commit(_enqueue)
+    return len(claimable_pks)

@@ -1313,10 +1313,13 @@ def process_vehicle_listing_image_task(self, vehicle_listing_image_id):
     except (RequestException, BotoCoreError, ClientError) as exc:
         # Only mark FAILED on the last attempt — autoretry_for below will keep
         # retrying (with backoff) until then, and a later success should win.
+        # Between retries the slot stays QUEUED (a retry IS scheduled), so the
+        # lazy trigger (ensure_listing_image_ingest) sees it as in-flight and
+        # doesn't enqueue a duplicate task on the next images-status poll.
         is_final_attempt = self.request.retries >= self.max_retries
         slot.retry_count = self.request.retries + 1
         slot.error_message = str(exc)[:2000]
-        slot.status = VehicleListingImage.STATUS_FAILED if is_final_attempt else VehicleListingImage.STATUS_PENDING
+        slot.status = VehicleListingImage.STATUS_FAILED if is_final_attempt else VehicleListingImage.STATUS_QUEUED
         slot.save(update_fields=['retry_count', 'error_message', 'status', 'updated_at'])
         raise
     except Exception as exc:
