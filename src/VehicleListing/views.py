@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent,VehicleListingImage
+from .image_pipeline import ensure_listing_image_ingest
+from .serializers import _resolve_extension_images
 import json
 # from .facebook_listing import create_marketplace_listing, perform_search_and_delete, get_facebook_profile_listings, extract_facebook_listing_details, image_upload_verification
 from .utils import send_status_reminder_email, mark_listing_sold
@@ -1062,12 +1064,42 @@ def get_user_gumtree_profile_vehicle_listings(request):
     ).first()
 
     if not gumtree_profile:
+        # FIRST-LOAD FIX: a newly-approved dealer hits this endpoint before the
+        # approval-time scrape (profile_listings_for_approved_users) has created
+        # their GumtreeProfileListing row — which used to return a bare 404 and
+        # show an error on the extension home page, even though a retry a few
+        # minutes later worked. Instead: if this really is the user's own Gumtree
+        # URL, kick off that scrape on demand and return an empty "processing"
+        # result (200) so the extension shows an empty grid (no error) and fills
+        # in as the scrape completes. Only fall back to 404 when the URL isn't
+        # the user's configured profile (a genuinely invalid request).
+        user_gumtree_url = getattr(user, 'gumtree_dealarship_url', None)
+        if user_gumtree_url and user_gumtree_url == gumtree_profile_url:
+            # Dedupe: only dispatch once per user+url per few minutes so repeated
+            # polls while the scrape runs don't enqueue it again.
+            from django.core.cache import cache
+            dispatch_key = f'gumtree_scrape_kickoff:{user.id}'
+            if not cache.get(dispatch_key):
+                cache.set(dispatch_key, True, timeout=300)  # 5 min
+                try:
+                    from .tasks import profile_listings_for_approved_users
+                    profile_listings_for_approved_users.delay(user.id)
+                    logger.info(f"Kicked off Gumtree scrape on first load for user {user.id}")
+                except Exception as exc:
+                    logger.error(f"Could not dispatch Gumtree scrape for user {user.id}: {exc}")
+            return JsonResponse({
+                'count': 0,
+                'gumtree_profile_url': gumtree_profile_url,
+                'results': [],
+                'status': 'processing',
+                'message': 'Your Gumtree listings are being fetched. This can take a few minutes — they will appear automatically.'
+            }, status=200)
         return JsonResponse({'error': 'Gumtree profile not found or does not belong to user'}, status=404)
 
     vehicle_listings = VehicleListing.objects.filter(
         user=user,
         gumtree_profile=gumtree_profile
-    ).select_related('gumtree_profile').order_by('-updated_at')
+    ).select_related('gumtree_profile', 'vehicle').order_by('-updated_at')
 
     serializer = VehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
     return JsonResponse({
@@ -1102,13 +1134,82 @@ def get_user_custom_domain_profile_vehicle_listings(request):
     vehicle_listings = VehicleListing.objects.filter(
         user=user,
         custom_domain_profile=custom_domain_profile
-    ).select_related('custom_domain_profile').order_by('-updated_at')
+    ).select_related('custom_domain_profile', 'vehicle').order_by('-updated_at')
 
     serializer = CustomDomainVehicleListingSerializer(vehicle_listings, many=True, context={'request': request})
     return JsonResponse({
         'count': vehicle_listings.count(),
         'custom_domain_url': custom_domain_url,
         'results': serializer.data
+    }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_listing_images_status(request, listing_id):
+    """Lazy image pipeline's publish-time trigger + progress report.
+
+    The extension calls this right BEFORE publishing one specific listing
+    (publishListing.ts GUARD 2b) and polls it until `ingest_complete` is true.
+    Each call idempotently queues the S3 ingest for THIS listing's photos —
+    nothing is downloaded or stored for any other listing, which is what keeps
+    S3 usage proportional to what actually gets published (scrape time creates
+    bookkeeping slots only; see image_pipeline.sync_listing_images).
+
+    Response:
+      ingest_complete — every photo reached a terminal state (ready/failed);
+                        the wait-loop key. True as well for listings with no
+                        tracked slots (e.g. hosting bypassed), so the extension
+                        never blocks on a listing the pipeline doesn't manage.
+      images          — the exact URL list the extension should publish with
+                        (hosted S3 copies where ready, source fallback else),
+                        refreshed AFTER ingestion so the caller can replace the
+                        stale URLs it fetched with the listing collection.
+      images_ready    — true only when every URL in `images` is our S3 copy.
+    """
+    listing = VehicleListing.objects.filter(pk=listing_id, user=request.user).first()
+    if not listing:
+        return JsonResponse({'error': 'Listing not found'}, status=404)
+
+    queued_now = ensure_listing_image_ingest(listing)
+
+    counts = {status: 0 for status, _label in VehicleListingImage.STATUS_CHOICES}
+    for row in listing.image_slots.values('status').annotate(n=Count('id')):
+        counts[row['status']] = row['n']
+    total = sum(counts.values())
+    in_flight = counts['pending'] + counts['queued'] + counts['processing']
+
+    # S3 URLs of the images that ACTUALLY reached S3 (status=ready), in display
+    # order, skipping any that failed to upload. This is what the extension
+    # publishes with — S3 URLs only, never the proxy fallback. Failed images are
+    # simply omitted, so a couple of bad photos don't block the whole product.
+    hosted_images = []
+    ready_slots = (
+        listing.image_slots
+        .filter(status=VehicleListingImage.STATUS_READY, hosted_image__isnull=False)
+        .select_related('hosted_image')
+        .order_by('position')
+    )
+    for slot in ready_slots:
+        url = slot.hosted_image.upload_url()
+        # Only the FB-safe JPEG/PNG upload variant is valid for Marketplace.
+        if url and url.lower().split('?')[0].endswith(('.jpg', '.jpeg', '.png')):
+            hosted_images.append(url)
+
+    urls, images_ready = _resolve_extension_images(listing, request)
+    return JsonResponse({
+        'listing_id': listing.id,
+        'total': total,
+        'ready': counts['ready'],
+        'failed': counts['failed'],
+        'in_flight': in_flight,
+        'queued_now': queued_now,
+        'ingest_complete': in_flight == 0,
+        # `hosted_images`: ready-only S3 URLs (failed images skipped) — the
+        # publish payload. `images`/`images_ready` kept for compatibility.
+        'hosted_images': hosted_images,
+        'images': urls,
+        'images_ready': images_ready,
     }, status=200)
 
 
@@ -1776,7 +1877,7 @@ def get_old_vehicle_listings(request):
             is_relist=False,
             sales=False,
             user=user
-        ).order_by("listed_on")
+        ).select_related('vehicle').order_by("listed_on")
         
         # Serialize the listings using the existing serializer. Request context
         # is required so DNA image URLs get rewritten to the proxy — the extension
@@ -1883,7 +1984,7 @@ def get_all_products(request):
     except ValueError:
         return JsonResponse({'error': 'limit and offset must be integers'}, status=400)
 
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-updated_at')
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-updated_at')
     total_count = products.count()
     page = products[offset:offset + limit]
 
@@ -1910,8 +2011,8 @@ def get_products_by_category(request, category):
     """
     products = VehicleListing.objects.filter(
         is_listed=True,
-        make__iexact=category
-    ).order_by('-updated_at')
+        vehicle__make__iexact=category
+    ).select_related('vehicle').order_by('-updated_at')
 
     if not products.exists():
         return JsonResponse({
@@ -1936,7 +2037,7 @@ def get_product_by_slug(request, name, vehicle_id):
     `vehicle_id` (the trailing integer) — `name` is decorative and never
     validated against the row's actual make/model/year.
     """
-    product = VehicleListing.objects.select_related('user').filter(pk=vehicle_id, is_listed=True).first()
+    product = VehicleListing.objects.select_related('user', 'vehicle').filter(pk=vehicle_id, is_listed=True).first()
     if not product:
         return JsonResponse({'error': 'Product not found'}, status=404)
 
@@ -1975,7 +2076,7 @@ def get_latest_arrivals(request):
     Public, unauthenticated list of the 4 most recently added vehicles,
     e.g. GET /api/vehicle-listing/latest-arrivals/
     """
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-created_at')[:4]
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
@@ -1988,41 +2089,48 @@ def get_popular_vehicles(request):
     Public, unauthenticated list of the 4 most-viewed vehicles, e.g.
     GET /api/vehicle-listing/popular-vehicles/
     """
-    products = VehicleListing.objects.filter(is_listed=True).order_by('-total_view_count', '-created_at')[:4]
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle').order_by('-total_view_count', '-created_at')[:4]
 
     serializer = ProductListSerializer(products, many=True)
     return JsonResponse({'results': serializer.data}, status=200)
 
 
-# Numeric-range params: (query param prefix, model field, cast target field name).
+# Spec attributes live on the canonical Vehicle row (VehicleListing's
+# duplicated columns were dropped in migration 0056), so filters on them go
+# through the listing→vehicle join — hence the query-param → ORM-path maps
+# below. price/location stay listing-own columns (they describe the ad).
+#
 # price/year are stored as CharField (scrapers normalize them to plain digit
 # strings, e.g. "45000", but the column itself has no numeric constraint) so a
 # min/max range needs an explicit Cast rather than a plain __gte/__lte, which
 # would otherwise compare lexicographically. The regex guard excludes any
 # legacy/dirty non-digit values instead of letting the Cast error out.
-_NUMERIC_RANGE_FIELDS = {
-    'year': 'year',
-    'mileage': 'mileage',
-    'price': 'price',
+#
+# Exact (case-insensitive) equality per value — dropdown-style filters with a
+# small, clean set of values in the data (e.g. transmission is always
+# "Automatic"/"Manual"); repeat/comma-separate the param for an OR match.
+_EXACT_MULTI_FIELDS = {
+    'transmission': 'vehicle__transmission',
+    'body_type': 'vehicle__body_type',
 }
-# Fields matched with an exact (case-insensitive) equality check per value —
-# these are dropdown-style filters with a small, clean set of values in the
-# data (e.g. transmission is always "Automatic"/"Manual"), so the frontend
-# sends one of a known value (repeat/comma-separate the param for an OR match).
-_EXACT_MULTI_FIELDS = ['transmission', 'body_type']
-# Fields matched with a partial (case-insensitive) substring check per value —
-# these carry free-text/compound values in the data (e.g. model is a full
-# trim string like "Outlander ES ZL", fuel_type is "Petrol - Unleaded"), so an
-# exact match would almost never hit; substring match is what users expect
-# when typing a make/model/colour into a search box.
-_PARTIAL_MULTI_FIELDS = ['make', 'model', 'fuel_type', 'color', 'location']
+# Partial (case-insensitive) substring per value — free-text/compound values
+# in the data (e.g. model is a full trim string like "Outlander ES ZL",
+# fuel_type is "Petrol - Unleaded"), so an exact match would almost never
+# hit; substring match is what users expect when typing into a search box.
+_PARTIAL_MULTI_FIELDS = {
+    'make': 'vehicle__make',
+    'model': 'vehicle__model',
+    'fuel_type': 'vehicle__fuel_type',
+    'color': 'vehicle__color',
+    'location': 'location',
+}
 
 ORDERING_OPTIONS = {
     'newest': '-updated_at',
     'price_asc': 'price_int',
     'price_desc': '-price_int',
-    'mileage_asc': 'mileage',
-    'mileage_desc': '-mileage',
+    'mileage_asc': 'vehicle__mileage',
+    'mileage_desc': '-vehicle__mileage',
     'year_asc': 'year_int',
     'year_desc': '-year_int',
 }
@@ -2072,35 +2180,42 @@ def search_products(request):
             errors[param_name] = 'must be an integer'
             return None
 
-    products = VehicleListing.objects.filter(is_listed=True)
+    # Spec filters match on the canonical Vehicle row through the
+    # listing→vehicle join (the listing's own duplicated spec columns were
+    # dropped in migration 0056; vehicle_vin_idx/vehicle_mmy_idx carry the
+    # lookups). Output resolves through the same relationship (see
+    # VehicleSpecSourcingMixin), hence the select_related.
+    products = VehicleListing.objects.filter(is_listed=True).select_related('vehicle')
 
     name = params.get('name')
     if name:
         products = products.filter(
-            Q(make__icontains=name) | Q(model__icontains=name) | Q(variant__icontains=name)
+            Q(vehicle__make__icontains=name)
+            | Q(vehicle__model__icontains=name)
+            | Q(vehicle__variant__icontains=name)
         )
 
-    for field in _EXACT_MULTI_FIELDS:
-        values = multi_values(field)
+    for param, path in _EXACT_MULTI_FIELDS.items():
+        values = multi_values(param)
         if values:
             match = Q()
             for value in values:
-                match |= Q(**{f'{field}__iexact': value})
+                match |= Q(**{f'{path}__iexact': value})
             products = products.filter(match)
 
-    for field in _PARTIAL_MULTI_FIELDS:
-        values = multi_values(field)
+    for param, path in _PARTIAL_MULTI_FIELDS.items():
+        values = multi_values(param)
         if values:
             match = Q()
             for value in values:
-                match |= Q(**{f'{field}__icontains': value})
+                match |= Q(**{f'{path}__icontains': value})
             products = products.filter(match)
 
     years = multi_values('year')
     if years:
         match = Q()
         for year in years:
-            match |= Q(year__iexact=year)
+            match |= Q(vehicle__year__iexact=year)
         products = products.filter(match)
 
     range_filters = {
@@ -2112,8 +2227,8 @@ def search_products(request):
     needs_year_cast = any(range_filters['year'])
     needs_price_cast = any(range_filters['price'])
     if needs_year_cast:
-        products = products.filter(year__regex=r'^\d+$').annotate(
-            year_int=Cast('year', output_field=IntegerField())
+        products = products.filter(vehicle__year__regex=r'^\d+$').annotate(
+            year_int=Cast('vehicle__year', output_field=IntegerField())
         )
     if needs_price_cast:
         products = products.filter(price__regex=r'^\d+$').annotate(
@@ -2128,9 +2243,9 @@ def search_products(request):
 
     range_min, range_max = range_filters['mileage']
     if range_min is not None:
-        products = products.filter(mileage__gte=range_min)
+        products = products.filter(vehicle__mileage__gte=range_min)
     if range_max is not None:
-        products = products.filter(mileage__lte=range_max)
+        products = products.filter(vehicle__mileage__lte=range_max)
 
     range_min, range_max = range_filters['price']
     if range_min is not None:
@@ -2146,8 +2261,8 @@ def search_products(request):
             price_int=Cast('price', output_field=IntegerField())
         )
     elif ordering in ('year_asc', 'year_desc') and not needs_year_cast:
-        products = products.filter(year__regex=r'^\d+$').annotate(
-            year_int=Cast('year', output_field=IntegerField())
+        products = products.filter(vehicle__year__regex=r'^\d+$').annotate(
+            year_int=Cast('vehicle__year', output_field=IntegerField())
         )
 
     limit = parse_int('limit')
