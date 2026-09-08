@@ -23,6 +23,7 @@ from .views import (
     facebook_verification_status,
     list_facebook_verification_blocked_dealers,
 )
+from .price_estimation import estimate_vehicle_price
 
 urlpatterns = [
     # path('import/', import_url_from_gumtree, name='import_url_from_gumtree'),
@@ -66,4 +67,5 @@ urlpatterns = [
     path('popular-vehicles/', get_popular_vehicles, name='get_popular_vehicles'),
     path('search/', search_products, name='search_products'),
     path('top-dealers/', get_top_dealers, name='get_top_dealers'),
+    path('estimate-price/', estimate_vehicle_price, name='estimate_vehicle_price'),
 ]
