@@ -21,12 +21,12 @@ the public storefront's API.
 """
 import json
 import re
-from statistics import quantiles
 
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 
+from .export_utils import median_p25_p75
 from .models import VehicleListing
 
 MIN_SAMPLE_SIZE = 5
@@ -34,25 +34,7 @@ MIN_SAMPLE_SIZE = 5
 # Sale state lives on VehicleListing.status on this branch — utils.mark_listing_sold()
 # writes "sold" there (alongside sales/sold_at), and utils.reactivate_listing() moves
 # it back to "completed". Only genuinely sold listings may feed an estimate.
-SOLD_STATUS = "sold"
-
-
-def median_p25_p75(values):
-    """
-    Generic median / 25th / 75th percentile over a list of numbers (ints or
-    floats). Returns (median, p25, p75) — all None for an empty list (a median
-    of nothing is undefined, not zero); all equal to the single value for a
-    one-item list.
-    """
-    values = [v for v in values if v is not None]
-    if not values:
-        return None, None, None
-    if len(values) == 1:
-        return values[0], values[0], values[0]
-    # statistics.quantiles(n=4) with the default 'exclusive' method needs at
-    # least 2 data points; returns [Q1, Q2(median), Q3].
-    q1, q2, q3 = quantiles(values, n=4)
-    return q2, q1, q3
+SOLD_STATUS = VehicleListing.STATUS_SOLD
 
 # Mileage match window in km. Two cars count as the same mileage when their
 # odometers are within this many km of each other — that is the strict tier.

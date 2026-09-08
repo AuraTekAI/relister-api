@@ -131,6 +131,12 @@ class VehicleListing(models.Model):
     exterior/interior_colour, mileage_unavailable, ...) describe the AD or the
     scrape, not the car.
     """
+    # Plain class constants (no schema impact) so every reader of `status`
+    # agrees on the sale-state strings utils.mark_listing_sold() writes —
+    # used by price_estimation.py and vehicle_export.py.
+    STATUS_SOLD = 'sold'
+    STATUS_WITHDRAWN = ('deleted', 'failed_deletion')
+
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     # SET_NULL (not CASCADE): a Vehicle row is bookkeeping — deleting one must
     # never destroy the dealer's listing rows, their images or relist history.
