@@ -513,7 +513,12 @@ def get_gumtree_profile_listings(request):
             return JsonResponse({'error': message}, status=200)
 
     except Exception as e:
-        return JsonResponse({'message': str(e)}, status=500)
+        # Raw exception to the log only — see the Custom Domain handler below.
+        logger.error(f"Error importing Gumtree profile listings: {str(e)}", exc_info=True)
+        _msg = ('We could not import your Gumtree listings just now. This is a problem on '
+                'our side, not your account — please wait a few minutes and try again. '
+                'Contact support if it keeps happening.')
+        return JsonResponse({'success': False, 'error': _msg, 'message': _msg}, status=500)
 
 
 @api_view(['POST'])
@@ -545,7 +550,15 @@ def get_custom_domain_profile_listings(request):
             return JsonResponse({'error': message}, status=422)
 
     except Exception as e:
-        return JsonResponse({'message': str(e)}, status=500)
+        # The raw exception goes to the log, never the response: it is Python
+        # internals (sometimes table or column names), meaningless to a dealer
+        # and not safe to display. Both keys carry the same text because older
+        # clients read `message` while newer ones read `error` first.
+        logger.error(f"Error registering Custom Domain profile: {str(e)}", exc_info=True)
+        _msg = ('We could not read your Custom Domain website just now. This is a problem '
+                'on our side, not your account — please wait a few minutes and try again. '
+                'Contact support if it keeps happening.')
+        return JsonResponse({'success': False, 'error': _msg, 'message': _msg}, status=500)
 
 # @api_view(['POST'])
 # @permission_classes([IsAuthenticated])
@@ -1901,7 +1914,9 @@ def get_old_vehicle_listings(request):
         logger.error(f"Error retrieving old vehicle listings: {str(e)}")
         return JsonResponse({
             'success': False,
-            'error': f'An unexpected error occurred while retrieving old vehicle listings: {str(e)}'
+            'error': ('We could not load your older listings just now. This is a problem on '
+                      'our side, not your account — please wait a few minutes and try again. '
+                      'Contact support if it keeps happening.')
         }, status=500)
 
 
