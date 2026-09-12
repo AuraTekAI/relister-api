@@ -1654,6 +1654,99 @@ def update_vehicle_listing_is_changed(request):
         }, status=500)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def relist_recovery(request):
+    """
+    Mark a listing as needing MANUAL recovery after a failed RE-LIST.
+
+    The browser extension calls this ONLY from its delete-then-relist flows
+    (price change, changed-data, aged relist) — when a listing that was already
+    live on Facebook got deleted but the follow-up republish did NOT confirm
+    success. That leaves the product removed-from-Facebook-but-still-marked-
+    published, which a human has to sort out. So the listing's `status` is set to
+    NEEDS_MANUAL_RECOVERY and nothing else is changed.
+
+    This is deliberately NOT used for a first-time publish failure (that path
+    never calls here) — a first-time failure just leaves the row to be retried
+    automatically and is not a manual-recovery situation.
+
+    Request Body:
+    {
+        "id": 123,
+        "reason": "republish_failed_after_delete",   # optional — logged only
+        "detail": "..."                               # optional — logged only
+    }
+
+    Returns:
+    {
+        "success": true,
+        "data": { "id": 123, "status": "NEEDS_MANUAL_RECOVERY" }
+    }
+    """
+    try:
+        data = json.loads(request.body)
+
+        if 'id' not in data:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing ID is required'
+            }, status=400)
+
+        try:
+            vehicle_listing_id = int(data['id'])
+            if vehicle_listing_id <= 0:
+                raise ValueError("ID must be positive")
+        except (ValueError, TypeError):
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid vehicle listing ID format'
+            }, status=400)
+
+        vehicle_listing = VehicleListing.objects.filter(
+            id=vehicle_listing_id, user=request.user
+        ).first()
+        if vehicle_listing is None:
+            return JsonResponse({
+                'success': False,
+                'error': 'Vehicle listing not found or you do not have permission to update it'
+            }, status=404)
+
+        # reason/detail are for the audit log only — the status is the same for
+        # every relist-failure reason the extension reports.
+        reason = data.get('reason')
+        detail = data.get('detail')
+        logger.warning(
+            f"Relist failed for listing {vehicle_listing_id} (user {request.user.id}, "
+            f"reason={reason}) — marking status=NEEDS_MANUAL_RECOVERY. {detail or ''}"
+        )
+
+        # Status-only mutation — explicit update_fields so nothing else can drift.
+        vehicle_listing.status = 'NEEDS_MANUAL_RECOVERY'
+        vehicle_listing.save(update_fields=['status', 'updated_at'])
+
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'id': vehicle_listing.id,
+                'status': vehicle_listing.status,
+            }
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON format in request body'
+        }, status=400)
+
+    except Exception as e:
+        logger.error(f"Error setting NEEDS_MANUAL_RECOVERY on vehicle listing: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': 'An unexpected error occurred while updating the vehicle listing'
+        }, status=500)
+
+
 @api_view(['PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def update_vehicle_listing_facebook_id(request):
