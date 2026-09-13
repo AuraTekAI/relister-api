@@ -2205,6 +2205,12 @@ def get_popular_vehicles(request):
 _EXACT_MULTI_FIELDS = {
     'transmission': 'vehicle__transmission',
     'body_type': 'vehicle__body_type',
+    # Dealer stock code. Unlike the specs above it lives on the listing, not
+    # the canonical Vehicle — the same car listed by two dealers carries two
+    # different stock numbers, so it can't hang off the shared Vehicle row.
+    # Exact rather than substring because it is an identifier: searching "42"
+    # should not also return "1425".
+    'stock_number': 'stock_number',
 }
 # Partial (case-insensitive) substring per value — free-text/compound values
 # in the data (e.g. model is a full trim string like "Outlander ES ZL",
@@ -2241,8 +2247,8 @@ def search_products(request):
 
     Query Parameters:
     - name: Text — matches make, model, or variant (case-insensitive, partial)
-    - transmission, body_type: exact match (case-insensitive), comma-separated
-      for multiple values, e.g. transmission=Automatic
+    - transmission, body_type, stock_number: exact match (case-insensitive),
+      comma-separated for multiple values, e.g. transmission=Automatic
     - make, model, fuel_type, color, location: partial match
       (case-insensitive), comma-separated for multiple values
     - year: exact year(s), comma-separated for multiple values
