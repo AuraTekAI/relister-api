@@ -281,6 +281,68 @@ def _make_and_upload_upload_variant(content_hash, image_bytes):
     return upload_key
 
 
+def _s3_object_exists(key):
+    """True if the object exists in the vehicle-image bucket.
+
+    A 404 / NoSuchKey is a definite "gone" — the case we heal. Any other error
+    (throttling, a transient permissions blip) is treated as "present" so a hiccup
+    never triggers a needless re-upload or blocks a publish on a false negative.
+    """
+    if not key:
+        return False
+    try:
+        _s3_client().head_object(Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET, Key=key)
+        return True
+    except ClientError as exc:
+        if exc.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+            return False
+        logger.warning("head_object non-404 for key %s: %s (treating as present)", key, exc)
+        return True
+    except BotoCoreError as exc:
+        logger.warning("head_object failed for key %s: %s (treating as present)", key, exc)
+        return True
+
+
+def _hosted_image_objects_missing(hosted, want_upload):
+    """True if any S3 object this `ready` HostedImage points at is gone (or its
+    key is blank). Objects can vanish under a still-`ready` row — an S3 lifecycle
+    expiry deletes old keys, or the GC removed them when a slot was dropped — which
+    is exactly what makes the extension fetch 0/N images and abort a republish
+    with PARTIAL_IMAGE_UPLOAD."""
+    expected = [hosted.thumbnail_image, hosted.medium_image, hosted.large_image]
+    if want_upload:
+        expected.append(hosted.upload_image)
+    return any(not _s3_object_exists(key) for key in expected)
+
+
+def _reupload_hosted_variants(hosted, content_hash, image_bytes, build_upload_variant):
+    """Re-encode and re-upload this HostedImage's variants from freshly downloaded
+    bytes to the SAME deterministic keys, healing a `ready` row whose S3 objects
+    were deleted out from under it. Raises on upload failure so the caller (the
+    Celery task) retries rather than leaving a half-restored row."""
+    variants = build_variant_bytes(image_bytes, settings.VEHICLE_IMAGE_SIZES, settings.VEHICLE_IMAGE_WEBP_QUALITY)
+    keys = {}
+    for size, (webp_bytes, width, height) in variants.items():
+        key = s3_key_for(content_hash, size)
+        upload_variant(key, webp_bytes)
+        keys[size] = (key, width, height)
+    large_key, large_width, large_height = keys['large']
+    hosted.thumbnail_image = keys['thumbnail'][0]
+    hosted.medium_image = keys['medium'][0]
+    hosted.large_image = large_key
+    hosted.width = large_width
+    hosted.height = large_height
+    hosted.file_size_bytes = len(image_bytes)
+    if build_upload_variant or hosted.upload_image:
+        hosted.upload_image = _make_and_upload_upload_variant(content_hash, image_bytes)
+    hosted.status = HostedImage.STATUS_READY
+    hosted.save()
+    logger.warning(
+        "Re-uploaded missing S3 variants for HostedImage %s (content_hash=%s) — "
+        "objects had disappeared under a ready row.", hosted.pk, content_hash,
+    )
+
+
 def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, build_upload_variant=True):
     """
     Returns (HostedImage, uploaded: bool). If a ready HostedImage already
@@ -298,6 +360,17 @@ def get_or_create_ready_hosted_image(content_hash, source_url, image_bytes, buil
     """
     ready = HostedImage.objects.filter(content_hash=content_hash, status=HostedImage.STATUS_READY).first()
     if ready:
+        # Normally a 'ready' row is trusted without touching S3 — the dedup path
+        # that makes relisting the same photo free. But the objects it points at
+        # can be gone from the bucket while the row still says ready (an S3
+        # lifecycle expiry removes old keys; the age-correlated 404s that made the
+        # extension fetch 0/N images and abort a republish with
+        # PARTIAL_IMAGE_UPLOAD). Verify, and re-upload from the bytes we just
+        # downloaded if anything is missing, so we never hand back keys that 404.
+        want_upload = build_upload_variant or bool(ready.upload_image)
+        if _hosted_image_objects_missing(ready, want_upload):
+            _reupload_hosted_variants(ready, content_hash, image_bytes, build_upload_variant)
+            return ready, True
         if build_upload_variant and not ready.upload_image:
             ready.upload_image = _make_and_upload_upload_variant(content_hash, image_bytes)
             ready.save(update_fields=['upload_image', 'updated_at'])
@@ -504,6 +577,38 @@ def _sync_listing_images(listing, image_urls):
 STALE_INGEST_AGE = timedelta(hours=1)
 
 
+def _ready_slots_missing_from_s3(listing):
+    """PKs of this listing's `ready` image slots whose hosted S3 object is gone.
+
+    Called by ensure_listing_image_ingest only when nothing else is pending or
+    in-flight, so it costs one HEAD per ready photo once the queue is otherwise
+    idle — not on every images-status poll. Re-queuing these makes the ingest task
+    re-download the source and re-upload (get_or_create_ready_hosted_image heals
+    the row), so the extension publishes with URLs that actually resolve instead
+    of 404-ing on all of them and aborting with PARTIAL_IMAGE_UPLOAD."""
+    from .models import VehicleListingImage
+    missing = []
+    ready_slots = (
+        listing.image_slots
+        .filter(status=VehicleListingImage.STATUS_READY, hosted_image__isnull=False)
+        .select_related('hosted_image')
+    )
+    for slot in ready_slots:
+        hosted = slot.hosted_image
+        # Check the variant actually fetched downstream: the FB-safe upload JPEG
+        # the extension downloads (falling back to the large WebP the storefront
+        # shows if this row predates the upload variant). If that one is gone, the
+        # task re-run will verify and re-upload every variant.
+        if not _s3_object_exists(hosted.upload_image or hosted.large_image):
+            missing.append(slot.pk)
+    if missing:
+        logger.warning(
+            "Listing %s: %d ready image slot(s) missing from S3 — re-queuing to re-ingest.",
+            listing.pk, len(missing),
+        )
+    return missing
+
+
 def ensure_listing_image_ingest(listing):
     """Queue the S3 ingest tasks for THIS listing's unprocessed photos.
 
@@ -540,7 +645,23 @@ def ensure_listing_image_ingest(listing):
         ).values_list('pk', flat=True)
     )
     if not claimable_pks:
-        return 0
+        # Nothing pending or in-flight — the listing otherwise looks ready to
+        # publish. Only now (queue idle) do we spend a HEAD per ready photo to
+        # catch the DB<->S3 desync: re-queue any 'ready' slot whose S3 object has
+        # been deleted underneath it, so it's re-fetched and re-uploaded before the
+        # extension publishes with a presigned URL that 404s. Guarded by the
+        # in-flight check so a heal already underway doesn't re-HEAD every poll.
+        in_flight_exists = VehicleListingImage.objects.filter(
+            listing=listing,
+            status__in=[VehicleListingImage.STATUS_PENDING,
+                        VehicleListingImage.STATUS_QUEUED,
+                        VehicleListingImage.STATUS_PROCESSING],
+        ).exists()
+        if in_flight_exists:
+            return 0
+        claimable_pks = _ready_slots_missing_from_s3(listing)
+        if not claimable_pks:
+            return 0
 
     VehicleListingImage.objects.filter(pk__in=claimable_pks).update(
         status=VehicleListingImage.STATUS_QUEUED, updated_at=now
