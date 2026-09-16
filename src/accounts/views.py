@@ -1,3 +1,4 @@
+import logging
 import uuid
 from django.conf import settings
 from rest_framework import status, generics
@@ -29,6 +30,10 @@ import django_filters
 from VehicleListing.tasks import profile_listings_for_approved_users, send_user_approval_email_task
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+
+# Same logger the other view modules use (console + logs/relister_views.log).
+logger = logging.getLogger('relister_views')
+
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -273,12 +278,32 @@ class UserListview(ModelViewSet):
         #instance before update
         instance = self.get_object()
         user_approved=instance.is_approved
+        previous_status = instance.account_status
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
 
         try:
             self.perform_update(serializer)
             user=serializer.instance
+
+            # Audit trail for admin-driven account_status changes (the admin webapp's
+            # "Account status" picker PATCHes this field). The column also moves on its
+            # own — the trial-expiry task sets 'trial_expired', Stripe webhooks set
+            # 'active'/'past_due' — and the model keeps no history, so this log line is
+            # the only record of who changed it by hand. Note 'suspended' blocks login
+            # (see CustomTokenObtainPairSerializer), which makes it worth auditing.
+            # Invalid values never reach here: the serializer validates against
+            # User.ACCOUNT_STATUS_CHOICES and returns 400 before perform_update runs.
+            if user.account_status != previous_status:
+                logger.info(
+                    "Admin %s changed account_status of user %s (id=%s): %s -> %s",
+                    getattr(request.user, 'email', request.user),
+                    user.email,
+                    user.pk,
+                    previous_status,
+                    user.account_status,
+                )
+
             #proccess the approved user profile urls
             if user.is_approved and not user_approved:
                 profile_listings_for_approved_users.delay(user.id)
