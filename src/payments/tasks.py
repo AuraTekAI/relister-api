@@ -789,17 +789,33 @@ def report_active_overage_usage(self, dry_run=None):
                 logger.warning(f"[overage] LIVE user={sub.user_id} has overage={overage} but no metered subscription item — skipping (needs overage item on Stripe sub)")
             continue
 
+        # The overage price is backed by a Stripe Billing Meter with 'sum'
+        # aggregation — Stripe ADDS every value it receives during the period.
+        # Reporting the absolute overage every day would bill overage × (days in
+        # period) and massively overcharge (15/day → 450 → $1,575 instead of
+        # $52.50). So we report the current over-quota count exactly ONCE per
+        # period, on the final day before renewal. The deterministic `identifier`
+        # makes any duplicate/retry run inside that 24h window collapse to a
+        # single counted event, so the meter's period total == the real overage.
+        period_end = sub.current_period_end
+        if not period_end or (period_end - now) > timedelta(hours=24):
+            summary['skipped_not_period_end'] = summary.get('skipped_not_period_end', 0) + 1
+            continue
+
+        meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
         try:
-            stripe.SubscriptionItem.create_usage_record(
-                item,
-                quantity=int(overage),
-                timestamp=int(now.timestamp()),
-                action='set',   # ABSOLUTE — overwrites, never accumulates
+            stripe.billing.MeterEvent.create(
+                event_name=meter_event_name,
+                identifier=f"overage-sub{sub.id}-{int(period_end.timestamp())}",
+                payload={
+                    'stripe_customer_id': sub.stripe_customer_id,
+                    'value': str(int(overage)),
+                },
             )
             summary['reported' if overage > 0 else 'zero_reported'] += 1
         except Exception as e:  # noqa: BLE001
             summary['errors'] += 1
-            logger.error(f"[overage] LIVE user={sub.user_id} usage report failed: {e}")
+            logger.error(f"[overage] LIVE user={sub.user_id} meter event report failed: {e}")
 
     logger.info(f"[overage] {mode} run @ {now.isoformat()} summary={summary}")
     for ln in lines:
