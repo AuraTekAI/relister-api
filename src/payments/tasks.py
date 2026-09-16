@@ -65,11 +65,32 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
     base_charge = plan.price_aud or Decimal('0.00')
     listing_quota = plan.listing_quota or 0
     overage_rate = plan.overage_rate_aud or Decimal('0.00')
-    # Safe-mode guard: subscription-cycle invoices are plan-only.
-    # Overage is billed ONLY via source=listing_overage webhook path.
-    listings_used = subscription.listing_count
+
+    # Overage: mirror what Stripe actually billed on this invoice's metered
+    # overage line (plan.stripe_overage_price_id). Reading the qty + charge back
+    # from the real Stripe invoice keeps our record identical to the customer's
+    # charge and never double-bills the separate per-listing
+    # (source=listing_overage) path, which is handled by its own webhook branch.
     overage_count = 0
     overage_charge = Decimal('0.00')
+    if stripe_invoice_id and plan.stripe_overage_price_id:
+        from .stripe_utils import extract_metered_overage_from_stripe_invoice
+        try:
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            stripe_invoice = stripe.Invoice.retrieve(
+                stripe_invoice_id, expand=['lines.data.price']
+            )
+            metered_count, metered_charge = extract_metered_overage_from_stripe_invoice(
+                stripe_invoice, plan
+            )
+            if metered_count is not None and metered_charge is not None:
+                overage_count = metered_count
+                overage_charge = metered_charge
+        except stripe.error.StripeError as exc:
+            logger.warning(
+                f"generate_invoice: could not read overage from Stripe invoice "
+                f"{stripe_invoice_id}: {exc} — recording plan-only invoice."
+            )
 
     # --- Discount ---
     discount_obj = subscription.active_discount_code
