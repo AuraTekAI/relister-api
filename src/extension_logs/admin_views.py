@@ -15,6 +15,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from django.contrib.auth import get_user_model
+from django.db.models import Case, IntegerField, Value, When
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -27,6 +28,10 @@ User = get_user_model()
 
 # How long to wait for the extension to ack a remote command before giving up.
 COMMAND_ACK_TIMEOUT = 100
+
+# Cap on the per-dealer rows backend_health returns. Bounded so the endpoint
+# stays a quick health check rather than an unpaginated dump as dealers grow.
+DEALER_HEALTH_LIMIT = 100
 
 
 def _dealer_name(u):
@@ -239,6 +244,13 @@ def backend_health(request):
     Quick backend self-check for Claude: DB reachable, channel layer (Redis)
     reachable, and basic counts. Helps distinguish "extension problem" from
     "backend problem".
+
+    Also returns a per-dealer `dealers` breakdown (worst-first, capped at
+    DEALER_HEALTH_LIMIT) so "which dealers are broken and why" is answerable
+    from this one call instead of a dealer-meta request each. The aggregate
+    keys are unchanged: the MCP get_backend_health tool reads `db`,
+    `channel_layer`, `dealers_synced` and `dealers_with_fb_errors` by name, so
+    this is purely additive.
     """
     health = {'success': True, 'db': False, 'channel_layer': False}
     try:
@@ -262,6 +274,36 @@ def backend_health(request):
         health['dealers_with_fb_errors'] = ExtensionSyncStatus.objects.exclude(status='ok').count()
     except Exception:  # noqa: BLE001
         pass
+
+    # Per-dealer detail, ordered broken-first. A plain order_by('status') would
+    # sort alphabetically and bury the failures ('fb_error' < 'ok' <
+    # 'rate_limited'), so rank on is-it-ok first and show the freshest sync
+    # within each group.
+    try:
+        from VehicleListing.models import ExtensionSyncStatus
+        rows = (
+            ExtensionSyncStatus.objects
+            .select_related('user')
+            .annotate(_is_ok=Case(When(status='ok', then=Value(1)),
+                                  default=Value(0), output_field=IntegerField()))
+            .order_by('_is_ok', '-synced_at')[:DEALER_HEALTH_LIMIT]
+        )
+        health['dealers'] = [
+            {
+                'user_id': row.user_id,
+                'email': row.user.email,
+                'dealership': getattr(row.user, 'dealership_name', None),
+                'status': row.status,
+                'status_detail': row.status_detail,
+                'fb_count': row.fb_count,
+                'unpublished_count': row.unpublished_count,
+                'extension_version': row.extension_version,
+                'synced_at': row.synced_at.isoformat() if row.synced_at else None,
+            }
+            for row in rows
+        ]
+    except Exception as e:  # noqa: BLE001
+        health['dealers_error'] = str(e)
 
     health['known_commands'] = sorted(KNOWN_COMMANDS)
     return Response(health)

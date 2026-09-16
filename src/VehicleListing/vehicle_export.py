@@ -20,6 +20,7 @@ change in _base_queryset below.
 import csv
 import io
 from datetime import datetime
+from xml.etree import ElementTree as ET
 
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
@@ -222,6 +223,27 @@ def _build_csv(rows):
     return buffer.getvalue()
 
 
+def _build_xml(rows):
+    """Same COLUMNS, same order, as XML.
+
+    Element names are the COLUMNS keys rather than the human labels — the keys
+    are already valid XML names (snake_case, letter-initial) whereas the labels
+    contain spaces and parentheses. Driving every format off COLUMNS means a new
+    column is picked up by xlsx/csv/json/xml at once and they can't drift apart.
+    """
+    root = ET.Element('vehicles', {'count': str(len(rows))})
+    for row in rows:
+        item = ET.SubElement(root, 'vehicle')
+        for key, _label in COLUMNS:
+            value = row.get(key)
+            child = ET.SubElement(item, key)
+            # ElementTree escapes &, < and > itself. None becomes an empty
+            # element rather than the literal "None", matching how csv/xlsx
+            # render a blank cell.
+            child.text = '' if value is None else str(value)
+    return ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
 def export_vehicle_data(request):
@@ -229,7 +251,7 @@ def export_vehicle_data(request):
     GET /api/vehicle-listing/export/
 
     Query params:
-      export_format: 'xlsx' (default) | 'csv' | 'json' — json returns the row
+      export_format: 'xlsx' (default) | 'csv' | 'xml' | 'json' — json returns the row
                    data + stats as JSON instead of a file download; used by
                    the frontend to render a preview/charts before exporting.
                    (Not named `format` — DRF reserves that name; see below.)
@@ -250,8 +272,10 @@ def export_vehicle_data(request):
     # (e.g. 'xlsx'/'csv') before the view body even runs. See DRF's
     # DefaultContentNegotiation.filter_renderers.
     export_format = (request.GET.get('export_format') or 'xlsx').strip().lower()
-    if export_format not in ('xlsx', 'csv', 'json'):
-        return JsonResponse({'error': "export_format must be 'xlsx', 'csv', or 'json'"}, status=400)
+    if export_format not in ('xlsx', 'csv', 'json', 'xml'):
+        return JsonResponse(
+            {'error': "export_format must be 'xlsx', 'csv', 'xml', or 'json'"}, status=400
+        )
 
     start, end, error = _resolve_date_range(request)
     if error:
@@ -283,6 +307,11 @@ def export_vehicle_data(request):
     if export_format == 'csv':
         response = HttpResponse(_build_csv(rows), content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="vehicle-export-{filename_range}.csv"'
+        return response
+
+    if export_format == 'xml':
+        response = HttpResponse(_build_xml(rows), content_type='application/xml')
+        response['Content-Disposition'] = f'attachment; filename="vehicle-export-{filename_range}.xml"'
         return response
 
     response = HttpResponse(

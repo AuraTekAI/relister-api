@@ -411,7 +411,7 @@ class ProductListSerializer(VehicleSpecSourcingMixin, serializers.ModelSerialize
     class Meta:
         model = VehicleListing
         fields = [
-            'id', 'name', 'image', 'price',
+            'id', 'name', 'image', 'price', 'stock_number',
             'description', 'location', 'total_view_count',
         ]
 

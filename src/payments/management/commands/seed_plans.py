@@ -67,9 +67,16 @@ class Command(BaseCommand):
                 self.stdout.write(f"Using meter: {meter.id} ({meter_name})")
 
                 # Overage — metered per-unit price backed by the meter above.
+                # Give overage its own product so the invoice line reads clearly
+                # (e.g. "Relister Starter - Extra Listings") rather than sharing
+                # the base plan's name and looking identical to it.
                 overage_cents = int(float(plan_data['overage_rate_aud']) * 100)
+                overage_product = stripe.Product.create(
+                    name=f"Relister {name} - Extra Listings",
+                    metadata={'plan_name': name, 'type': 'overage'},
+                )
                 overage_price = stripe.Price.create(
-                    product=product.id,
+                    product=overage_product.id,
                     unit_amount=overage_cents,
                     currency='aud',
                     recurring={

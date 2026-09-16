@@ -1512,8 +1512,15 @@ def _sync_custom_plan_to_stripe(plan):
             meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
             try:
                 meter = _get_or_create_stripe_meter(meter_event_name)
+                # Give overage its own product so the invoice line reads clearly
+                # (e.g. "Relister Starter - Extra Listings") instead of sharing
+                # the base plan's name and being indistinguishable from it.
+                overage_product = stripe.Product.create(
+                    name=f"Relister {plan.name} - Extra Listings",
+                    metadata={'plan_name': plan.name, 'plan_id': str(plan.id), 'type': 'overage'},
+                )
                 overage_price = stripe.Price.create(
-                    product=product.id,
+                    product=overage_product.id,
                     unit_amount=overage_cents,
                     currency='aud',
                     recurring={

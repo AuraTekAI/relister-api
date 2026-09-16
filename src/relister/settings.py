@@ -585,4 +585,32 @@ VAPID_PUBLIC_KEY = env('VAPID_PUBLIC_KEY', default='')
 VAPID_PRIVATE_KEY = env('VAPID_PRIVATE_KEY', default='')
 VAPID_SUBJECT = env('VAPID_SUBJECT', default='mailto:support@autorelister.com.au')
 
+# ── Error monitoring (Sentry) ───────────────────────────────────────────────
+# Entirely inert unless SENTRY_DSN is set, so shipping this changes nothing
+# until the DSN is configured in .env — no behaviour change on deploy, and
+# turning it off again is removing one env var plus a restart.
+#
+# Covers the web process AND the Celery workers (relist/scheduling/image), which
+# is where the failures that reach dealers actually happen: a task that dies in
+# the image pipeline currently leaves only a line in a container log nobody
+# tails.
+SENTRY_DSN = env('SENTRY_DSN', default='')
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.django import DjangoIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration(), CeleryIntegration()],
+        environment=env('SENTRY_ENVIRONMENT', default='production'),
+        release=env('SENTRY_RELEASE', default=None),
+        # Errors are the point; tracing defaults to OFF so enabling monitoring
+        # adds no measurable latency to the publish path. Raise deliberately.
+        traces_sample_rate=env.float('SENTRY_TRACES_SAMPLE_RATE', default=0.0),
+        # Never ship dealer PII or JWTs to a third party: extension requests
+        # carry access tokens in the query string and dealer emails in payloads.
+        send_default_pii=False,
+    )
+
 
