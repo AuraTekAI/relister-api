@@ -345,6 +345,45 @@ class CheckoutView(APIView):
                     'plan_id': str(plan.id),
                 },
             )
+
+            # One-time overage charge on the FIRST invoice of this subscription.
+            # The `stripe_overage_price_id` line item above is a METERED price, so
+            # Stripe bills that usage in arrears at period end — it never appears in
+            # the "due today" total. To also charge the overage the dealer has
+            # ALREADY accrued (the "N listing(s) × rate" shown on the billing page),
+            # add it as a one-time invoice item via subscription_data, using the
+            # SAME source the usage endpoint displays (user.overage_count ×
+            # plan.overage_rate_aud). GST is added on top by automatic_tax because
+            # tax_behavior is 'exclusive'.
+            overage_units = int(getattr(user, 'overage_count', 0) or 0)
+            if overage_units > 0 and plan.overage_rate_aud and plan.stripe_overage_price_id:
+                try:
+                    overage_product_id = stripe.Price.retrieve(
+                        plan.stripe_overage_price_id
+                    ).product
+                    session_kwargs['subscription_data'] = {
+                        'add_invoice_items': [{
+                            'price_data': {
+                                'currency': 'aud',
+                                'product': overage_product_id,
+                                'unit_amount': int(round(float(plan.overage_rate_aud) * 100)),
+                                'tax_behavior': 'exclusive',
+                            },
+                            'quantity': overage_units,
+                        }],
+                    }
+                    logger.info(
+                        f"CheckoutView: adding one-time overage to first invoice for "
+                        f"user {user.id}: {overage_units} × {plan.overage_rate_aud} AUD."
+                    )
+                except stripe.error.StripeError as exc:
+                    # Never block the base subscription checkout because the overage
+                    # add-on failed — log and proceed with base + GST only.
+                    logger.error(
+                        f"CheckoutView: could not attach one-time overage for user "
+                        f"{user.id}: {exc}"
+                    )
+
             if checkout_discounts:
                 session_kwargs['discounts'] = checkout_discounts
             session = stripe.checkout.Session.create(**session_kwargs)
