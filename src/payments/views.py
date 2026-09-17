@@ -289,63 +289,53 @@ class CheckoutView(APIView):
         if plan.stripe_overage_price_id:
             line_items.append({'price': plan.stripe_overage_price_id})
 
-        # One-time charge for overage ALREADY accrued this period, added to the
-        # FIRST invoice of the new subscription.
-        #
-        # NOTE: Checkout Session's `subscription_data` does NOT accept
-        # `add_invoice_items` on our pinned Stripe API version (it 502'd with
-        # "Received unknown parameter: subscription_data[add_invoice_items]").
-        # The version-agnostic, Stripe-supported way is to create a PENDING
-        # invoice item on the customer here — Stripe automatically pulls pending
-        # invoice items onto the subscription's first invoice when it's created.
-        # The metered "Extra Listings" line item above is untouched, so future
-        # in-period overage still bills in arrears exactly as before.
-        #
-        # Amount matches what the billing page shows the dealer
+        # Current accrued extra listings as a ONE-TIME line item.
+        # Checkout in subscription mode accepts one-time prices alongside the
+        # recurring ones: they are shown on the Checkout page WITH their amount and
+        # billed once on the FIRST invoice. That is what makes "N × rate = $X"
+        # appear in the breakdown (Package / Extra listings / GST / Total) and be
+        # included in "Total due today" — the amount actually sent to Stripe.
+        # The metered "Extra Listings" line above is untouched and keeps billing
+        # FUTURE in-period usage at period end, so there is no double charge.
+        # Amount uses the same source the billing page shows the dealer
         # (UsageTrackerView: user.overage_count × plan.overage_rate_aud), so the
-        # charge always equals the displayed "N × rate = $X.XX". GST is added by
-        # Stripe Tax because tax_behavior is 'exclusive'.
+        # charge always equals the displayed figure. GST is applied by Stripe Tax
+        # (tax_behavior 'exclusive'; tax_code inherited from the overage product).
         overage_units = max(0, int(getattr(user, 'overage_count', 0) or 0))
         if overage_units > 0 and plan.overage_rate_aud and plan.stripe_overage_price_id:
             try:
-                overage_product_id = stripe.Price.retrieve(plan.stripe_overage_price_id).product
-                # Clear any stale pending overage item from an abandoned checkout so
-                # a retry can't stack duplicates on the first invoice.
-                for item in stripe.InvoiceItem.list(
-                    customer=stripe_customer_id, pending=True, limit=100
-                ).auto_paging_iter():
-                    md = _sget(item, 'metadata') or {}
-                    if _sget(md, 'source') == 'checkout_overage':
-                        try:
-                            stripe.InvoiceItem.delete(_sget(item, 'id'))
-                        except stripe.error.StripeError:
-                            pass
-                stripe.InvoiceItem.create(
-                    customer=stripe_customer_id,
-                    quantity=overage_units,
-                    price_data={
+                overage_product = stripe.Price.retrieve(
+                    plan.stripe_overage_price_id, expand=['product']
+                ).product
+                product_data = {
+                    'name': (
+                        f"{_sget(overage_product, 'name') or 'Extra Listings'} — "
+                        f"current ({overage_units} listing{'s' if overage_units != 1 else ''})"
+                    ),
+                }
+                tax_code = _sget(overage_product, 'tax_code')
+                if tax_code:
+                    product_data['tax_code'] = tax_code
+                line_items.append({
+                    'price_data': {
                         'currency': 'aud',
-                        'product': overage_product_id,
+                        'product_data': product_data,
                         'unit_amount': int(round(float(plan.overage_rate_aud) * 100)),
                         'tax_behavior': 'exclusive',
+                        # No `recurring` → one-time; billed once on the first invoice.
                     },
-                    metadata={
-                        'source': 'checkout_overage',
-                        'user_id': str(user.id),
-                        'plan_id': str(plan.id),
-                    },
-                )
+                    'quantity': overage_units,
+                })
                 logger.info(
-                    f"CheckoutView: pending overage invoice item created for user "
-                    f"{user.id}: {overage_units} × {plan.overage_rate_aud} AUD "
-                    f"(added to the subscription's first invoice)."
+                    f"CheckoutView: adding current overage line for user {user.id}: "
+                    f"{overage_units} × {plan.overage_rate_aud} AUD (one-time, first invoice)."
                 )
             except stripe.error.StripeError as exc:
                 # Never block the base subscription checkout because the overage
-                # add-on failed — log and proceed with base + GST only.
+                # line failed — log and proceed with package + GST only.
                 logger.error(
-                    f"CheckoutView: could not create overage invoice item for user "
-                    f"{user.id}: {exc} — proceeding with base + GST only."
+                    f"CheckoutView: could not add current overage line for user "
+                    f"{user.id}: {exc} — proceeding without it."
                 )
 
         # Pass pending discount coupon to checkout if user has one applied.
