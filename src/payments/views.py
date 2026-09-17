@@ -308,10 +308,7 @@ class CheckoutView(APIView):
                     plan.stripe_overage_price_id, expand=['product']
                 ).product
                 product_data = {
-                    'name': (
-                        f"{_sget(overage_product, 'name') or 'Extra Listings'} — "
-                        f"current ({overage_units} listing{'s' if overage_units != 1 else ''})"
-                    ),
+                    'name': _sget(overage_product, 'name') or 'Extra Listings',
                 }
                 tax_code = _sget(overage_product, 'tax_code')
                 if tax_code:
