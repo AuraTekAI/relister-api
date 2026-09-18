@@ -221,6 +221,38 @@ class DiscoveryTests(SimpleTestCase):
             "AAA111",
         )
 
+    def test_discovery_renders_with_scroll_instructions(self):
+        """The showroom grid is a Framework7 virtual list: only cards near the
+        current scroll position are mounted, so a plain render undercounts a
+        dealer's real inventory (measured live: 14-19 cards mounted for a
+        26-car dealer). Discovery must render with js_instructions that force
+        every scrollable element to the bottom before ZenRows hands back the
+        HTML — a plain default render is the exact bug being fixed here."""
+        mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+        with mock.patch.object(mod, "_render", return_value=SHOWROOM_HTML) as mock_render:
+            self.adapter.discover_stock_links(SHOWROOM_URL)
+        mock_render.assert_called_once()
+        args, kwargs = mock_render.call_args
+        params = args[1] if len(args) > 1 else kwargs.get("params")
+        self.assertIsNotNone(params, "discovery must render with explicit scroll params")
+        self.assertIn("js_instructions", params)
+        self.assertIn("scrollTop", params["js_instructions"])
+        # js_render/proxy settings must still be present, not dropped in favour
+        # of the scroll instructions.
+        self.assertEqual(params["js_render"], "true")
+
+    def test_detail_page_render_has_no_scroll_instructions(self):
+        # A single vehicle's detail page is not a virtual list — it must keep
+        # using the plain default render, not pay for the showroom's scroll
+        # instructions.
+        mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+        with mock.patch.object(mod, "_render", return_value=DETAIL_HTML) as mock_render:
+            self.adapter.parse_listing(
+                "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111")
+        args, kwargs = mock_render.call_args
+        params = args[1] if len(args) > 1 else kwargs.get("params")
+        self.assertIsNone(params)
+
 
 def _patch_render(html):
     mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])

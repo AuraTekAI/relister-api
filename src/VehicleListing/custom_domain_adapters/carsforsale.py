@@ -17,6 +17,7 @@ VirtualYard's multi-dealer marketplace: dealers live under
 Everything parsed maps to an existing field via the standard `result` dict; no
 new column/table is introduced.
 """
+import json
 import logging
 import re
 
@@ -41,6 +42,24 @@ _DETAIL_RE = re.compile(r"/(?:cars/)?details/([^/?#\"']+)/([A-Za-z0-9_\-]+)", re
 # AU-only marketplace, so a premium AU proxy dodges datacentre throttling;
 # `wait` lets Framework7 hydrate the vehicle DOM before capture.
 _ZENROWS_PARAMS = {"js_render": "true", "premium_proxy": "true", "proxy_country": "au", "wait": "9000"}
+# The showroom grid is a Framework7 VIRTUAL LIST: it only mounts the cards near
+# the current scroll position, so a plain render captures whichever handful
+# happened to be there when ZenRows snapshotted the DOM — measured live, a
+# 26-car dealer's showroom rendered with as few as 14-19 cards present. There
+# is no "wait longer" fix: nothing but a scroll event makes the virtual list
+# mount more cards. `js_instructions` forces every scrollable element to its
+# bottom, repeatedly with a wait between passes so each pass's newly-mounted
+# cards get scrolled past in turn and the list keeps growing until the real
+# end of the dealer's stock is reached.
+_SCROLL_TO_BOTTOM_JS = (
+    "(function(){document.querySelectorAll('body *').forEach(function(el){"
+    "if(el.scrollHeight-el.clientHeight>40){el.scrollTop=el.scrollHeight;}});"
+    "window.scrollTo(0,document.body.scrollHeight);})()"
+)
+_SHOWROOM_ZENROWS_PARAMS = {
+    **_ZENROWS_PARAMS,
+    "js_instructions": json.dumps([{"evaluate": _SCROLL_TO_BOTTOM_JS}, {"wait": 900}] * 12),
+}
 # The un-hydrated shell has none of these — reject it so a shell/challenge page
 # never becomes a hollow listing.
 _HYDRATED_MARKERS = ("cardTitle", "item-after", "details-price")
@@ -56,14 +75,14 @@ _SPEC_LABEL_MAP = {
 }
 
 
-def _render(url):
+def _render(url, params=None):
     """Fetch `url` through ZenRows with JS rendering. None on missing key,
     error, or an un-hydrated shell."""
     if not settings.ZENROWS_API_KEY:
         logger.error("ZENROWS_API_KEY not configured — cannot render %s", url)
         return None
     try:
-        response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=_ZENROWS_PARAMS)
+        response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=params or _ZENROWS_PARAMS)
     except Exception as exc:
         logger.error("ZenRows render errored for %s: %s", url, exc)
         return None
@@ -117,8 +136,14 @@ class CarsForSaleAdapter(DomainAdapter):
         importing nothing, and an empty result both surfaces as "No listings
         found" and trips the orchestrator's reconcile sanity guard instead of
         poisoning the DB.
+
+        Rendered with `_SHOWROOM_ZENROWS_PARAMS` (scroll instructions), not the
+        plain default: the showroom grid is a virtual list that only mounts
+        cards near the current scroll position, so without forcing it to
+        scroll to the bottom this undercounts a dealer's real inventory (e.g.
+        14-19 cards mounted for a 26-car dealer). See that constant.
         """
-        html = _render(profile_url or self.profile_url)
+        html = _render(profile_url or self.profile_url, _SHOWROOM_ZENROWS_PARAMS)
         if not html:
             logger.error("carsforsale: showroom render failed for %s", profile_url)
             return []
