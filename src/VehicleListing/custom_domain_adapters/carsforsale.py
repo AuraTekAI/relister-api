@@ -47,27 +47,103 @@ _ZENROWS_PARAMS = {"js_render": "true", "premium_proxy": "true", "proxy_country"
 # that only scrolls — captures whichever handful of cards happened to be
 # mounted when ZenRows snapshotted the DOM: measured live, a 26-car dealer's
 # showroom rendered with as few as 14, then 19, cards present, never the real
-# 26. Scrolling alone stalls at whatever the current batch mounted; nothing
-# but an actual click on that control fetches the next one. `js_instructions`
-# therefore scrolls every scrollable element to its bottom AND clicks any
-# visible "load/show/view more" control, repeatedly with a wait between passes
-# so each newly-loaded batch has time to render — and its own "load more"
-# control, if it reappears — before the next pass looks again.
-_LOAD_MORE_JS = (
-    "(function(){"
-    "document.querySelectorAll('body *').forEach(function(el){"
-    "if(el.scrollHeight-el.clientHeight>40){el.scrollTop=el.scrollHeight;}});"
-    "window.scrollTo(0,document.body.scrollHeight);"
-    "document.querySelectorAll('button,a,div,span,i').forEach(function(el){"
-    "var t=(el.textContent||'').trim().toLowerCase();"
-    "if(t.length<40&&(t.indexOf('load more')!==-1||t.indexOf('show more')!==-1||"
-    "t.indexOf('view more')!==-1||t.indexOf('see more')!==-1)){el.click();}"
-    "});"
-    "})()"
-)
+# 26. A FIXED number of scroll/click passes just moves the ceiling (it was
+# tried; a 78-car dealer would need more passes than a 26-car one, and a
+# 150-car dealer more again) — it can never be correct for every dealer size.
+#
+# The only correct stopping condition is "the mounted-card count has stopped
+# growing", so the loop below runs INSIDE the browser (as a single
+# `js_instructions` "evaluate" that returns a Promise ZenRows awaits) and
+# keeps scrolling + clicking "load more" until the count of vehicle links
+# inside the dealer's own showroom container is unchanged for
+# `_LOAD_MORE_REQUIRED_STABLE_ROUNDS` consecutive checks — at that point every
+# batch the site is willing to serve has been mounted, whether that is 16, 78
+# or 150+. `_LOAD_MORE_MAX_ROUNDS` / `_LOAD_MORE_DEADLINE_MS` are a runaway
+# safety valve only (protects against a page that never settles, e.g. a
+# genuinely infinite carousel) — not a product-count cap; they are sized to
+# comfortably outlast any real dealer inventory.
+#
+# Counting is scoped to the SAME "page-current showroom" container the Python
+# side extracts links from (see _current_showroom_page): the SPA keeps the
+# home page's Featured/Just-arrived carousels — ~150 OTHER dealers' cars —
+# mounted underneath and rotating on every render, so counting document-wide
+# would never stabilise.
+_LOAD_MORE_REQUIRED_STABLE_ROUNDS = 3
+_LOAD_MORE_TICK_MS = 1000
+_LOAD_MORE_MAX_ROUNDS = 60
+_LOAD_MORE_DEADLINE_MS = 50_000
+_LOAD_ALL_JS = f"""
+(function(){{
+  return new Promise(function(resolve){{
+    function classesOf(el){{
+      var c = el.className || '';
+      return (typeof c === 'string' ? c : String(c)).split(/\\s+/);
+    }}
+    function currentShowroom(){{
+      var divs = document.querySelectorAll('div');
+      var fallback = null;
+      for (var i = 0; i < divs.length; i++) {{
+        var cls = classesOf(divs[i]);
+        if (cls.indexOf('showroom') === -1) continue;
+        if (cls.indexOf('page-current') !== -1) return divs[i];
+        if (!fallback) fallback = divs[i];
+      }}
+      return fallback;
+    }}
+    function countCards(scope){{
+      var root = scope || document;
+      var ids = {{}};
+      var count = 0;
+      ['href', 'data-href'].forEach(function(attr){{
+        root.querySelectorAll('[' + attr + '*="details/"]').forEach(function(el){{
+          var v = el.getAttribute(attr) || '';
+          var m = v.match(/details\\/[^\\/?#"']+\\/([A-Za-z0-9_-]+)/);
+          if (m && !ids[m[1]]) {{ ids[m[1]] = true; count += 1; }}
+        }});
+      }});
+      return count;
+    }}
+    function scrollAll(){{
+      document.querySelectorAll('body *').forEach(function(el){{
+        if (el.scrollHeight - el.clientHeight > 40) {{ el.scrollTop = el.scrollHeight; }}
+      }});
+      window.scrollTo(0, document.body.scrollHeight);
+    }}
+    function clickLoadMore(scope){{
+      (scope || document).querySelectorAll('button,a,div,span,i').forEach(function(el){{
+        var t = (el.textContent || '').trim().toLowerCase();
+        if (t.length < 40 && (t.indexOf('load more') !== -1 || t.indexOf('show more') !== -1 ||
+            t.indexOf('view more') !== -1 || t.indexOf('see more') !== -1)) {{ el.click(); }}
+      }});
+    }}
+
+    var lastCount = -1;
+    var stableRounds = 0;
+    var round = 0;
+    var deadline = Date.now() + {_LOAD_MORE_DEADLINE_MS};
+
+    function tick(){{
+      round += 1;
+      var scope = currentShowroom();
+      scrollAll();
+      clickLoadMore(scope);
+      setTimeout(function(){{
+        var current = countCards(scope);
+        if (current === lastCount) {{ stableRounds += 1; }}
+        else {{ stableRounds = 0; lastCount = current; }}
+        var converged = stableRounds >= {_LOAD_MORE_REQUIRED_STABLE_ROUNDS};
+        var safetyStop = round >= {_LOAD_MORE_MAX_ROUNDS} || Date.now() > deadline;
+        if (converged || safetyStop) {{ resolve(true); }}
+        else {{ tick(); }}
+      }}, {_LOAD_MORE_TICK_MS});
+    }}
+    tick();
+  }});
+}})()
+"""
 _SHOWROOM_ZENROWS_PARAMS = {
     **_ZENROWS_PARAMS,
-    "js_instructions": json.dumps([{"evaluate": _LOAD_MORE_JS}, {"wait": 1200}] * 12),
+    "js_instructions": json.dumps([{"evaluate": _LOAD_ALL_JS}]),
 }
 # The un-hydrated shell has none of these — reject it so a shell/challenge page
 # never becomes a hollow listing.
@@ -146,12 +222,13 @@ class CarsForSaleAdapter(DomainAdapter):
         found" and trips the orchestrator's reconcile sanity guard instead of
         poisoning the DB.
 
-        Rendered with `_SHOWROOM_ZENROWS_PARAMS` (scroll + "load more" click
-        instructions), not the plain default: the showroom grid mounts a
-        limited batch behind a "load more" control, so without repeatedly
-        scrolling AND clicking that control this undercounts a dealer's real
-        inventory (e.g. 14, then 19, cards mounted for a 26-car dealer). See
-        that constant.
+        Rendered with `_SHOWROOM_ZENROWS_PARAMS`, not the plain default: the
+        showroom grid mounts a limited batch behind a "load more" control, so
+        a one-shot render undercounts a dealer's real inventory regardless of
+        its size. That constant drives an in-browser loop that keeps
+        scrolling and clicking "load more" until the showroom's own mounted
+        count stops growing, so this works the same for a 16-car dealer, a
+        78-car one, or a 150+-car one — see the constant's docstring.
         """
         html = _render(profile_url or self.profile_url, _SHOWROOM_ZENROWS_PARAMS)
         if not html:

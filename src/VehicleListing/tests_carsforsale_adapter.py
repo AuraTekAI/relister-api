@@ -12,6 +12,7 @@ _render is monkeypatched so these run offline (no ZenRows/network).
 Run with:
     python src/manage.py test VehicleListing.tests_carsforsale_adapter --settings=relister.settings_test
 """
+import json
 from unittest import mock
 
 from django.test import SimpleTestCase
@@ -221,29 +222,37 @@ class DiscoveryTests(SimpleTestCase):
             "AAA111",
         )
 
-    def test_discovery_renders_with_scroll_and_load_more_instructions(self):
+    def test_discovery_renders_with_a_convergence_loop_not_a_fixed_pass_count(self):
         """The showroom grid mounts only a limited batch behind a "load more"
-        control, so a plain render — even one that only scrolls — undercounts
-        a dealer's real inventory (measured live: 14, then 19, cards mounted
-        for a 26-car dealer). Discovery must render with js_instructions that
-        both scroll every scrollable element to the bottom AND click any
-        "load/show/view more" control before ZenRows hands back the HTML —
-        a plain default render is the exact bug being fixed here."""
+        control, so a plain render — even one that scrolls a FIXED number of
+        times — undercounts a dealer's real inventory once it has more cards
+        than that fixed count covers (measured live: 14, then 19, cards
+        mounted for a 26-car dealer; a differently-sized dealer would stall at
+        a different, still-wrong, number). Discovery must render with a
+        SINGLE js_instructions entry whose JS keeps scrolling/clicking "load
+        more" inside the browser until the mounted count stops growing, so it
+        is correct for any inventory size, not just the one it was tuned on."""
         mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
         with mock.patch.object(mod, "_render", return_value=SHOWROOM_HTML) as mock_render:
             self.adapter.discover_stock_links(SHOWROOM_URL)
         mock_render.assert_called_once()
         args, kwargs = mock_render.call_args
         params = args[1] if len(args) > 1 else kwargs.get("params")
-        self.assertIsNotNone(params, "discovery must render with explicit scroll/load-more params")
+        self.assertIsNotNone(params, "discovery must render with explicit js_instructions")
         self.assertIn("js_instructions", params)
-        instructions = params["js_instructions"]
-        self.assertIn("scrollTop", instructions)
-        self.assertIn("load more", instructions)
-        self.assertIn(".click()", instructions)
-        # Several passes with a wait between them, not a single one-shot try —
-        # a later batch's own "load more" control needs time to reappear.
-        self.assertGreaterEqual(instructions.count("evaluate"), 5)
+        parsed_instructions = json.loads(params["js_instructions"])
+        # Exactly one instruction: the looping/convergence logic lives INSIDE
+        # the browser (a Promise ZenRows awaits), not as N repeated
+        # evaluate/wait pairs chosen from the Python side for one dealer size.
+        self.assertEqual(len(parsed_instructions), 1)
+        script = parsed_instructions[0]["evaluate"]
+        self.assertIn("Promise", script, "must await in-page convergence, not fire-and-forget")
+        self.assertIn("scrollTop", script)
+        self.assertIn("load more", script)
+        self.assertIn(".click()", script)
+        # A stopping condition based on the count no longer changing, not a
+        # loop bound copied from a specific dealer's inventory size.
+        self.assertIn("stableRounds", script)
         # js_render/proxy settings must still be present, not dropped in favour
         # of the scroll/load-more instructions.
         self.assertEqual(params["js_render"], "true")
