@@ -17,8 +17,10 @@ VirtualYard's multi-dealer marketplace: dealers live under
 Everything parsed maps to an existing field via the standard `result` dict; no
 new column/table is introduced.
 """
+import json
 import logging
 import re
+import time
 
 from bs4 import BeautifulSoup
 from django.conf import settings
@@ -41,6 +43,109 @@ _DETAIL_RE = re.compile(r"/(?:cars/)?details/([^/?#\"']+)/([A-Za-z0-9_\-]+)", re
 # AU-only marketplace, so a premium AU proxy dodges datacentre throttling;
 # `wait` lets Framework7 hydrate the vehicle DOM before capture.
 _ZENROWS_PARAMS = {"js_render": "true", "premium_proxy": "true", "proxy_country": "au", "wait": "9000"}
+# The showroom grid is paginated behind a "Load more" / "Show more" control
+# AND is a Framework7 VIRTUAL LIST underneath it, so a plain render — even one
+# that only scrolls — captures whichever handful of cards happened to be
+# mounted when ZenRows snapshotted the DOM: measured live, a 26-car dealer's
+# showroom rendered with as few as 14, then 19, cards present, never the real
+# 26. A FIXED number of scroll/click passes just moves the ceiling (it was
+# tried; a 78-car dealer would need more passes than a 26-car one, and a
+# 150-car dealer more again) — it can never be correct for every dealer size.
+#
+# The only correct stopping condition is "the mounted-card count has stopped
+# growing", so the loop below runs INSIDE the browser (as a single
+# `js_instructions` "evaluate" that returns a Promise ZenRows awaits) and
+# keeps scrolling + clicking "load more" until the count of vehicle links
+# inside the dealer's own showroom container is unchanged for
+# `_LOAD_MORE_REQUIRED_STABLE_ROUNDS` consecutive checks — at that point every
+# batch the site is willing to serve has been mounted, whether that is 16, 78
+# or 150+. `_LOAD_MORE_MAX_ROUNDS` / `_LOAD_MORE_DEADLINE_MS` are a runaway
+# safety valve only (protects against a page that never settles, e.g. a
+# genuinely infinite carousel) — not a product-count cap; they are sized to
+# comfortably outlast any real dealer inventory.
+#
+# Counting is scoped to the SAME "page-current showroom" container the Python
+# side extracts links from (see _current_showroom_page): the SPA keeps the
+# home page's Featured/Just-arrived carousels — ~150 OTHER dealers' cars —
+# mounted underneath and rotating on every render, so counting document-wide
+# would never stabilise.
+_LOAD_MORE_REQUIRED_STABLE_ROUNDS = 3
+_LOAD_MORE_TICK_MS = 1000
+_LOAD_MORE_MAX_ROUNDS = 60
+_LOAD_MORE_DEADLINE_MS = 50_000
+_LOAD_ALL_JS = f"""
+(function(){{
+  return new Promise(function(resolve){{
+    function classesOf(el){{
+      var c = el.className || '';
+      return (typeof c === 'string' ? c : String(c)).split(/\\s+/);
+    }}
+    function currentShowroom(){{
+      var divs = document.querySelectorAll('div');
+      var fallback = null;
+      for (var i = 0; i < divs.length; i++) {{
+        var cls = classesOf(divs[i]);
+        if (cls.indexOf('showroom') === -1) continue;
+        if (cls.indexOf('page-current') !== -1) return divs[i];
+        if (!fallback) fallback = divs[i];
+      }}
+      return fallback;
+    }}
+    function countCards(scope){{
+      var root = scope || document;
+      var ids = {{}};
+      var count = 0;
+      ['href', 'data-href'].forEach(function(attr){{
+        root.querySelectorAll('[' + attr + '*="details/"]').forEach(function(el){{
+          var v = el.getAttribute(attr) || '';
+          var m = v.match(/details\\/[^\\/?#"']+\\/([A-Za-z0-9_-]+)/);
+          if (m && !ids[m[1]]) {{ ids[m[1]] = true; count += 1; }}
+        }});
+      }});
+      return count;
+    }}
+    function scrollAll(){{
+      document.querySelectorAll('body *').forEach(function(el){{
+        if (el.scrollHeight - el.clientHeight > 40) {{ el.scrollTop = el.scrollHeight; }}
+      }});
+      window.scrollTo(0, document.body.scrollHeight);
+    }}
+    function clickLoadMore(scope){{
+      (scope || document).querySelectorAll('button,a,div,span,i').forEach(function(el){{
+        var t = (el.textContent || '').trim().toLowerCase();
+        if (t.length < 40 && (t.indexOf('load more') !== -1 || t.indexOf('show more') !== -1 ||
+            t.indexOf('view more') !== -1 || t.indexOf('see more') !== -1)) {{ el.click(); }}
+      }});
+    }}
+
+    var lastCount = -1;
+    var stableRounds = 0;
+    var round = 0;
+    var deadline = Date.now() + {_LOAD_MORE_DEADLINE_MS};
+
+    function tick(){{
+      round += 1;
+      var scope = currentShowroom();
+      scrollAll();
+      clickLoadMore(scope);
+      setTimeout(function(){{
+        var current = countCards(scope);
+        if (current === lastCount) {{ stableRounds += 1; }}
+        else {{ stableRounds = 0; lastCount = current; }}
+        var converged = stableRounds >= {_LOAD_MORE_REQUIRED_STABLE_ROUNDS};
+        var safetyStop = round >= {_LOAD_MORE_MAX_ROUNDS} || Date.now() > deadline;
+        if (converged || safetyStop) {{ resolve(true); }}
+        else {{ tick(); }}
+      }}, {_LOAD_MORE_TICK_MS});
+    }}
+    tick();
+  }});
+}})()
+"""
+_SHOWROOM_ZENROWS_PARAMS = {
+    **_ZENROWS_PARAMS,
+    "js_instructions": json.dumps([{"evaluate": _LOAD_ALL_JS}]),
+}
 # The un-hydrated shell has none of these — reject it so a shell/challenge page
 # never becomes a hollow listing.
 _HYDRATED_MARKERS = ("cardTitle", "item-after", "details-price")
@@ -56,25 +161,62 @@ _SPEC_LABEL_MAP = {
 }
 
 
-def _render(url):
-    """Fetch `url` through ZenRows with JS rendering. None on missing key,
-    error, or an un-hydrated shell."""
+# Discovery finds every stock link in one render, but EACH of a dealer's
+# vehicles then gets its own, fully independent ZenRows render in
+# parse_listing — a 26-car dealer makes 26 separate calls, each of which can
+# fail on its own (a transient block, a slow proxy, a render that didn't
+# finish hydrating in the wait window) with no relation to whether discovery
+# itself succeeded. Without a retry, a single such failure on any one of
+# those 26 calls permanently drops that vehicle for the run — it silently
+# never gets created, and stays missing until some future scrape happens to
+# hit that same listing on a good render. This is why "discovery correctly
+# finds 26" and "only 22 end up saved" are NOT a contradiction: they are two
+# different sets of ZenRows calls with two different failure profiles.
+_RENDER_MAX_ATTEMPTS = 3
+_RENDER_RETRY_DELAY_SECONDS = 2
+# Escalating hydration wait per attempt (ms, as ZenRows expects it): retrying
+# with the SAME wait fails identically for a page that's simply slower to
+# hydrate than the default — only a longer wait fixes that class of failure,
+# a plain retry does not.
+_RENDER_WAIT_MS_BY_ATTEMPT = ("9000", "15000", "22000")
+
+
+def _render(url, params=None):
+    """Fetch `url` through ZenRows with JS rendering, retrying a transient
+    failure (network error, non-200, or an un-hydrated shell) up to
+    `_RENDER_MAX_ATTEMPTS` times before giving up, with a longer hydration
+    wait on each successive attempt. None only once every attempt is
+    exhausted, or the API key is missing."""
     if not settings.ZENROWS_API_KEY:
         logger.error("ZENROWS_API_KEY not configured — cannot render %s", url)
         return None
-    try:
-        response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=_ZENROWS_PARAMS)
-    except Exception as exc:
-        logger.error("ZenRows render errored for %s: %s", url, exc)
-        return None
-    if response.status_code != 200:
-        logger.error("ZenRows %s for %s", response.status_code, url)
-        return None
-    html = response.text or ""
-    if not any(m in html for m in _HYDRATED_MARKERS):
-        logger.warning("Render for %s returned an un-hydrated shell — skipping", url)
-        return None
-    return html
+    base_params = params or _ZENROWS_PARAMS
+    reason = None
+    for attempt in range(1, _RENDER_MAX_ATTEMPTS + 1):
+        attempt_params = {**base_params, "wait": _RENDER_WAIT_MS_BY_ATTEMPT[attempt - 1]}
+        try:
+            response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=attempt_params)
+        except Exception as exc:
+            reason = f"errored: {exc}"
+        else:
+            if response.status_code != 200:
+                reason = f"HTTP {response.status_code}"
+            else:
+                html = response.text or ""
+                if any(m in html for m in _HYDRATED_MARKERS):
+                    return html
+                reason = "un-hydrated shell"
+        if attempt < _RENDER_MAX_ATTEMPTS:
+            logger.warning(
+                "carsforsale: render attempt %d/%d failed for %s (%s) — retrying with wait=%sms",
+                attempt, _RENDER_MAX_ATTEMPTS, url, reason, _RENDER_WAIT_MS_BY_ATTEMPT[attempt],
+            )
+            time.sleep(_RENDER_RETRY_DELAY_SECONDS)
+    logger.error(
+        "carsforsale: render failed for %s after %d attempts (%s)",
+        url, _RENDER_MAX_ATTEMPTS, reason,
+    )
+    return None
 
 
 def _digits(text):
@@ -99,19 +241,75 @@ class CarsForSaleAdapter(DomainAdapter):
         self.HOST = f"{CANONICAL_HOST}/showroom/{slug}" if slug else CANONICAL_HOST
 
     def discover_stock_links(self, profile_url):
-        """Every vehicle detail URL on the dealer's showroom, deduped by the
-        trailing listing id, first-seen order kept."""
-        html = _render(profile_url or self.profile_url)
+        """Every vehicle detail URL on the dealer's OWN showroom, deduped by
+        the trailing listing id, first-seen order kept.
+
+        Scoped to the SPA's current showroom page, never the whole document.
+        The rendered DOM also carries the HOME page underneath
+        (`div.page.automatic.home ... page-previous`) whose Featured / Just
+        arrived carousels hold ~150 OTHER dealers' cars and rotate on every
+        render. A document-wide regex ingested that rotation into the pipeline
+        on every scheduled scrape: a 26-car dealer accumulated 111+ rows of
+        strangers' stock, and each twice-daily beat run added a fresh batch
+        (measured live: whole doc 178 unique ids, home page 159, this dealer's
+        showroom container 19).
+
+        There is deliberately NO whole-document fallback — same reasoning as
+        _parse_images: importing another dealer's cars is strictly worse than
+        importing nothing, and an empty result both surfaces as "No listings
+        found" and trips the orchestrator's reconcile sanity guard instead of
+        poisoning the DB.
+
+        Rendered with `_SHOWROOM_ZENROWS_PARAMS`, not the plain default: the
+        showroom grid mounts a limited batch behind a "load more" control, so
+        a one-shot render undercounts a dealer's real inventory regardless of
+        its size. That constant drives an in-browser loop that keeps
+        scrolling and clicking "load more" until the showroom's own mounted
+        count stops growing, so this works the same for a 16-car dealer, a
+        78-car one, or a 150+-car one — see the constant's docstring.
+        """
+        html = _render(profile_url or self.profile_url, _SHOWROOM_ZENROWS_PARAMS)
         if not html:
             logger.error("carsforsale: showroom render failed for %s", profile_url)
             return []
+        scope = self._current_showroom_page(BeautifulSoup(html, "html.parser"))
+        if scope is None:
+            logger.error(
+                "carsforsale: no 'page-current showroom' container for %s — "
+                "refusing whole-document link discovery (it mixes in other "
+                "dealers' cars from the home-page carousels). Check the "
+                "showroom template.", profile_url,
+            )
+            return []
         seen, links = set(), []
-        for slug, vid in _DETAIL_RE.findall(html):
+        for slug, vid in _DETAIL_RE.findall(str(scope)):
             if vid not in seen:
                 seen.add(vid)
                 links.append(f"{BASE_URL}/cars/details/{slug}/{vid}")
         logger.info("carsforsale: discovered %d stock links for %s", len(links), self.HOST)
         return links
+
+    @staticmethod
+    def _current_showroom_page(soup):
+        """The Framework7 container for the showroom actually being viewed
+        (`div.page.automatic.showroom.page-current`) — the dealer's own stock.
+        Sibling of the leftover home page the SPA keeps in the DOM; see
+        _current_vehicle_page for the same pattern on detail pages. Falls back
+        to a non-current `showroom` page div (present when the render finished
+        mid-transition) and returns None when neither exists."""
+        def classes(value):
+            return value if isinstance(value, list) else str(value).split()
+
+        current = soup.find(
+            "div",
+            class_=lambda c: bool(c) and "page-current" in classes(c) and "showroom" in classes(c),
+        )
+        if current is not None:
+            return current
+        return soup.find(
+            "div",
+            class_=lambda c: bool(c) and "page" in classes(c) and "showroom" in classes(c),
+        )
 
     def extract_listing_id(self, stock_url):
         m = _DETAIL_RE.search(stock_url or "")

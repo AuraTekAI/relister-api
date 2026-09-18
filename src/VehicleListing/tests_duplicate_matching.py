@@ -214,6 +214,37 @@ class CustomDomainDuplicatePreventionTests(TestCase):
         self.assertEqual(VehicleListing.objects.filter(user=self.user).count(), 1)
         self.assertEqual(VehicleListing.objects.get(user=self.user).make, 'Toyota')
 
+    def test_two_identical_live_cars_keep_two_rows(self):
+        """A dealer with two structurally identical cars BOTH live on the
+        showroom right now: the second one must get its own row, never be
+        merged into the first (the merge is only for relists whose old stock
+        id has disappeared). Without exclude_list_ids this collapsed the pair
+        into one flip-flopping row — the DB held one row fewer than the
+        showroom per such pair (site 26, DB 20)."""
+        create_listing_with_vehicle(
+            user=self.user, seller_profile_id='dealer.example.com', list_id='car-a',
+            custom_domain_profile=self.profile,
+            make='Mazda', model='MAZDA3 NEO', variant='Neo', year='2013', color='White',
+            price='12990', mileage=50000, status='completed',
+        )
+
+        adapter = self._adapter(list_id='car-b', url='https://dealer.example.com/buy/car-b')
+        ok = _process_stock_url(
+            'https://dealer.example.com/buy/car-b', 'car-b',
+            self.profile, self.user, 'dealer.example.com', adapter,
+            all_incoming_list_ids={'car-a', 'car-b'},  # both live this run
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            VehicleListing.objects.filter(user=self.user).count(), 2,
+            "second identical live car must create its own row, not merge",
+        )
+        self.assertEqual(
+            sorted(VehicleListing.objects.filter(user=self.user).values_list('list_id', flat=True)),
+            ['car-a', 'car-b'],
+        )
+
     def test_reappearing_after_being_marked_sold_is_reactivated(self):
         existing = create_listing_with_vehicle(
             user=self.user, seller_profile_id='dealer.example.com', list_id='old-token',

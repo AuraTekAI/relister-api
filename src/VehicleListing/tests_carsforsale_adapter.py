@@ -12,6 +12,7 @@ _render is monkeypatched so these run offline (no ZenRows/network).
 Run with:
     python src/manage.py test VehicleListing.tests_carsforsale_adapter --settings=relister.settings_test
 """
+import json
 from unittest import mock
 
 from django.test import SimpleTestCase
@@ -23,16 +24,43 @@ SHOWROOM_URL = "https://carsforsale.com.au/showroom/mad-man-motors/cZS0__o4ZhSR9
 
 SHOWROOM_HTML = """
 <html><body>
-  <div class="featured-info">
-    <a href="/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
-    <h3 class="cardTitle">2015 NISSAN SERENA</h3>
+  <!-- The SPA keeps the HOME page in the DOM under the showroom. Its Featured /
+       Just arrived carousels hold OTHER dealers' cars and rotate every render —
+       a document-wide link scan imported ~150 of them per scrape (measured live:
+       whole doc 178 unique ids, home page 159, this dealer's showroom 19). -->
+  <div class="page automatic home with-hero page-previous">
+    <a href="/cars/details/2024-toyota-hilux-featured-junk/JUNK01"></a>
+    <a href="/cars/details/2019-bmw-x5-just-arrived-junk/JUNK02"></a>
   </div>
-  <div class="featured-info">
-    <i class="btn-share-page" data-href="/cars/details/2016-land-rover-range-rover-evoque/BBB222"></i>
+
+  <div class="page automatic showroom page-current">
+    <div class="featured-info">
+      <a href="/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
+      <h3 class="cardTitle">2015 NISSAN SERENA</h3>
+    </div>
+    <div class="featured-info">
+      <i class="btn-share-page" data-href="/cars/details/2016-land-rover-range-rover-evoque/BBB222"></i>
+    </div>
+    <!-- duplicate rendition of the same vehicle id must dedupe -->
+    <a href="/cars/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
+    <span>Holland Park West, QLD</span>
   </div>
-  <!-- duplicate rendition of the same vehicle id must dedupe -->
-  <a href="/cars/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
-  <span>Holland Park West, QLD</span>
+</body></html>
+"""
+
+# Render finished mid-transition: showroom page present but not yet flagged
+# page-current. Discovery must still find it via the fallback.
+SHOWROOM_HTML_NO_CURRENT_FLAG = SHOWROOM_HTML.replace(
+    "page automatic showroom page-current", "page automatic showroom"
+)
+
+# No showroom container at all (template change / challenge page): discovery
+# must return NOTHING rather than fall back to the whole document.
+SHOWROOM_HTML_NO_CONTAINER = """
+<html><body>
+  <div class="page automatic home with-hero page-previous">
+    <a href="/cars/details/2024-toyota-hilux-featured-junk/JUNK01"></a>
+  </div>
 </body></html>
 """
 
@@ -151,6 +179,121 @@ class ResolveTests(SimpleTestCase):
         self.assertIsInstance(adapter, CarsForSaleAdapter)
 
 
+class RenderRetryTests(SimpleTestCase):
+    """A 26-car dealer means 26 fully independent per-vehicle ZenRows renders
+    in parse_listing, on top of the one render discovery uses. Each of those
+    26 can fail on its own transient hiccup, unrelated to whether discovery
+    itself succeeded — discovery finding all the links does NOT mean every
+    vehicle's own render will succeed. Without a retry, one such failure
+    permanently drops that vehicle for the run. These tests exercise _render
+    directly (mocking the ZenRows client, not _render itself, since _render's
+    own retry loop is what's under test) with time.sleep patched out so
+    retries don't actually wait."""
+
+    def _mod(self):
+        return __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+
+    def _response(self, status_code=200, text="<html>cardTitle item-after details-price</html>"):
+        return mock.Mock(status_code=status_code, text=text)
+
+    def test_succeeds_on_first_try_without_retrying(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.return_value = self._response()
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    def test_recovers_after_a_transient_failure(self):
+        """First attempt comes back an un-hydrated shell (the exact failure
+        mode measured live), second attempt succeeds — the vehicle must still
+        get its data instead of being silently dropped for the run."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(),
+            ]
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+        mock_sleep.assert_called_once()
+
+    def test_recovers_after_a_network_exception(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                ConnectionError("boom"),
+                self._response(),
+            ]
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+
+    def test_gives_up_as_none_only_after_every_attempt_fails(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.return_value = self._response(status_code=503)
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, mod._RENDER_MAX_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, mod._RENDER_MAX_ATTEMPTS - 1)
+
+    def test_retry_waits_longer_each_attempt_not_the_same_wait_again(self):
+        """A page that's simply slower than the default 9s to hydrate will
+        keep coming back an un-hydrated shell if every retry uses the same
+        wait — only a LONGER wait on each attempt can actually recover it."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.return_value = self._response(status_code=503)
+            mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        sent_waits = [
+            call.kwargs["params"]["wait"]
+            for call in MockClient.return_value.get.call_args_list
+        ]
+        self.assertEqual(sent_waits, list(mod._RENDER_WAIT_MS_BY_ATTEMPT))
+        self.assertEqual(len(set(sent_waits)), len(sent_waits), "each attempt must use a distinct, longer wait")
+
+    def test_showroom_params_are_preserved_across_retries(self):
+        """The escalating wait must override ONLY `wait` — js_instructions
+        and the rest of the showroom's render params must survive a retry
+        unchanged, not get dropped in favour of the plain defaults."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(),
+            ]
+            mod._render("https://carsforsale.com.au/showroom/x/y", mod._SHOWROOM_ZENROWS_PARAMS)
+        first_call_params = MockClient.return_value.get.call_args_list[0].kwargs["params"]
+        second_call_params = MockClient.return_value.get.call_args_list[1].kwargs["params"]
+        self.assertIn("js_instructions", first_call_params)
+        self.assertIn("js_instructions", second_call_params)
+        self.assertEqual(first_call_params["js_instructions"], second_call_params["js_instructions"])
+        self.assertNotEqual(first_call_params["wait"], second_call_params["wait"])
+
+    def test_discovery_render_also_retries(self):
+        """The retry lives in _render itself, so both discovery's render and
+        every per-vehicle detail render benefit — not just one call site."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(text=SHOWROOM_HTML),
+            ]
+            links = CarsForSaleAdapter(SHOWROOM_URL).discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+        self.assertEqual(len(links), 2)
+
+
 class DiscoveryTests(SimpleTestCase):
     def setUp(self):
         self.adapter = CarsForSaleAdapter(SHOWROOM_URL)
@@ -165,6 +308,27 @@ class DiscoveryTests(SimpleTestCase):
         self.assertEqual(len(links), 2)
         self.assertTrue(all(l.startswith("https://carsforsale.com.au/cars/details/") for l in links))
         self.assertIn("AAA111", links[0])
+        # Home-page carousel cars (other dealers') must never be discovered.
+        self.assertFalse(any("JUNK" in l for l in links))
+
+    def test_discovery_survives_missing_page_current_flag(self):
+        with mock.patch.object(
+            __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"]),
+            "_render", return_value=SHOWROOM_HTML_NO_CURRENT_FLAG,
+        ):
+            links = self.adapter.discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(len(links), 2)
+        self.assertFalse(any("JUNK" in l for l in links))
+
+    def test_no_showroom_container_returns_nothing_not_whole_page(self):
+        # Falling back to a document-wide scan is what imported ~150 other
+        # dealers' cars per scrape; an empty result is the safe failure.
+        with mock.patch.object(
+            __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"]),
+            "_render", return_value=SHOWROOM_HTML_NO_CONTAINER,
+        ):
+            links = self.adapter.discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(links, [])
 
     def test_extract_listing_id(self):
         self.assertEqual(
@@ -172,6 +336,53 @@ class DiscoveryTests(SimpleTestCase):
                 "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111"),
             "AAA111",
         )
+
+    def test_discovery_renders_with_a_convergence_loop_not_a_fixed_pass_count(self):
+        """The showroom grid mounts only a limited batch behind a "load more"
+        control, so a plain render — even one that scrolls a FIXED number of
+        times — undercounts a dealer's real inventory once it has more cards
+        than that fixed count covers (measured live: 14, then 19, cards
+        mounted for a 26-car dealer; a differently-sized dealer would stall at
+        a different, still-wrong, number). Discovery must render with a
+        SINGLE js_instructions entry whose JS keeps scrolling/clicking "load
+        more" inside the browser until the mounted count stops growing, so it
+        is correct for any inventory size, not just the one it was tuned on."""
+        mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+        with mock.patch.object(mod, "_render", return_value=SHOWROOM_HTML) as mock_render:
+            self.adapter.discover_stock_links(SHOWROOM_URL)
+        mock_render.assert_called_once()
+        args, kwargs = mock_render.call_args
+        params = args[1] if len(args) > 1 else kwargs.get("params")
+        self.assertIsNotNone(params, "discovery must render with explicit js_instructions")
+        self.assertIn("js_instructions", params)
+        parsed_instructions = json.loads(params["js_instructions"])
+        # Exactly one instruction: the looping/convergence logic lives INSIDE
+        # the browser (a Promise ZenRows awaits), not as N repeated
+        # evaluate/wait pairs chosen from the Python side for one dealer size.
+        self.assertEqual(len(parsed_instructions), 1)
+        script = parsed_instructions[0]["evaluate"]
+        self.assertIn("Promise", script, "must await in-page convergence, not fire-and-forget")
+        self.assertIn("scrollTop", script)
+        self.assertIn("load more", script)
+        self.assertIn(".click()", script)
+        # A stopping condition based on the count no longer changing, not a
+        # loop bound copied from a specific dealer's inventory size.
+        self.assertIn("stableRounds", script)
+        # js_render/proxy settings must still be present, not dropped in favour
+        # of the scroll/load-more instructions.
+        self.assertEqual(params["js_render"], "true")
+
+    def test_detail_page_render_has_no_scroll_instructions(self):
+        # A single vehicle's detail page is not a virtual list — it must keep
+        # using the plain default render, not pay for the showroom's scroll
+        # instructions.
+        mod = __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+        with mock.patch.object(mod, "_render", return_value=DETAIL_HTML) as mock_render:
+            self.adapter.parse_listing(
+                "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111")
+        args, kwargs = mock_render.call_args
+        params = args[1] if len(args) > 1 else kwargs.get("params")
+        self.assertIsNone(params)
 
 
 def _patch_render(html):
