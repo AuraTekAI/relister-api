@@ -20,6 +20,7 @@ new column/table is introduced.
 import json
 import logging
 import re
+import time
 
 from bs4 import BeautifulSoup
 from django.conf import settings
@@ -160,25 +161,54 @@ _SPEC_LABEL_MAP = {
 }
 
 
+# Discovery finds every stock link in one render, but EACH of a dealer's
+# vehicles then gets its own, fully independent ZenRows render in
+# parse_listing — a 26-car dealer makes 26 separate calls, each of which can
+# fail on its own (a transient block, a slow proxy, a render that didn't
+# finish hydrating in the wait window) with no relation to whether discovery
+# itself succeeded. Without a retry, a single such failure on any one of
+# those 26 calls permanently drops that vehicle for the run — it silently
+# never gets created, and stays missing until some future scrape happens to
+# hit that same listing on a good render. This is why "discovery correctly
+# finds 26" and "only 22 end up saved" are NOT a contradiction: they are two
+# different sets of ZenRows calls with two different failure profiles.
+_RENDER_MAX_ATTEMPTS = 3
+_RENDER_RETRY_DELAY_SECONDS = 2
+
+
 def _render(url, params=None):
-    """Fetch `url` through ZenRows with JS rendering. None on missing key,
-    error, or an un-hydrated shell."""
+    """Fetch `url` through ZenRows with JS rendering, retrying a transient
+    failure (network error, non-200, or an un-hydrated shell) up to
+    `_RENDER_MAX_ATTEMPTS` times before giving up. None only once every
+    attempt is exhausted, or the API key is missing."""
     if not settings.ZENROWS_API_KEY:
         logger.error("ZENROWS_API_KEY not configured — cannot render %s", url)
         return None
-    try:
-        response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=params or _ZENROWS_PARAMS)
-    except Exception as exc:
-        logger.error("ZenRows render errored for %s: %s", url, exc)
-        return None
-    if response.status_code != 200:
-        logger.error("ZenRows %s for %s", response.status_code, url)
-        return None
-    html = response.text or ""
-    if not any(m in html for m in _HYDRATED_MARKERS):
-        logger.warning("Render for %s returned an un-hydrated shell — skipping", url)
-        return None
-    return html
+    reason = None
+    for attempt in range(1, _RENDER_MAX_ATTEMPTS + 1):
+        try:
+            response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=params or _ZENROWS_PARAMS)
+        except Exception as exc:
+            reason = f"errored: {exc}"
+        else:
+            if response.status_code != 200:
+                reason = f"HTTP {response.status_code}"
+            else:
+                html = response.text or ""
+                if any(m in html for m in _HYDRATED_MARKERS):
+                    return html
+                reason = "un-hydrated shell"
+        if attempt < _RENDER_MAX_ATTEMPTS:
+            logger.warning(
+                "carsforsale: render attempt %d/%d failed for %s (%s) — retrying",
+                attempt, _RENDER_MAX_ATTEMPTS, url, reason,
+            )
+            time.sleep(_RENDER_RETRY_DELAY_SECONDS)
+    logger.error(
+        "carsforsale: render failed for %s after %d attempts (%s)",
+        url, _RENDER_MAX_ATTEMPTS, reason,
+    )
+    return None
 
 
 def _digits(text):

@@ -179,6 +179,86 @@ class ResolveTests(SimpleTestCase):
         self.assertIsInstance(adapter, CarsForSaleAdapter)
 
 
+class RenderRetryTests(SimpleTestCase):
+    """A 26-car dealer means 26 fully independent per-vehicle ZenRows renders
+    in parse_listing, on top of the one render discovery uses. Each of those
+    26 can fail on its own transient hiccup, unrelated to whether discovery
+    itself succeeded — discovery finding all the links does NOT mean every
+    vehicle's own render will succeed. Without a retry, one such failure
+    permanently drops that vehicle for the run. These tests exercise _render
+    directly (mocking the ZenRows client, not _render itself, since _render's
+    own retry loop is what's under test) with time.sleep patched out so
+    retries don't actually wait."""
+
+    def _mod(self):
+        return __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"])
+
+    def _response(self, status_code=200, text="<html>cardTitle item-after details-price</html>"):
+        return mock.Mock(status_code=status_code, text=text)
+
+    def test_succeeds_on_first_try_without_retrying(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.return_value = self._response()
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    def test_recovers_after_a_transient_failure(self):
+        """First attempt comes back an un-hydrated shell (the exact failure
+        mode measured live), second attempt succeeds — the vehicle must still
+        get its data instead of being silently dropped for the run."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(),
+            ]
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+        mock_sleep.assert_called_once()
+
+    def test_recovers_after_a_network_exception(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                ConnectionError("boom"),
+                self._response(),
+            ]
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNotNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+
+    def test_gives_up_as_none_only_after_every_attempt_fails(self):
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep") as mock_sleep:
+            MockClient.return_value.get.return_value = self._response(status_code=503)
+            html = mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        self.assertIsNone(html)
+        self.assertEqual(MockClient.return_value.get.call_count, mod._RENDER_MAX_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, mod._RENDER_MAX_ATTEMPTS - 1)
+
+    def test_discovery_render_also_retries(self):
+        """The retry lives in _render itself, so both discovery's render and
+        every per-vehicle detail render benefit — not just one call site."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(text=SHOWROOM_HTML),
+            ]
+            links = CarsForSaleAdapter(SHOWROOM_URL).discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(MockClient.return_value.get.call_count, 2)
+        self.assertEqual(len(links), 2)
+
+
 class DiscoveryTests(SimpleTestCase):
     def setUp(self):
         self.adapter = CarsForSaleAdapter(SHOWROOM_URL)
