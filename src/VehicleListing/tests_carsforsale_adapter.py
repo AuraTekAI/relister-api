@@ -244,6 +244,41 @@ class RenderRetryTests(SimpleTestCase):
         self.assertEqual(MockClient.return_value.get.call_count, mod._RENDER_MAX_ATTEMPTS)
         self.assertEqual(mock_sleep.call_count, mod._RENDER_MAX_ATTEMPTS - 1)
 
+    def test_retry_waits_longer_each_attempt_not_the_same_wait_again(self):
+        """A page that's simply slower than the default 9s to hydrate will
+        keep coming back an un-hydrated shell if every retry uses the same
+        wait — only a LONGER wait on each attempt can actually recover it."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.return_value = self._response(status_code=503)
+            mod._render("https://carsforsale.com.au/cars/details/x/AAA111")
+        sent_waits = [
+            call.kwargs["params"]["wait"]
+            for call in MockClient.return_value.get.call_args_list
+        ]
+        self.assertEqual(sent_waits, list(mod._RENDER_WAIT_MS_BY_ATTEMPT))
+        self.assertEqual(len(set(sent_waits)), len(sent_waits), "each attempt must use a distinct, longer wait")
+
+    def test_showroom_params_are_preserved_across_retries(self):
+        """The escalating wait must override ONLY `wait` — js_instructions
+        and the rest of the showroom's render params must survive a retry
+        unchanged, not get dropped in favour of the plain defaults."""
+        mod = self._mod()
+        with mock.patch.object(mod, "ZenRowsClient") as MockClient, \
+             mock.patch.object(mod.time, "sleep"):
+            MockClient.return_value.get.side_effect = [
+                self._response(text="<html>shell only</html>"),
+                self._response(),
+            ]
+            mod._render("https://carsforsale.com.au/showroom/x/y", mod._SHOWROOM_ZENROWS_PARAMS)
+        first_call_params = MockClient.return_value.get.call_args_list[0].kwargs["params"]
+        second_call_params = MockClient.return_value.get.call_args_list[1].kwargs["params"]
+        self.assertIn("js_instructions", first_call_params)
+        self.assertIn("js_instructions", second_call_params)
+        self.assertEqual(first_call_params["js_instructions"], second_call_params["js_instructions"])
+        self.assertNotEqual(first_call_params["wait"], second_call_params["wait"])
+
     def test_discovery_render_also_retries(self):
         """The retry lives in _render itself, so both discovery's render and
         every per-vehicle detail render benefit — not just one call site."""

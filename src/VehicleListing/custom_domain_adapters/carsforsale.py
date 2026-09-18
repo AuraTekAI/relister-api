@@ -174,20 +174,28 @@ _SPEC_LABEL_MAP = {
 # different sets of ZenRows calls with two different failure profiles.
 _RENDER_MAX_ATTEMPTS = 3
 _RENDER_RETRY_DELAY_SECONDS = 2
+# Escalating hydration wait per attempt (ms, as ZenRows expects it): retrying
+# with the SAME wait fails identically for a page that's simply slower to
+# hydrate than the default — only a longer wait fixes that class of failure,
+# a plain retry does not.
+_RENDER_WAIT_MS_BY_ATTEMPT = ("9000", "15000", "22000")
 
 
 def _render(url, params=None):
     """Fetch `url` through ZenRows with JS rendering, retrying a transient
     failure (network error, non-200, or an un-hydrated shell) up to
-    `_RENDER_MAX_ATTEMPTS` times before giving up. None only once every
-    attempt is exhausted, or the API key is missing."""
+    `_RENDER_MAX_ATTEMPTS` times before giving up, with a longer hydration
+    wait on each successive attempt. None only once every attempt is
+    exhausted, or the API key is missing."""
     if not settings.ZENROWS_API_KEY:
         logger.error("ZENROWS_API_KEY not configured — cannot render %s", url)
         return None
+    base_params = params or _ZENROWS_PARAMS
     reason = None
     for attempt in range(1, _RENDER_MAX_ATTEMPTS + 1):
+        attempt_params = {**base_params, "wait": _RENDER_WAIT_MS_BY_ATTEMPT[attempt - 1]}
         try:
-            response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=params or _ZENROWS_PARAMS)
+            response = ZenRowsClient(settings.ZENROWS_API_KEY).get(url, params=attempt_params)
         except Exception as exc:
             reason = f"errored: {exc}"
         else:
@@ -200,8 +208,8 @@ def _render(url, params=None):
                 reason = "un-hydrated shell"
         if attempt < _RENDER_MAX_ATTEMPTS:
             logger.warning(
-                "carsforsale: render attempt %d/%d failed for %s (%s) — retrying",
-                attempt, _RENDER_MAX_ATTEMPTS, url, reason,
+                "carsforsale: render attempt %d/%d failed for %s (%s) — retrying with wait=%sms",
+                attempt, _RENDER_MAX_ATTEMPTS, url, reason, _RENDER_WAIT_MS_BY_ATTEMPT[attempt],
             )
             time.sleep(_RENDER_RETRY_DELAY_SECONDS)
     logger.error(

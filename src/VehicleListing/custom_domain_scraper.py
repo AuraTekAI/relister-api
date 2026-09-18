@@ -254,57 +254,92 @@ def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id
 # duplicate prevention was effectively disabled. Removed; do not redefine.
 
 
+# A failed fetch is overwhelmingly a TRANSIENT problem (a rate limit, a proxy
+# hiccup, a page that hadn't finished hydrating) rather than the listing being
+# genuinely gone — it was still in this run's discovery, so the showroom had
+# it a moment ago. A single quick retry (see carsforsale._render's own 3
+# attempts, seconds apart) doesn't give a rate limit or a proxy rotation any
+# real time to clear. Spacing whole extra passes 20s apart does. Bounded to 4
+# rounds so a genuinely broken/removed-mid-scrape listing can't hang the
+# background thread forever — anything still failing after that is logged and
+# picked up by the next scheduled sync, same as before.
+_MAX_FETCH_ROUNDS = 4
+_FETCH_RETRY_DELAY_SECONDS = 20
+
+
 def custom_domain_profile_listings_thread(stock_links, profile_instance, user, profile_id, adapter):
     logger.info("Starting custom_domain_profile_listings_thread execution")
-    count = 0
-    failed_count = 0
     # Every stock id discovered in this run, computed UP FRONT: it doubles as
     # the reconcile "seen" set below and as find_existing_vehicle's
     # exclude_list_ids (a car still live on the showroom must never be merged
     # into — computing it lazily inside the loop would leave later links
-    # unprotected while the earlier ones are processed).
+    # unprotected while the earlier ones are processed). Fixed for the whole
+    # run, across every retry round.
     incoming_list_ids = {
         str(lid)
         for lid in (adapter.extract_listing_id(u) for u in stock_links)
         if lid
     }
 
-    for stock_url in stock_links:
-        listing_id = adapter.extract_listing_id(stock_url)
-        if not listing_id:
-            logger.warning(f"Skipping URL without listing id: {stock_url}")
-            continue
-
+    def attempt(stock_url, listing_id):
         # One listing's unhandled exception (bad image URL, adapter bug, a
         # transient network error the adapter didn't already catch, etc.)
         # must never kill the thread — this loop has no caller watching it
         # (fire-and-forget from get_custom_domain_listings), so an uncaught
         # exception here would silently truncate every listing after it in
-        # `stock_links` for this run, and reproduce identically on the next
-        # scheduled run if the same listing keeps failing the same way. Catch,
-        # log, and keep going so one bad row can't freeze the whole batch.
+        # `stock_links` for this run. Catch, log, and treat as a failure this
+        # round — eligible for the next retry round like any other failure.
         try:
-            if _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter,
-                                  all_incoming_list_ids=incoming_list_ids):
-                count += 1
-            else:
-                failed_count += 1
+            return _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter,
+                                      all_incoming_list_ids=incoming_list_ids)
         except Exception:
-            failed_count += 1
             logger.exception(
                 f"Unhandled error processing custom domain listing {listing_id} "
-                f"({stock_url}) — skipping and continuing with the rest of the batch"
+                f"({stock_url}) — will retry"
             )
+            return False
 
-    if failed_count:
+    # (url, listing_id) pairs; URLs with no extractable id are skipped up
+    # front (unchanged from before) since no amount of retrying fixes a
+    # malformed link.
+    pending = []
+    for stock_url in stock_links:
+        listing_id = adapter.extract_listing_id(stock_url)
+        if not listing_id:
+            logger.warning(f"Skipping URL without listing id: {stock_url}")
+            continue
+        pending.append((stock_url, listing_id))
+
+    succeeded = 0
+    for round_num in range(1, _MAX_FETCH_ROUNDS + 1):
+        still_pending = []
+        for stock_url, listing_id in pending:
+            if attempt(stock_url, listing_id):
+                succeeded += 1
+            else:
+                still_pending.append((stock_url, listing_id))
+        pending = still_pending
+        if not pending:
+            break
+        if round_num < _MAX_FETCH_ROUNDS:
+            logger.warning(
+                f"custom_domain_profile_listings_thread: {len(pending)} of "
+                f"{len(stock_links)} discovered listings failed on round "
+                f"{round_num}/{_MAX_FETCH_ROUNDS} (profile={profile_id}, "
+                f"user={user.email}) — retrying in {_FETCH_RETRY_DELAY_SECONDS}s"
+            )
+            time.sleep(_FETCH_RETRY_DELAY_SECONDS)
+
+    if pending:
         logger.warning(
-            f"custom_domain_profile_listings_thread: {failed_count} of "
-            f"{len(stock_links)} discovered listings failed to process this run "
-            f"(profile={profile_id}, user={user.email}) — they remain unscraped "
-            "and will be retried on the next scheduled sync"
+            f"custom_domain_profile_listings_thread: {len(pending)} of "
+            f"{len(stock_links)} discovered listings still failed after "
+            f"{_MAX_FETCH_ROUNDS} rounds (profile={profile_id}, user={user.email}) "
+            f"— they remain unscraped and will be retried on the next scheduled "
+            f"sync: {[lid for _, lid in pending]}"
         )
 
-    profile_instance.processed_listings = count
+    profile_instance.processed_listings = succeeded
     profile_instance.status = "completed"
     profile_instance.save()
 
