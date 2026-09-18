@@ -110,9 +110,20 @@ def _apply_listing_update(existing, result):
     sync_vehicle_for_listing(existing, spec_from_result(result))
     sync_listing_images(existing, result.get("image"))
 
-def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter):
+def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter,
+                       all_incoming_list_ids=None):
     """Scrape/update/create a single listing. Returns True if it should count
-    toward `processed_listings` (i.e. it exists or was successfully created)."""
+    toward `processed_listings` (i.e. it exists or was successfully created).
+
+    `all_incoming_list_ids` is the stock-id set of EVERY link discovered in
+    this run — passed to find_existing_vehicle so a row whose stock item is
+    still live on the showroom is never a merge candidate (see that param's
+    docstring). Without it, a dealer's two structurally identical live cars
+    (same make/model/year/colour) collapsed into one row, with `list_id`
+    flip-flopping between the two live stock ids on every scrape — the DB
+    permanently held one row fewer than the showroom per such pair. The
+    Gumtree scraper got this fix in #164; this is the same fix for the
+    custom-domain path."""
     already_exists = VehicleListing.objects.filter(
         list_id=listing_id, user=user, seller_profile_id=profile_id
     ).first()
@@ -178,6 +189,10 @@ def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id
         year=result.get("year"), color=result.get("color"), mileage=result.get("mileage"),
         body_type=result.get("body_type"), fuel_type=result.get("fuel_type"),
         transmission=result.get("transmission"),
+        # Rows whose stock items are still live on this showroom are not merge
+        # candidates — each live car keeps its own row (see the param's
+        # docstring in duplicate_matching.py).
+        exclude_list_ids=all_incoming_list_ids,
     )
     if matched is not None:
         logger.info(
@@ -243,17 +258,22 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
     logger.info("Starting custom_domain_profile_listings_thread execution")
     count = 0
     failed_count = 0
-    incoming_list_ids = set()
+    # Every stock id discovered in this run, computed UP FRONT: it doubles as
+    # the reconcile "seen" set below and as find_existing_vehicle's
+    # exclude_list_ids (a car still live on the showroom must never be merged
+    # into — computing it lazily inside the loop would leave later links
+    # unprotected while the earlier ones are processed).
+    incoming_list_ids = {
+        str(lid)
+        for lid in (adapter.extract_listing_id(u) for u in stock_links)
+        if lid
+    }
 
     for stock_url in stock_links:
         listing_id = adapter.extract_listing_id(stock_url)
         if not listing_id:
             logger.warning(f"Skipping URL without listing id: {stock_url}")
             continue
-        # Marked "seen" before processing so the reconcile step below never
-        # deletes/marks-sold a listing just because scraping it raised — an
-        # unhandled exception here must never look like the dealer delisted it.
-        incoming_list_ids.add(str(listing_id))
 
         # One listing's unhandled exception (bad image URL, adapter bug, a
         # transient network error the adapter didn't already catch, etc.)
@@ -264,7 +284,8 @@ def custom_domain_profile_listings_thread(stock_links, profile_instance, user, p
         # scheduled run if the same listing keeps failing the same way. Catch,
         # log, and keep going so one bad row can't freeze the whole batch.
         try:
-            if _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter):
+            if _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id, adapter,
+                                  all_incoming_list_ids=incoming_list_ids):
                 count += 1
             else:
                 failed_count += 1
