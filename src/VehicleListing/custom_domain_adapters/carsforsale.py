@@ -42,23 +42,32 @@ _DETAIL_RE = re.compile(r"/(?:cars/)?details/([^/?#\"']+)/([A-Za-z0-9_\-]+)", re
 # AU-only marketplace, so a premium AU proxy dodges datacentre throttling;
 # `wait` lets Framework7 hydrate the vehicle DOM before capture.
 _ZENROWS_PARAMS = {"js_render": "true", "premium_proxy": "true", "proxy_country": "au", "wait": "9000"}
-# The showroom grid is a Framework7 VIRTUAL LIST: it only mounts the cards near
-# the current scroll position, so a plain render captures whichever handful
-# happened to be there when ZenRows snapshotted the DOM — measured live, a
-# 26-car dealer's showroom rendered with as few as 14-19 cards present. There
-# is no "wait longer" fix: nothing but a scroll event makes the virtual list
-# mount more cards. `js_instructions` forces every scrollable element to its
-# bottom, repeatedly with a wait between passes so each pass's newly-mounted
-# cards get scrolled past in turn and the list keeps growing until the real
-# end of the dealer's stock is reached.
-_SCROLL_TO_BOTTOM_JS = (
-    "(function(){document.querySelectorAll('body *').forEach(function(el){"
+# The showroom grid is paginated behind a "Load more" / "Show more" control
+# AND is a Framework7 VIRTUAL LIST underneath it, so a plain render — even one
+# that only scrolls — captures whichever handful of cards happened to be
+# mounted when ZenRows snapshotted the DOM: measured live, a 26-car dealer's
+# showroom rendered with as few as 14, then 19, cards present, never the real
+# 26. Scrolling alone stalls at whatever the current batch mounted; nothing
+# but an actual click on that control fetches the next one. `js_instructions`
+# therefore scrolls every scrollable element to its bottom AND clicks any
+# visible "load/show/view more" control, repeatedly with a wait between passes
+# so each newly-loaded batch has time to render — and its own "load more"
+# control, if it reappears — before the next pass looks again.
+_LOAD_MORE_JS = (
+    "(function(){"
+    "document.querySelectorAll('body *').forEach(function(el){"
     "if(el.scrollHeight-el.clientHeight>40){el.scrollTop=el.scrollHeight;}});"
-    "window.scrollTo(0,document.body.scrollHeight);})()"
+    "window.scrollTo(0,document.body.scrollHeight);"
+    "document.querySelectorAll('button,a,div,span,i').forEach(function(el){"
+    "var t=(el.textContent||'').trim().toLowerCase();"
+    "if(t.length<40&&(t.indexOf('load more')!==-1||t.indexOf('show more')!==-1||"
+    "t.indexOf('view more')!==-1||t.indexOf('see more')!==-1)){el.click();}"
+    "});"
+    "})()"
 )
 _SHOWROOM_ZENROWS_PARAMS = {
     **_ZENROWS_PARAMS,
-    "js_instructions": json.dumps([{"evaluate": _SCROLL_TO_BOTTOM_JS}, {"wait": 900}] * 12),
+    "js_instructions": json.dumps([{"evaluate": _LOAD_MORE_JS}, {"wait": 1200}] * 12),
 }
 # The un-hydrated shell has none of these — reject it so a shell/challenge page
 # never becomes a hollow listing.
@@ -137,11 +146,12 @@ class CarsForSaleAdapter(DomainAdapter):
         found" and trips the orchestrator's reconcile sanity guard instead of
         poisoning the DB.
 
-        Rendered with `_SHOWROOM_ZENROWS_PARAMS` (scroll instructions), not the
-        plain default: the showroom grid is a virtual list that only mounts
-        cards near the current scroll position, so without forcing it to
-        scroll to the bottom this undercounts a dealer's real inventory (e.g.
-        14-19 cards mounted for a 26-car dealer). See that constant.
+        Rendered with `_SHOWROOM_ZENROWS_PARAMS` (scroll + "load more" click
+        instructions), not the plain default: the showroom grid mounts a
+        limited batch behind a "load more" control, so without repeatedly
+        scrolling AND clicking that control this undercounts a dealer's real
+        inventory (e.g. 14, then 19, cards mounted for a 26-car dealer). See
+        that constant.
         """
         html = _render(profile_url or self.profile_url, _SHOWROOM_ZENROWS_PARAMS)
         if not html:
