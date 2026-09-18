@@ -23,16 +23,43 @@ SHOWROOM_URL = "https://carsforsale.com.au/showroom/mad-man-motors/cZS0__o4ZhSR9
 
 SHOWROOM_HTML = """
 <html><body>
-  <div class="featured-info">
-    <a href="/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
-    <h3 class="cardTitle">2015 NISSAN SERENA</h3>
+  <!-- The SPA keeps the HOME page in the DOM under the showroom. Its Featured /
+       Just arrived carousels hold OTHER dealers' cars and rotate every render —
+       a document-wide link scan imported ~150 of them per scrape (measured live:
+       whole doc 178 unique ids, home page 159, this dealer's showroom 19). -->
+  <div class="page automatic home with-hero page-previous">
+    <a href="/cars/details/2024-toyota-hilux-featured-junk/JUNK01"></a>
+    <a href="/cars/details/2019-bmw-x5-just-arrived-junk/JUNK02"></a>
   </div>
-  <div class="featured-info">
-    <i class="btn-share-page" data-href="/cars/details/2016-land-rover-range-rover-evoque/BBB222"></i>
+
+  <div class="page automatic showroom page-current">
+    <div class="featured-info">
+      <a href="/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
+      <h3 class="cardTitle">2015 NISSAN SERENA</h3>
+    </div>
+    <div class="featured-info">
+      <i class="btn-share-page" data-href="/cars/details/2016-land-rover-range-rover-evoque/BBB222"></i>
+    </div>
+    <!-- duplicate rendition of the same vehicle id must dedupe -->
+    <a href="/cars/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
+    <span>Holland Park West, QLD</span>
   </div>
-  <!-- duplicate rendition of the same vehicle id must dedupe -->
-  <a href="/cars/details/2015-nissan-serena-highway-star-g-hybrid-c26/AAA111"></a>
-  <span>Holland Park West, QLD</span>
+</body></html>
+"""
+
+# Render finished mid-transition: showroom page present but not yet flagged
+# page-current. Discovery must still find it via the fallback.
+SHOWROOM_HTML_NO_CURRENT_FLAG = SHOWROOM_HTML.replace(
+    "page automatic showroom page-current", "page automatic showroom"
+)
+
+# No showroom container at all (template change / challenge page): discovery
+# must return NOTHING rather than fall back to the whole document.
+SHOWROOM_HTML_NO_CONTAINER = """
+<html><body>
+  <div class="page automatic home with-hero page-previous">
+    <a href="/cars/details/2024-toyota-hilux-featured-junk/JUNK01"></a>
+  </div>
 </body></html>
 """
 
@@ -165,6 +192,27 @@ class DiscoveryTests(SimpleTestCase):
         self.assertEqual(len(links), 2)
         self.assertTrue(all(l.startswith("https://carsforsale.com.au/cars/details/") for l in links))
         self.assertIn("AAA111", links[0])
+        # Home-page carousel cars (other dealers') must never be discovered.
+        self.assertFalse(any("JUNK" in l for l in links))
+
+    def test_discovery_survives_missing_page_current_flag(self):
+        with mock.patch.object(
+            __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"]),
+            "_render", return_value=SHOWROOM_HTML_NO_CURRENT_FLAG,
+        ):
+            links = self.adapter.discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(len(links), 2)
+        self.assertFalse(any("JUNK" in l for l in links))
+
+    def test_no_showroom_container_returns_nothing_not_whole_page(self):
+        # Falling back to a document-wide scan is what imported ~150 other
+        # dealers' cars per scrape; an empty result is the safe failure.
+        with mock.patch.object(
+            __import__("VehicleListing.custom_domain_adapters.carsforsale", fromlist=["_render"]),
+            "_render", return_value=SHOWROOM_HTML_NO_CONTAINER,
+        ):
+            links = self.adapter.discover_stock_links(SHOWROOM_URL)
+        self.assertEqual(links, [])
 
     def test_extract_listing_id(self):
         self.assertEqual(

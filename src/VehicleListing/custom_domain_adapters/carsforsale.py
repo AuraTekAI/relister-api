@@ -99,19 +99,67 @@ class CarsForSaleAdapter(DomainAdapter):
         self.HOST = f"{CANONICAL_HOST}/showroom/{slug}" if slug else CANONICAL_HOST
 
     def discover_stock_links(self, profile_url):
-        """Every vehicle detail URL on the dealer's showroom, deduped by the
-        trailing listing id, first-seen order kept."""
+        """Every vehicle detail URL on the dealer's OWN showroom, deduped by
+        the trailing listing id, first-seen order kept.
+
+        Scoped to the SPA's current showroom page, never the whole document.
+        The rendered DOM also carries the HOME page underneath
+        (`div.page.automatic.home ... page-previous`) whose Featured / Just
+        arrived carousels hold ~150 OTHER dealers' cars and rotate on every
+        render. A document-wide regex ingested that rotation into the pipeline
+        on every scheduled scrape: a 26-car dealer accumulated 111+ rows of
+        strangers' stock, and each twice-daily beat run added a fresh batch
+        (measured live: whole doc 178 unique ids, home page 159, this dealer's
+        showroom container 19).
+
+        There is deliberately NO whole-document fallback — same reasoning as
+        _parse_images: importing another dealer's cars is strictly worse than
+        importing nothing, and an empty result both surfaces as "No listings
+        found" and trips the orchestrator's reconcile sanity guard instead of
+        poisoning the DB.
+        """
         html = _render(profile_url or self.profile_url)
         if not html:
             logger.error("carsforsale: showroom render failed for %s", profile_url)
             return []
+        scope = self._current_showroom_page(BeautifulSoup(html, "html.parser"))
+        if scope is None:
+            logger.error(
+                "carsforsale: no 'page-current showroom' container for %s — "
+                "refusing whole-document link discovery (it mixes in other "
+                "dealers' cars from the home-page carousels). Check the "
+                "showroom template.", profile_url,
+            )
+            return []
         seen, links = set(), []
-        for slug, vid in _DETAIL_RE.findall(html):
+        for slug, vid in _DETAIL_RE.findall(str(scope)):
             if vid not in seen:
                 seen.add(vid)
                 links.append(f"{BASE_URL}/cars/details/{slug}/{vid}")
         logger.info("carsforsale: discovered %d stock links for %s", len(links), self.HOST)
         return links
+
+    @staticmethod
+    def _current_showroom_page(soup):
+        """The Framework7 container for the showroom actually being viewed
+        (`div.page.automatic.showroom.page-current`) — the dealer's own stock.
+        Sibling of the leftover home page the SPA keeps in the DOM; see
+        _current_vehicle_page for the same pattern on detail pages. Falls back
+        to a non-current `showroom` page div (present when the render finished
+        mid-transition) and returns None when neither exists."""
+        def classes(value):
+            return value if isinstance(value, list) else str(value).split()
+
+        current = soup.find(
+            "div",
+            class_=lambda c: bool(c) and "page-current" in classes(c) and "showroom" in classes(c),
+        )
+        if current is not None:
+            return current
+        return soup.find(
+            "div",
+            class_=lambda c: bool(c) and "page" in classes(c) and "showroom" in classes(c),
+        )
 
     def extract_listing_id(self, stock_url):
         m = _DETAIL_RE.search(stock_url or "")
