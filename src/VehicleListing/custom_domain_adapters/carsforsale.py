@@ -158,6 +158,8 @@ _SPEC_LABEL_MAP = {
     "body": "body_type", "body type": "body_type",
     "fuel type": "fuel_type", "fuel": "fuel_type",
     "transmission": "transmission", "vin": "vin",
+    "stock #": "stock_number", "stock no": "stock_number",
+    "stock number": "stock_number", "stock": "stock_number",
 }
 
 
@@ -368,6 +370,7 @@ class CarsForSaleAdapter(DomainAdapter):
             "color": spec.get("color"), "transmission": spec.get("transmission"),
             "vin": spec.get("vin"), "mileage": mileage,
             "mileage_unavailable": mileage in (None, 0), "url": stock_url,
+            "stock_number": spec.get("stock_number"),
         }
 
     def _parse_title(self, soup):

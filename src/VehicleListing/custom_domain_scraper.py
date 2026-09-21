@@ -17,6 +17,10 @@ from .utils import reactivate_listing
 
 logger = logging.getLogger("custom_domain")
 
+# Matches gumtree_scraper.DEFAULT_STOCK_NUMBER — stock_number is a non-null
+# column, so a source page that carries no stock number still gets a value.
+DEFAULT_STOCK_NUMBER = "1"
+
 
 def get_custom_domain_listings(profile_url, user):
     """Entry point — kicks off the scrape for a user's custom-domain dealership URL."""
@@ -103,6 +107,9 @@ def _apply_listing_update(existing, result):
     existing.description = result.get("description")
     existing.images = result.get("image")
     existing.location = result.get("location")
+    # Same fallback gumtree_scraper.py uses — stock_number is a non-null
+    # column, so an adapter/page that doesn't carry one still gets a value.
+    existing.stock_number = result.get("stock_number") or DEFAULT_STOCK_NUMBER
     existing.is_changed = True
     existing.save()
     # Spec attributes (make/model/year/mileage/...) live ONLY on the
@@ -224,6 +231,9 @@ def _process_stock_url(stock_url, listing_id, profile_instance, user, profile_id
                 images=result.get("image"),
                 url=result.get("url"),
                 location=result.get("location"),
+                # Same fallback gumtree_scraper.py uses — stock_number is a
+                # non-null column, so an adapter/page without one still gets a value.
+                stock_number=result.get("stock_number") or DEFAULT_STOCK_NUMBER,
                 status="pending",
                 is_relist=False,
                 seller_profile_id=profile_id,
