@@ -16,7 +16,7 @@ from django.test import SimpleTestCase, TestCase
 
 from accounts.models import User
 
-from .custom_domain_scraper import _process_stock_url
+from .custom_domain_scraper import DEFAULT_STOCK_NUMBER, _process_stock_url
 from .duplicate_matching import find_existing_vehicle, is_valid_vin, normalize_for_matching
 from .gumtree_scraper import gumtree_profile_listings_thread
 from .models import (
@@ -213,6 +213,46 @@ class CustomDomainDuplicatePreventionTests(TestCase):
         self.assertTrue(ok)
         self.assertEqual(VehicleListing.objects.filter(user=self.user).count(), 1)
         self.assertEqual(VehicleListing.objects.get(user=self.user).make, 'Toyota')
+
+    def test_stock_number_from_result_is_stored_on_create(self):
+        """carsforsale (and any other custom-domain adapter) parses its own
+        stock number into the result dict — it must actually reach the row,
+        not silently stay at the model's default '1' forever."""
+        adapter = self._adapter(stock_number='221')
+        _process_stock_url(
+            'https://dealer.example.com/buy/new-token', 'new-token',
+            self.profile, self.user, 'dealer.example.com', adapter,
+        )
+        self.assertEqual(VehicleListing.objects.get(user=self.user).stock_number, '221')
+
+    def test_missing_stock_number_falls_back_to_default_on_create(self):
+        """An adapter that doesn't parse a stock number at all (result has no
+        'stock_number' key) must still get the non-null column's default —
+        the same fallback gumtree_scraper.py already uses."""
+        adapter = self._adapter()  # no stock_number override — key absent, like a page with none
+        _process_stock_url(
+            'https://dealer.example.com/buy/new-token', 'new-token',
+            self.profile, self.user, 'dealer.example.com', adapter,
+        )
+        self.assertEqual(VehicleListing.objects.get(user=self.user).stock_number, DEFAULT_STOCK_NUMBER)
+
+    def test_stock_number_is_refreshed_on_relist_update(self):
+        """A relist (list_id changes, same physical car matched by
+        find_existing_vehicle) must refresh stock_number from the new scrape,
+        not leave the row stuck on whatever it had before."""
+        existing = create_listing_with_vehicle(
+            user=self.user, seller_profile_id='dealer.example.com', list_id='old-token',
+            custom_domain_profile=self.profile, stock_number='1',
+            make='Mazda', model='MAZDA3 NEO', variant='Neo', year='2013', color='White',
+            price='12990', mileage=50000, status='completed',
+        )
+        adapter = self._adapter(stock_number='999')
+        _process_stock_url(
+            'https://dealer.example.com/buy/new-token', 'new-token',
+            self.profile, self.user, 'dealer.example.com', adapter,
+        )
+        existing.refresh_from_db()
+        self.assertEqual(existing.stock_number, '999')
 
     def test_two_identical_live_cars_keep_two_rows(self):
         """A dealer with two structurally identical cars BOTH live on the

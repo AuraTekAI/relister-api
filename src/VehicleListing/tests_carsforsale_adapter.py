@@ -129,6 +129,7 @@ DETAIL_HTML = """
     <li><div class="item-inner"><div class="item-title">Odometer</div><div class="item-after">113,152 km</div></div></li>
     <li><div class="item-inner"><div class="item-title">Fuel Type</div><div class="item-after">Hybrid</div></div></li>
     <li><div class="item-inner"><div class="item-title">VIN</div><div class="item-after">6ZZF000HC26129397</div></div></li>
+    <li><div class="item-inner"><div class="item-title">Stock #</div><div class="item-after">221</div></div></li>
     <li><div class="item-inner"><div class="item-title">Seats</div><div class="item-after">8</div></div></li>
   </ul>
 
@@ -411,6 +412,7 @@ class ParseTests(SimpleTestCase):
         self.assertFalse(r["mileage_unavailable"])
         self.assertEqual(r["price"], 18990)               # "$18,990" → int
         self.assertEqual(r["list_id"], "AAA111")
+        self.assertEqual(r["stock_number"], "221")
 
     def test_images_are_scoped_to_this_vehicle_and_deduped(self):
         with _patch_render(DETAIL_HTML):
@@ -455,6 +457,9 @@ class ParseTests(SimpleTestCase):
         self.assertEqual(r["make"], "Land Rover")
         self.assertTrue(r["model"].upper().startswith("RANGE ROVER"))
         self.assertEqual(r["mileage"], 90000)
+        # No "Stock #" row on this fixture — must be None, not a stale/wrong
+        # value from some other field, and never crash the lookup.
+        self.assertIsNone(r["stock_number"])
 
     def test_hollow_listing_is_skipped(self):
         with _patch_render("<html><body><div class='item-after'>x</div></body></html>"):
@@ -476,7 +481,8 @@ class ParseTests(SimpleTestCase):
                 "https://carsforsale.com.au/cars/details/2015-nissan-serena/AAA111")
         for key in ("list_id", "title", "price", "description", "image", "location",
                     "year", "make", "model", "variant", "body_type", "fuel_type",
-                    "color", "transmission", "vin", "mileage", "mileage_unavailable", "url"):
+                    "color", "transmission", "vin", "mileage", "mileage_unavailable", "url",
+                    "stock_number"):
             self.assertIn(key, r)
 
 
