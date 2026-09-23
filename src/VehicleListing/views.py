@@ -4,6 +4,7 @@ from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from payments.permissions import HasActiveSubscription
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
@@ -1145,7 +1146,7 @@ def get_user_custom_domain_profile_vehicle_listings(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def get_listing_images_status(request, listing_id):
     """Lazy image pipeline's publish-time trigger + progress report.
 
@@ -1392,7 +1393,7 @@ def custom_domain_image_proxy(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_listed_on(request):
     """
     Update the listed_on date for a specific vehicle listing
@@ -1557,7 +1558,7 @@ def update_vehicle_listing_listed_on(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_is_changed(request):
     """
     Flag-only mutation for the `is_changed` field on a VehicleListing.
@@ -1748,7 +1749,7 @@ def relist_recovery(request):
 
 
 @api_view(['PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_facebook_id(request):
     """
     Manage the Facebook Marketplace listing ID for a VehicleListing.
