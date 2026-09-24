@@ -10,12 +10,14 @@ keep the public log-sink view (`views.py`) small.
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from django.contrib.auth import get_user_model
-from django.db.models import Case, IntegerField, Value, When
+from django.db.models import Case, IntegerField, Q, Value, When
+from django.utils import timezone
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -84,6 +86,59 @@ def get_extension_logs(request):
         'count': len(rows),
         'logs': [
             {'id': r.id, 'created_at': r.created_at.isoformat(), 'log': r.log}
+            for r in rows
+        ],
+    })
+
+
+# The extension's errorLogger prefixes every error payload with one of these;
+# [RELIST]/[COOLDOWN] activity lines don't, so this is what separates errors.
+ERROR_LOG_PREFIXES = ('console.error:', 'window.error:', 'unhandledrejection:')
+ERROR_LOG_DAYS = 7
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_recent_error_logs(request):
+    """
+    GET /api/extension-logs/errors/?page=&page_size=
+    Extension ERROR logs from all dealers in the last 7 days, newest first.
+    `error` is only the first line of the payload (the error message itself);
+    the rest of the row is version/url/user-agent + breadcrumb context.
+    """
+    try:
+        page = max(int(request.GET.get('page', 1)), 1)
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        page_size = min(max(int(request.GET.get('page_size', 50)), 1), 200)
+    except (ValueError, TypeError):
+        page_size = 50
+
+    prefix_filter = Q()
+    for prefix in ERROR_LOG_PREFIXES:
+        prefix_filter |= Q(log__startswith=prefix)
+    qs = (
+        ExtensionLog.objects
+        .filter(prefix_filter, created_at__gte=timezone.now() - timedelta(days=ERROR_LOG_DAYS))
+        .select_related('user')
+        .order_by('-created_at')
+    )
+    total = qs.count()
+    start = (page - 1) * page_size
+    rows = qs[start:start + page_size]
+    return Response({
+        'success': True,
+        'count': total,
+        'page': page,
+        'page_size': page_size,
+        'results': [
+            {
+                'id': r.id,
+                'email': r.user.email if r.user_id else None,
+                'error': r.log.split('\n', 1)[0],
+                'created_at': r.created_at.isoformat(),
+            }
             for r in rows
         ],
     })
