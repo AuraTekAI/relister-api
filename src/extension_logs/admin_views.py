@@ -103,8 +103,8 @@ def get_recent_error_logs(request):
     """
     GET /api/extension-logs/errors/?page=&page_size=
     Extension ERROR logs from all dealers in the last 7 days, newest first.
-    `error` is only the first line of the payload (the error message itself);
-    the rest of the row is version/url/user-agent + breadcrumb context.
+    `error` is the full stored payload: the error message, then version/url/
+    user-agent and the recent-activity breadcrumbs.
     """
     try:
         page = max(int(request.GET.get('page', 1)), 1)
@@ -136,7 +136,7 @@ def get_recent_error_logs(request):
             {
                 'id': r.id,
                 'email': r.user.email if r.user_id else None,
-                'error': r.log.split('\n', 1)[0],
+                'error': r.log,
                 'created_at': r.created_at.isoformat(),
             }
             for r in rows
