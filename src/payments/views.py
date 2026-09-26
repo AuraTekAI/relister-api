@@ -289,6 +289,52 @@ class CheckoutView(APIView):
         if plan.stripe_overage_price_id:
             line_items.append({'price': plan.stripe_overage_price_id})
 
+        # Current accrued extra listings as a ONE-TIME line item.
+        # Checkout in subscription mode accepts one-time prices alongside the
+        # recurring ones: they are shown on the Checkout page WITH their amount and
+        # billed once on the FIRST invoice. That is what makes "N × rate = $X"
+        # appear in the breakdown (Package / Extra listings / GST / Total) and be
+        # included in "Total due today" — the amount actually sent to Stripe.
+        # The metered "Extra Listings" line above is untouched and keeps billing
+        # FUTURE in-period usage at period end, so there is no double charge.
+        # Amount uses the same source the billing page shows the dealer
+        # (UsageTrackerView: user.overage_count × plan.overage_rate_aud), so the
+        # charge always equals the displayed figure. GST is applied by Stripe Tax
+        # (tax_behavior 'exclusive'; tax_code inherited from the overage product).
+        overage_units = max(0, int(getattr(user, 'overage_count', 0) or 0))
+        if overage_units > 0 and plan.overage_rate_aud and plan.stripe_overage_price_id:
+            try:
+                overage_product = stripe.Price.retrieve(
+                    plan.stripe_overage_price_id, expand=['product']
+                ).product
+                product_data = {
+                    'name': _sget(overage_product, 'name') or 'Extra Listings',
+                }
+                tax_code = _sget(overage_product, 'tax_code')
+                if tax_code:
+                    product_data['tax_code'] = tax_code
+                line_items.append({
+                    'price_data': {
+                        'currency': 'aud',
+                        'product_data': product_data,
+                        'unit_amount': int(round(float(plan.overage_rate_aud) * 100)),
+                        'tax_behavior': 'exclusive',
+                        # No `recurring` → one-time; billed once on the first invoice.
+                    },
+                    'quantity': overage_units,
+                })
+                logger.info(
+                    f"CheckoutView: adding current overage line for user {user.id}: "
+                    f"{overage_units} × {plan.overage_rate_aud} AUD (one-time, first invoice)."
+                )
+            except stripe.error.StripeError as exc:
+                # Never block the base subscription checkout because the overage
+                # line failed — log and proceed with package + GST only.
+                logger.error(
+                    f"CheckoutView: could not add current overage line for user "
+                    f"{user.id}: {exc} — proceeding without it."
+                )
+
         # Pass pending discount coupon to checkout if user has one applied.
         # If stripe_coupon_id is missing (e.g. Stripe was down at admin create time),
         # attempt a re-sync now so the user gets their discount at checkout.
@@ -1512,8 +1558,15 @@ def _sync_custom_plan_to_stripe(plan):
             meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
             try:
                 meter = _get_or_create_stripe_meter(meter_event_name)
+                # Give overage its own product so the invoice line reads clearly
+                # (e.g. "Relister Starter - Extra Listings") instead of sharing
+                # the base plan's name and being indistinguishable from it.
+                overage_product = stripe.Product.create(
+                    name=f"Relister {plan.name} - Extra Listings",
+                    metadata={'plan_name': plan.name, 'plan_id': str(plan.id), 'type': 'overage'},
+                )
                 overage_price = stripe.Price.create(
-                    product=product.id,
+                    product=overage_product.id,
                     unit_amount=overage_cents,
                     currency='aud',
                     recurring={

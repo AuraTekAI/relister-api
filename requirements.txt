@@ -37,3 +37,5 @@ redis==5.0.8
 pywebpush==2.0.0
 # WebP encode/decode + resize for the vehicle image hosting pipeline
 Pillow==10.4.0
+# Error monitoring — inert unless SENTRY_DSN is set (see settings.py)
+sentry-sdk[django]==2.18.0

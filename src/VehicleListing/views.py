@@ -4,6 +4,7 @@ from .custom_domain_adapters import resolve_for_url, any_needs_image_proxy
 from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from payments.permissions import HasActiveSubscription
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
@@ -1145,7 +1146,7 @@ def get_user_custom_domain_profile_vehicle_listings(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def get_listing_images_status(request, listing_id):
     """Lazy image pipeline's publish-time trigger + progress report.
 
@@ -1392,7 +1393,7 @@ def custom_domain_image_proxy(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_listed_on(request):
     """
     Update the listed_on date for a specific vehicle listing
@@ -1557,7 +1558,7 @@ def update_vehicle_listing_listed_on(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_is_changed(request):
     """
     Flag-only mutation for the `is_changed` field on a VehicleListing.
@@ -1748,7 +1749,7 @@ def relist_recovery(request):
 
 
 @api_view(['PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
 def update_vehicle_listing_facebook_id(request):
     """
     Manage the Facebook Marketplace listing ID for a VehicleListing.
@@ -2255,6 +2256,10 @@ def search_products(request):
     - year_min, year_max: inclusive year range
     - mileage_min, mileage_max: inclusive mileage (km) range
     - price_min, price_max: inclusive price range
+    - stock_number_min, stock_number_max: inclusive stock number range
+      (numeric stock numbers only — same non-numeric-value handling as
+      price/year below; a dealer's alphanumeric stock codes never match a
+      range query, only the exact-match `stock_number` param above does)
     - ordering: one of newest (default), price_asc, price_desc, mileage_asc,
       mileage_desc, year_asc, year_desc
     - limit: Integer (default 20, max 100) — page size
@@ -2321,10 +2326,12 @@ def search_products(request):
         'year': (parse_int('year_min'), parse_int('year_max')),
         'mileage': (parse_int('mileage_min'), parse_int('mileage_max')),
         'price': (parse_int('price_min'), parse_int('price_max')),
+        'stock_number': (parse_int('stock_number_min'), parse_int('stock_number_max')),
     }
 
     needs_year_cast = any(range_filters['year'])
     needs_price_cast = any(range_filters['price'])
+    needs_stock_number_cast = any(range_filters['stock_number'])
     if needs_year_cast:
         products = products.filter(vehicle__year__regex=r'^\d+$').annotate(
             year_int=Cast('vehicle__year', output_field=IntegerField())
@@ -2332,6 +2339,13 @@ def search_products(request):
     if needs_price_cast:
         products = products.filter(price__regex=r'^\d+$').annotate(
             price_int=Cast('price', output_field=IntegerField())
+        )
+    if needs_stock_number_cast:
+        # stock_number is alphanumeric (e.g. "A1234") on some dealer sources —
+        # same non-digit guard as price/year above, so a range query simply
+        # excludes those rows rather than erroring the Cast out.
+        products = products.filter(stock_number__regex=r'^\d+$').annotate(
+            stock_number_int=Cast('stock_number', output_field=IntegerField())
         )
 
     range_min, range_max = range_filters['year']
@@ -2351,6 +2365,12 @@ def search_products(request):
         products = products.filter(price_int__gte=range_min)
     if range_max is not None:
         products = products.filter(price_int__lte=range_max)
+
+    range_min, range_max = range_filters['stock_number']
+    if range_min is not None:
+        products = products.filter(stock_number_int__gte=range_min)
+    if range_max is not None:
+        products = products.filter(stock_number_int__lte=range_max)
 
     ordering = params.get('ordering', 'newest')
     if ordering not in ORDERING_OPTIONS:

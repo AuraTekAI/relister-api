@@ -65,11 +65,32 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
     base_charge = plan.price_aud or Decimal('0.00')
     listing_quota = plan.listing_quota or 0
     overage_rate = plan.overage_rate_aud or Decimal('0.00')
-    # Safe-mode guard: subscription-cycle invoices are plan-only.
-    # Overage is billed ONLY via source=listing_overage webhook path.
-    listings_used = subscription.listing_count
+
+    # Overage: mirror what Stripe actually billed on this invoice's metered
+    # overage line (plan.stripe_overage_price_id). Reading the qty + charge back
+    # from the real Stripe invoice keeps our record identical to the customer's
+    # charge and never double-bills the separate per-listing
+    # (source=listing_overage) path, which is handled by its own webhook branch.
     overage_count = 0
     overage_charge = Decimal('0.00')
+    if stripe_invoice_id and plan.stripe_overage_price_id:
+        from .stripe_utils import extract_metered_overage_from_stripe_invoice
+        try:
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            stripe_invoice = stripe.Invoice.retrieve(
+                stripe_invoice_id, expand=['lines.data.price']
+            )
+            metered_count, metered_charge = extract_metered_overage_from_stripe_invoice(
+                stripe_invoice, plan
+            )
+            if metered_count is not None and metered_charge is not None:
+                overage_count = metered_count
+                overage_charge = metered_charge
+        except stripe.error.StripeError as exc:
+            logger.warning(
+                f"generate_invoice: could not read overage from Stripe invoice "
+                f"{stripe_invoice_id}: {exc} — recording plan-only invoice."
+            )
 
     # --- Discount ---
     discount_obj = subscription.active_discount_code
@@ -768,17 +789,33 @@ def report_active_overage_usage(self, dry_run=None):
                 logger.warning(f"[overage] LIVE user={sub.user_id} has overage={overage} but no metered subscription item — skipping (needs overage item on Stripe sub)")
             continue
 
+        # The overage price is backed by a Stripe Billing Meter with 'sum'
+        # aggregation — Stripe ADDS every value it receives during the period.
+        # Reporting the absolute overage every day would bill overage × (days in
+        # period) and massively overcharge (15/day → 450 → $1,575 instead of
+        # $52.50). So we report the current over-quota count exactly ONCE per
+        # period, on the final day before renewal. The deterministic `identifier`
+        # makes any duplicate/retry run inside that 24h window collapse to a
+        # single counted event, so the meter's period total == the real overage.
+        period_end = sub.current_period_end
+        if not period_end or (period_end - now) > timedelta(hours=24):
+            summary['skipped_not_period_end'] = summary.get('skipped_not_period_end', 0) + 1
+            continue
+
+        meter_event_name = f"relister_{plan.name.lower().replace(' ', '_')}_overage"
         try:
-            stripe.SubscriptionItem.create_usage_record(
-                item,
-                quantity=int(overage),
-                timestamp=int(now.timestamp()),
-                action='set',   # ABSOLUTE — overwrites, never accumulates
+            stripe.billing.MeterEvent.create(
+                event_name=meter_event_name,
+                identifier=f"overage-sub{sub.id}-{int(period_end.timestamp())}",
+                payload={
+                    'stripe_customer_id': sub.stripe_customer_id,
+                    'value': str(int(overage)),
+                },
             )
             summary['reported' if overage > 0 else 'zero_reported'] += 1
         except Exception as e:  # noqa: BLE001
             summary['errors'] += 1
-            logger.error(f"[overage] LIVE user={sub.user_id} usage report failed: {e}")
+            logger.error(f"[overage] LIVE user={sub.user_id} meter event report failed: {e}")
 
     logger.info(f"[overage] {mode} run @ {now.isoformat()} summary={summary}")
     for ln in lines:

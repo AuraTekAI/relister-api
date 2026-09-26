@@ -10,11 +10,14 @@ keep the public log-sink view (`views.py`) small.
 import asyncio
 import json
 import uuid
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from django.contrib.auth import get_user_model
+from django.db.models import Case, IntegerField, Q, Value, When
+from django.utils import timezone
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -27,6 +30,10 @@ User = get_user_model()
 
 # How long to wait for the extension to ack a remote command before giving up.
 COMMAND_ACK_TIMEOUT = 100
+
+# Cap on the per-dealer rows backend_health returns. Bounded so the endpoint
+# stays a quick health check rather than an unpaginated dump as dealers grow.
+DEALER_HEALTH_LIMIT = 100
 
 
 def _dealer_name(u):
@@ -79,6 +86,59 @@ def get_extension_logs(request):
         'count': len(rows),
         'logs': [
             {'id': r.id, 'created_at': r.created_at.isoformat(), 'log': r.log}
+            for r in rows
+        ],
+    })
+
+
+# The extension's errorLogger prefixes every error payload with one of these;
+# [RELIST]/[COOLDOWN] activity lines don't, so this is what separates errors.
+ERROR_LOG_PREFIXES = ('console.error:', 'window.error:', 'unhandledrejection:')
+ERROR_LOG_DAYS = 7
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_recent_error_logs(request):
+    """
+    GET /api/extension-logs/errors/?page=&page_size=
+    Extension ERROR logs from all dealers in the last 7 days, newest first.
+    `error` is the full stored payload: the error message, then version/url/
+    user-agent and the recent-activity breadcrumbs.
+    """
+    try:
+        page = max(int(request.GET.get('page', 1)), 1)
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        page_size = min(max(int(request.GET.get('page_size', 50)), 1), 200)
+    except (ValueError, TypeError):
+        page_size = 50
+
+    prefix_filter = Q()
+    for prefix in ERROR_LOG_PREFIXES:
+        prefix_filter |= Q(log__startswith=prefix)
+    qs = (
+        ExtensionLog.objects
+        .filter(prefix_filter, created_at__gte=timezone.now() - timedelta(days=ERROR_LOG_DAYS))
+        .select_related('user')
+        .order_by('-created_at')
+    )
+    total = qs.count()
+    start = (page - 1) * page_size
+    rows = qs[start:start + page_size]
+    return Response({
+        'success': True,
+        'count': total,
+        'page': page,
+        'page_size': page_size,
+        'results': [
+            {
+                'id': r.id,
+                'email': r.user.email if r.user_id else None,
+                'error': r.log,
+                'created_at': r.created_at.isoformat(),
+            }
             for r in rows
         ],
     })
@@ -239,6 +299,13 @@ def backend_health(request):
     Quick backend self-check for Claude: DB reachable, channel layer (Redis)
     reachable, and basic counts. Helps distinguish "extension problem" from
     "backend problem".
+
+    Also returns a per-dealer `dealers` breakdown (worst-first, capped at
+    DEALER_HEALTH_LIMIT) so "which dealers are broken and why" is answerable
+    from this one call instead of a dealer-meta request each. The aggregate
+    keys are unchanged: the MCP get_backend_health tool reads `db`,
+    `channel_layer`, `dealers_synced` and `dealers_with_fb_errors` by name, so
+    this is purely additive.
     """
     health = {'success': True, 'db': False, 'channel_layer': False}
     try:
@@ -262,6 +329,36 @@ def backend_health(request):
         health['dealers_with_fb_errors'] = ExtensionSyncStatus.objects.exclude(status='ok').count()
     except Exception:  # noqa: BLE001
         pass
+
+    # Per-dealer detail, ordered broken-first. A plain order_by('status') would
+    # sort alphabetically and bury the failures ('fb_error' < 'ok' <
+    # 'rate_limited'), so rank on is-it-ok first and show the freshest sync
+    # within each group.
+    try:
+        from VehicleListing.models import ExtensionSyncStatus
+        rows = (
+            ExtensionSyncStatus.objects
+            .select_related('user')
+            .annotate(_is_ok=Case(When(status='ok', then=Value(1)),
+                                  default=Value(0), output_field=IntegerField()))
+            .order_by('_is_ok', '-synced_at')[:DEALER_HEALTH_LIMIT]
+        )
+        health['dealers'] = [
+            {
+                'user_id': row.user_id,
+                'email': row.user.email,
+                'dealership': getattr(row.user, 'dealership_name', None),
+                'status': row.status,
+                'status_detail': row.status_detail,
+                'fb_count': row.fb_count,
+                'unpublished_count': row.unpublished_count,
+                'extension_version': row.extension_version,
+                'synced_at': row.synced_at.isoformat() if row.synced_at else None,
+            }
+            for row in rows
+        ]
+    except Exception as e:  # noqa: BLE001
+        health['dealers_error'] = str(e)
 
     health['known_commands'] = sorted(KNOWN_COMMANDS)
     return Response(health)
