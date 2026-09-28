@@ -5,6 +5,7 @@ from .url_importer import ImportFromUrl
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from payments.permissions import HasActiveSubscription
+from .permissions import HasNoFacebookVerificationBlock
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
@@ -1146,7 +1147,7 @@ def get_user_custom_domain_profile_vehicle_listings(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
+@permission_classes([IsAuthenticated, HasActiveSubscription, HasNoFacebookVerificationBlock])
 def get_listing_images_status(request, listing_id):
     """Lazy image pipeline's publish-time trigger + progress report.
 
