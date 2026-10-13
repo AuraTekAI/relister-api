@@ -24,6 +24,7 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .consumers import KNOWN_COMMANDS
+from . import activity
 from .models import ExtensionLog
 
 User = get_user_model()
@@ -362,3 +363,26 @@ def backend_health(request):
 
     health['known_commands'] = sorted(KNOWN_COMMANDS)
     return Response(health)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_dealer_activity(request):
+    """
+    GET /api/extension-logs/admin/activity/?user_id=|email=&days=14
+    Admin view of any dealer's daily extension usage (newest day first).
+    """
+    user, err = _resolve_user(request)
+    if err:
+        return err
+    try:
+        days = int(request.GET.get('days', 14))
+    except (TypeError, ValueError):
+        return Response({'success': False, 'error': 'days must be an integer'}, status=400)
+    return Response({
+        'success': True,
+        'user_id': user.id,
+        'email': user.email,
+        'dealership': _dealer_name(user),
+        **activity.daily_summary(user, days),
+    })
