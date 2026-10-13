@@ -50,3 +50,35 @@ class PushSubscription(models.Model):
     def __str__(self):
         who = self.user.email if self.user_id else 'anonymous'
         return f'push[{who}] {self.endpoint[:40]}…'
+
+
+class DailyActiveUser(models.Model):
+    """
+    One row per user per day (Australia/Perth date): was the extension used that
+    day, when it was first/last seen, and how many actions it performed.
+    Written by extension_logs.activity.record_activity — never edit counts by hand.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='daily_activity',
+    )
+    date = models.DateField()
+    active = models.BooleanField(default=False)
+    first_seen = models.DateTimeField(null=True, blank=True)
+    last_seen = models.DateTimeField(null=True, blank=True)
+    action_count = models.PositiveIntegerField(default=0)  # total of the per-action counts below
+    listed_count = models.PositiveIntegerField(default=0)
+    relisted_count = models.PositiveIntegerField(default=0)
+    deleted_count = models.PositiveIntegerField(default=0)
+    other_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'daily_active_user'
+        ordering = ['-date']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'date'], name='unique_daily_active_user_per_day'),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id} @ {self.date} active={self.active}'
