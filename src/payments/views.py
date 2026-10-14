@@ -289,43 +289,54 @@ class CheckoutView(APIView):
         if plan.stripe_overage_price_id:
             line_items.append({'price': plan.stripe_overage_price_id})
 
-        # Current accrued extra listings as a ONE-TIME line item.
-        # Checkout in subscription mode accepts one-time prices alongside the
-        # recurring ones: they are shown on the Checkout page WITH their amount and
-        # billed once on the FIRST invoice. That is what makes "N × rate = $X"
-        # appear in the breakdown (Package / Extra listings / GST / Total) and be
-        # included in "Total due today" — the amount actually sent to Stripe.
-        # The metered "Extra Listings" line above is untouched and keeps billing
-        # FUTURE in-period usage at period end, so there is no double charge.
-        # Amount uses the same source the billing page shows the dealer
-        # (UsageTrackerView: user.overage_count × plan.overage_rate_aud), so the
-        # charge always equals the displayed figure. GST is applied by Stripe Tax
-        # (tax_behavior 'exclusive'; tax_code inherited from the overage product).
+        # Current accrued extra listings, billed once on the FIRST invoice.
+        # A Checkout `line_items` entry cannot carry a service-period date — Stripe
+        # stamps it with the subscription cycle. To show the extra-listing charge
+        # against the PREVIOUS billing period (the plan is billed in advance, so the
+        # overage belongs to the month just ended), it is added as a PENDING
+        # InvoiceItem with an explicit `period`: Stripe sweeps pending items onto the
+        # subscription's first invoice, keeping the dates we set here. Only this
+        # line's dates change — the plan line and the metered "Extra Listings"
+        # subscription item (future in-period usage) are untouched, so no double
+        # charge. Amount uses the same source the billing page shows the dealer
+        # (UsageTrackerView: user.overage_count × plan.overage_rate_aud). GST is
+        # applied by Stripe Tax (tax_behavior 'exclusive'; tax_code from the product).
         overage_units = max(0, int(getattr(user, 'overage_count', 0) or 0))
         if overage_units > 0 and plan.overage_rate_aud and plan.stripe_overage_price_id:
             try:
                 overage_product = stripe.Price.retrieve(
                     plan.stripe_overage_price_id, expand=['product']
                 ).product
-                product_data = {
-                    'name': _sget(overage_product, 'name') or 'Extra Listings',
-                }
+                # Previous billing period: same day one month earlier → now
+                # (day clamped for short months, e.g. Mar 31 → Feb 28).
+                import calendar as _calendar
+                _now = timezone.now()
+                _pm = 12 if _now.month == 1 else _now.month - 1
+                _py = _now.year - 1 if _now.month == 1 else _now.year
+                _prev_start = _now.replace(
+                    year=_py, month=_pm,
+                    day=min(_now.day, _calendar.monthrange(_py, _pm)[1]),
+                )
+                item_kwargs = dict(
+                    customer=stripe_customer_id,
+                    currency='aud',
+                    unit_amount=int(round(float(plan.overage_rate_aud) * 100)),
+                    quantity=overage_units,
+                    description=_sget(overage_product, 'name') or 'Extra Listings',
+                    tax_behavior='exclusive',
+                    period={
+                        'start': int(_prev_start.timestamp()),
+                        'end': int(_now.timestamp()),
+                    },
+                )
                 tax_code = _sget(overage_product, 'tax_code')
                 if tax_code:
-                    product_data['tax_code'] = tax_code
-                line_items.append({
-                    'price_data': {
-                        'currency': 'aud',
-                        'product_data': product_data,
-                        'unit_amount': int(round(float(plan.overage_rate_aud) * 100)),
-                        'tax_behavior': 'exclusive',
-                        # No `recurring` → one-time; billed once on the first invoice.
-                    },
-                    'quantity': overage_units,
-                })
+                    item_kwargs['tax_code'] = tax_code
+                stripe.InvoiceItem.create(**item_kwargs)
                 logger.info(
-                    f"CheckoutView: adding current overage line for user {user.id}: "
-                    f"{overage_units} × {plan.overage_rate_aud} AUD (one-time, first invoice)."
+                    f"CheckoutView: added current overage InvoiceItem for user {user.id}: "
+                    f"{overage_units} × {plan.overage_rate_aud} AUD, period "
+                    f"{_prev_start:%Y-%m-%d}..{_now:%Y-%m-%d} (previous month, first invoice)."
                 )
             except stripe.error.StripeError as exc:
                 # Never block the base subscription checkout because the overage
