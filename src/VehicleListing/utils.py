@@ -167,6 +167,38 @@ def reactivate_listing(listing):
     listing.save()
     logger.info(f"Listing manually reactivated for the user {listing.user.email} and listing title {listing.year} {listing.make} {listing.model}")
 
+
+def reactivate_still_present_listings(user, seller_id, incoming_list_ids):
+    """For ads STILL LIVE on the seller's Gumtree profile this scrape, undo any
+    stale 'sold' state.
+
+    A car that was marked sold (vanished from the profile) and then re-listed under
+    the SAME ad id must be un-sold. Previously only the `sales` flag was reset here,
+    which left `status == "sold"` in place — and the extension's publish guard and
+    the relist queue both exclude on `status == "sold"`, so the re-listed car was
+    never re-published.
+
+    A re-listed car needs to be published to Facebook again, so it is set back to
+    "pending" — the exact status a brand-new scraped Gumtree listing gets (see
+    gumtree_scraper, status="pending" on create) — NOT "completed" (which would mean
+    it is already live on Facebook). sold_at is cleared. `sales` is still reset on
+    every still-present row.
+
+    Returns (reactivated_count, sales_reset_count).
+    """
+    from .models import VehicleListing
+    if not incoming_list_ids:
+        return 0, 0
+    still_present = VehicleListing.objects.filter(
+        user=user, seller_profile_id=seller_id, list_id__in=incoming_list_ids
+    )
+    # Re-listed (previously sold) cars need to go back into the publish queue.
+    reactivated = still_present.filter(status="sold").update(
+        status="pending", sold_at=None
+    )
+    sales_reset = still_present.update(sales=False)
+    return reactivated, sales_reset
+
 def handle_retry_or_disable_credentials(credentials, user):
     if credentials.retry_count < settings.MAX_RETRIES_ATTEMPTS:
         credentials.retry_count += 1

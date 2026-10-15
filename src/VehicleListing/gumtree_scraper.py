@@ -11,7 +11,7 @@ import threading
 from django.conf import settings
 from bs4 import BeautifulSoup
 import re
-from .utils import get_full_state_name, mark_listing_sold, reactivate_listing
+from .utils import get_full_state_name, mark_listing_sold, reactivate_listing, reactivate_still_present_listings
 # from .models import RelistingFacebooklisting
 from django.utils import timezone
 from datetime import timedelta
@@ -796,13 +796,19 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
     gumtree_profile_listing_instance.status = "completed"
     gumtree_profile_listing_instance.save()
 
-    # Listings that came back in this API call are still live on the seller's profile,
-    # so clear any stale sales=True flag in bulk.
-    existing_listings_which_sale_on_list_api_call = VehicleListing.objects.filter(
-        user=user, seller_profile_id=seller_id, list_id__in=incoming_list_ids
+    # Listings that came back in this API call are still live on the seller's profile.
+    # Clear any stale sales=True flag AND re-queue rows we had marked sold:
+    # a car re-listed under the SAME ad id previously only had `sales` reset here, so it
+    # kept status="sold" — which the extension publish guard and relist queue exclude on,
+    # leaving it stuck. reactivate_still_present_listings also puts those rows back to
+    # status="pending" (same as a freshly scraped listing) so they get published again.
+    reactivated_count, updated_sales_count = reactivate_still_present_listings(
+        user, seller_id, incoming_list_ids
     )
-    updated_sales_count = existing_listings_which_sale_on_list_api_call.update(sales=False)
-    logging.info(f"Reset sales=False on {updated_sales_count} listings still present on the seller's profile")
+    logging.info(
+        f"Reset sales=False on {updated_sales_count} listings still present on the seller's profile; "
+        f"reactivated {reactivated_count} previously-sold listing(s) re-listed under the same ad id"
+    )
 
     # Mark already exist listing who are not present in profile listings as sold.
     # Skip this block if the incoming API call returned no listings — otherwise we'd
