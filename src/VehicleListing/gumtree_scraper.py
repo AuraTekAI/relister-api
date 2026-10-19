@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from zenrows import ZenRowsClient
-from .models import VehicleListing,GumtreeProfileListing
+from .models import VehicleListing,GumtreeProfileListing,GumtreeSyncRun
 from .duplicate_matching import find_existing_vehicle
 from .image_pipeline import sync_listing_images
 from .vehicle_sync import spec_from_result, sync_vehicle_for_listing
@@ -463,12 +463,84 @@ def is_gumtree_listing_active(list_id):
     return True
 
 
-def get_gumtree_listings(profile_url,user):
+def _record_gumtree_sync_run(user, seller_id, outcome, *, profile=None, source='cron',
+                             fetched_count=0, returned_list_ids=None, http_status=None,
+                             error_detail=None):
+    """Persist one append-only GumtreeSyncRun row.
+
+    Best-effort: a failure to record the run must never break the sync itself.
+    This is the ONLY place a failed/empty profile fetch leaves a durable trace —
+    the old code wrote nothing on those paths, so diagnostics could not tell a
+    ZenRows 402 failure apart from a genuinely empty profile.
+    """
+    try:
+        GumtreeSyncRun.objects.create(
+            user=user,
+            profile=profile,
+            seller_profile_id=str(seller_id) if seller_id is not None else None,
+            outcome=outcome,
+            source=source,
+            fetched_count=fetched_count or 0,
+            returned_list_ids=returned_list_ids or [],
+            http_status=http_status,
+            error_detail=(error_detail[:500] if error_detail else None),
+        )
+    except Exception as record_error:  # pragma: no cover - logging guard
+        logging.error(f"Failed to record GumtreeSyncRun for seller {seller_id}: {record_error}")
+
+
+def fetch_current_gumtree_ad_ids(seller_id):
+    """Fetch ONLY the current Gumtree ad ids for a seller profile, in a small
+    request, without touching the DB or starting the detail thread.
+
+    Returns (ok, ids, http_status, error):
+      - ok=True  -> `ids` is the set of current ad ids (may be empty for an empty
+                    profile; error is None)
+      - ok=False -> the fetch failed; `ids` is empty and error/http_status say why.
+
+    Used only by the on-demand (?live=1) reconciliation. The default reconciliation
+    reads the last successful GumtreeSyncRun instead, so routine diagnostics never
+    spend a ZenRows request.
+    """
+    if not settings.ZENROWS_API_KEY:
+        return False, set(), None, "ZENROWS_API_KEY is not configured"
+    seller_id = str(seller_id)
+    if not seller_id.isdigit():
+        return False, set(), None, f"Invalid seller ID: {seller_id}"
+    try:
+        client = ZenRowsClient(settings.ZENROWS_API_KEY)
+        base_url = f"https://gt-api.gumtree.com.au/web/user-profile-service/{seller_id}/listings"
+        json_headers = {"Accept": "application/json"}
+        initial = client.get(f"{base_url}?page=0&size=1", headers=json_headers)
+        if initial.status_code != 200:
+            return False, set(), initial.status_code, f"count request HTTP {initial.status_code}"
+        try:
+            total_count = initial.json().get("totalCount", 0)
+        except ValueError:
+            return False, set(), initial.status_code, "count request returned non-JSON"
+        if total_count == 0:
+            return True, set(), initial.status_code, None
+        full = client.get(f"{base_url}?page=0&size={total_count}", headers=json_headers)
+        if full.status_code != 200:
+            return False, set(), full.status_code, f"listings request HTTP {full.status_code}"
+        try:
+            listings = full.json().get("profileListingList", [])
+        except ValueError:
+            return False, set(), full.status_code, "listings request returned non-JSON"
+        ids = {str(l.get("id")) for l in listings if l.get("id")}
+        return True, ids, full.status_code, None
+    except Exception as e:
+        return False, set(), None, f"exception: {e}"
+
+
+def get_gumtree_listings(profile_url,user,source='cron'):
     """
     Fetches all listings for a given seller ID.
 
     Parameters:
         seller_id (str): The seller's ID.
+        source (str): who triggered this run ('cron' | 'approval' | 'manual') —
+            recorded on the GumtreeSyncRun audit row.
 
     Returns:
         list: A list of dictionaries containing details of the listings, or None if an error occurs.
@@ -479,6 +551,8 @@ def get_gumtree_listings(profile_url,user):
     seller_id = extract_seller_id(profile_url)  # Extract the last part of the URL
     if not seller_id.isdigit():
         logging.error(f"Invalid seller ID: {seller_id}")
+        _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                 error_detail=f"Invalid seller ID: {seller_id}")
         return False,"Invalid seller ID"
 
     client = ZenRowsClient(settings.ZENROWS_API_KEY)
@@ -496,6 +570,11 @@ def get_gumtree_listings(profile_url,user):
         initial_response = client.get(initial_url, headers=json_headers)
         if initial_response.status_code != 200:
             logging.error(f"seller id is not valid {initial_response.status_code}")
+            # A non-200 here (e.g. ZenRows 402 quota) is a FETCH FAILURE, not an
+            # empty profile — record it so downstream never reads "0 ads" as truth.
+            _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                     http_status=initial_response.status_code,
+                                     error_detail=f"count request HTTP {initial_response.status_code}")
             return False,"Invalid seller ID"
 
         try:
@@ -505,10 +584,16 @@ def get_gumtree_listings(profile_url,user):
                 f"Failed to decode JSON for seller ID {seller_id} (count request); "
                 f"response was not JSON (first 200 chars): {initial_response.text[:200]!r}"
             )
+            _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                     http_status=initial_response.status_code,
+                                     error_detail="count request returned non-JSON")
             return False,"Invalid response from Gumtree (not JSON)"
         total_count = initial_data.get("totalCount", 0)
         if total_count == 0:
             logging.warning(f"No listings found for seller ID: {seller_id}")
+            # Genuinely empty profile (the count request SUCCEEDED and said 0).
+            _record_gumtree_sync_run(user, seller_id, 'empty', source=source,
+                                     http_status=initial_response.status_code)
             return False,"No listings found for seller ID"
 
         # Fetch all listings
@@ -516,6 +601,9 @@ def get_gumtree_listings(profile_url,user):
         full_response = client.get(full_url, headers=json_headers)
         if full_response.status_code != 200:
             logging.error(f"seller id is not valid {full_response.status_code}")
+            _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                     http_status=full_response.status_code,
+                                     error_detail=f"listings request HTTP {full_response.status_code}")
             return False,"seller id is not valid"
 
         try:
@@ -525,10 +613,18 @@ def get_gumtree_listings(profile_url,user):
                 f"Failed to decode JSON for seller ID {seller_id} (listings request); "
                 f"response was not JSON (first 200 chars): {full_response.text[:200]!r}"
             )
+            _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                     http_status=full_response.status_code,
+                                     error_detail="listings request returned non-JSON")
             return False,"Invalid response from Gumtree (not JSON)"
         listings = full_data.get("profileListingList", [])
         if not listings:
             logging.warning(f"No listings data found for seller ID: {seller_id}")
+            # Count said >0 but the list came back empty — treat as a failed fetch
+            # (indeterminate), NOT an empty profile, so rows aren't wrongly aged out.
+            _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                     http_status=full_response.status_code,
+                                     error_detail="listings request returned no profileListingList")
             return False,"No listings data found for seller ID"
         gumtree_profile_listing_instance = GumtreeProfileListing.objects.filter(url=profile_url,user=user,profile_id=seller_id).first()
         if not gumtree_profile_listing_instance:
@@ -538,13 +634,25 @@ def get_gumtree_listings(profile_url,user):
         gumtree_profile_listing_instance.status = "processing"
         gumtree_profile_listing_instance.save()
         logging.info(f"Total listings found for seller ID {seller_id}: {total_count}")
+        # Record the SUCCESSFUL run with the exact Gumtree ad ids returned. Done
+        # here (not in the thread) because `listings` already holds the full set,
+        # so the audit row is persisted synchronously and the ad ids are captured
+        # even if the per-ad detail thread later partially fails.
+        returned_ids = [str(l.get("id")) for l in listings if l.get("id")]
+        _record_gumtree_sync_run(user, seller_id, 'success', source=source,
+                                 profile=gumtree_profile_listing_instance,
+                                 fetched_count=total_count,
+                                 returned_list_ids=returned_ids,
+                                 http_status=full_response.status_code)
         # Process each listing via threading
         thread = threading.Thread(target=gumtree_profile_listings_thread, args=(listings,gumtree_profile_listing_instance,user,seller_id))
-        thread.start()        
+        thread.start()
         return True,"Started processing to extract listings"
 
     except Exception as e:
         logging.error(f"Error fetching listings for seller ID {seller_id}: {e}")
+        _record_gumtree_sync_run(user, seller_id, 'failed', source=source,
+                                 error_detail=f"exception: {e}")
         return False,"Error fetching listings for seller ID"
 
 # def update_facebook_listing(already_exists_listing,Updating_listing_data):
