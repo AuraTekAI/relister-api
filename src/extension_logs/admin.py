@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ExtensionLog
+from .models import ExtensionLog, DailyActiveUser
 
 
 @admin.register(ExtensionLog)
@@ -19,4 +19,21 @@ class ExtensionLogAdmin(admin.ModelAdmin):
     log_preview.short_description = 'Log'
 
     def has_add_permission(self, request):
+        return False
+
+
+@admin.register(DailyActiveUser)
+class DailyActiveUserAdmin(admin.ModelAdmin):
+    list_display = ('user', 'date', 'active', 'first_seen', 'last_seen', 'action_count',
+                    'listed_count', 'relisted_count', 'deleted_count', 'other_count')
+    search_fields = ('user__email', 'user__first_name', 'user__last_name')
+    list_filter = ('active', 'date')
+    date_hierarchy = 'date'
+    ordering = ('-date', 'user__email')
+    readonly_fields = list_display
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False
