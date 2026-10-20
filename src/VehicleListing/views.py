@@ -2955,3 +2955,98 @@ def get_facebook_listing_snapshots(request):
         'total_users': total_users,
         'total_pages': total_pages,
     }, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_gumtree_reconciliation(request):
+    """Admin: diff one dealer's current Gumtree ads against our database.
+
+    Returns which ads are missing from the DB and which DB records are no longer
+    on Gumtree (each with a reason), plus a summary and the last sync-run status.
+    Reuses the last successful sync by default; pass ?live=1 for a fresh check.
+
+    Query params: user_id | email (one required), live=1 (optional).
+    """
+    from .gumtree_reconciliation import build_gumtree_reconciliation
+
+    user_id = request.query_params.get('user_id')
+    email = request.query_params.get('email')
+    if user_id:
+        user = User.objects.filter(id=user_id).first()
+    elif email:
+        user = User.objects.filter(email__iexact=email.strip()).first()
+    else:
+        return JsonResponse({'success': False, 'error': 'Provide user_id or email'}, status=400)
+
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Dealer not found'}, status=404)
+
+    live = str(request.query_params.get('live', '')).lower() in ('1', 'true', 'yes')
+    try:
+        data = build_gumtree_reconciliation(user, live=live)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': f'Reconciliation failed: {e}'}, status=500)
+
+    return JsonResponse({'success': True, 'user_id': user.id, 'email': user.email, 'live': live, **data}, status=200)
+
+
+def _build_dealer_stats(user, live=False):
+    """Listing-health stats for ONE dealer, from the per-user snapshot tables the
+    extension already pushes + the Gumtree⇄DB reconciliation. Shared by the
+    dealer self-serve endpoint and the admin all-dealers view."""
+    from .gumtree_reconciliation import build_gumtree_reconciliation
+
+    fb_rows = list(FacebookListingSnapshot.objects.filter(user=user))
+    facebook = {
+        'total_live': len(fb_rows),
+        'aged': sum(1 for s in fb_rows if s.is_aged),
+        'duplicates': sum(1 for s in fb_rows if s.is_duplicate),
+        'matched': sum(1 for s in fb_rows if s.matched_listing_id),
+    }
+
+    unpub_rows = list(UnpublishedListingSnapshot.objects.filter(user=user))
+    queued = [{
+        'listing_id': u.listing_id,
+        'title': u.title,
+        'price': u.price,
+        'images_count': u.images_count,
+        'reason': u.reason,
+        'reason_detail': u.reason_detail or (u.get_reason_display() if u.reason else None),
+    } for u in unpub_rows]
+
+    sync = getattr(user, 'ext_sync_status', None)
+    sync_status = None if not sync else {
+        'mode': sync.mode,
+        'status': sync.status,
+        'status_detail': sync.status_detail,
+        'extension_version': sync.extension_version,
+        'synced_at': sync.synced_at.isoformat() if sync.synced_at else None,
+    }
+
+    try:
+        gumtree = build_gumtree_reconciliation(user, live=live)
+    except Exception as e:
+        gumtree = {'error': f'reconciliation failed: {e}'}
+
+    return {
+        'facebook': facebook,
+        'queued_count': len(queued),
+        'queued': queued,
+        'sync_status': sync_status,
+        'gumtree': gumtree,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_my_stats(request):
+    """Dealer self-serve: the logged-in dealer's OWN listing-health stats.
+
+    Strictly scoped to request.user — a dealer can only ever see their own
+    numbers. Reuses the same data the admin diagnostics use. Pass ?live=1 to
+    re-check Gumtree fresh (one small request) instead of reusing the last sync.
+    """
+    live = str(request.query_params.get('live', '')).lower() in ('1', 'true', 'yes')
+    data = _build_dealer_stats(request.user, live=live)
+    return JsonResponse({'success': True, 'user_id': request.user.id, **data}, status=200)

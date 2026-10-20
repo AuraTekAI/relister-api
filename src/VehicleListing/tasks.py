@@ -560,7 +560,7 @@ def profile_listings_for_approved_users(self, user_id):
                 logger.info("Gumtree profile URL has already been processed for this user.")
                 results.append("Gumtree: already processed")
             else:
-                success, message = get_gumtree_listings(gumtree_profile_url, user_instance)
+                success, message = get_gumtree_listings(gumtree_profile_url, user_instance, source='approval')
                 if success:
                     logger.info("Successfully retrieved and scheduled Gumtree listings.")
                 else:

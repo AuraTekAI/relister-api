@@ -115,21 +115,26 @@ export function registerTools(server) {
     });
 
   server.tool('get_dealer_diagnostics',
-    'One-shot health picture of a dealer: identity, subscription, extension sync status (incl. WHY Facebook is broken), listing counts, not-published listings WITH reasons, and recent extension logs. Start here for "why isn\'t X working for this dealer".',
-    { dealer: z.string().describe('user_id or email'), log_lines: z.number().optional() },
-    async ({ dealer, log_lines = 15 }) => {
+    'One-shot health picture of a dealer: identity, subscription, extension sync status (incl. WHY Facebook is broken), listing counts, not-published listings WITH reasons, recent extension logs, and a Gumtree⇄database reconciliation (ads on Gumtree missing from our DB, DB records no longer on Gumtree, and the last sync run\'s success/failure). Start here for "why isn\'t X working for this dealer". Pass live=true to re-check Gumtree fresh (one small request) instead of reusing the last sync.',
+    { dealer: z.string().describe('user_id or email'), log_lines: z.number().optional(), live: z.boolean().optional().describe('re-fetch current Gumtree ads fresh instead of reusing the last sync') },
+    async ({ dealer, log_lines = 15, live = false }) => {
       try {
         const dp = dealerParam(dealer);
-        const [meta, snap, logs] = await Promise.all([
+        const [meta, snap, logs, recon] = await Promise.all([
           apiFetch('/extension-logs/dealer-meta/', { query: dp }),
           apiFetch('/vehicle-listing/fb-snapshots/', { query: { ...dp, page_size: 1 } }).catch((e) => ({ _error: e.message })),
           apiFetch('/extension-logs/admin/', { query: { ...dp, limit: log_lines } }).catch((e) => ({ _error: e.message })),
+          apiFetch('/vehicle-listing/gumtree-reconciliation/', { query: { ...dp, live: live ? 1 : undefined } }).catch((e) => ({ _error: e.message })),
         ]);
         const u = snap && snap.users && snap.users[0];
         return ok({
           user: meta.user, subscription: meta.subscription, sync_status: meta.sync_status,
           facebook: u ? { total_live: u.total, aged: u.aged, duplicates: u.duplicates, matched: u.matched, unpublished_count: u.unpublished_count } : null,
           not_published: u ? u.unpublished : (snap._error ? `error: ${snap._error}` : []),
+          gumtree_reconciliation: recon && !recon._error ? {
+            sync: recon.sync, summary: recon.summary,
+            missing_from_db: recon.missing_from_db, no_longer_on_gumtree: recon.no_longer_on_gumtree,
+          } : (recon && recon._error ? `error: ${recon._error}` : null),
           recent_logs: logs.logs ? logs.logs.map((l) => ({ at: l.created_at, log: l.log })) : (logs._error || []),
         });
       } catch (e) { return fail(e.message); }
