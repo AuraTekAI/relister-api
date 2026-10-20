@@ -34,6 +34,63 @@ class GumtreeProfileListing(models.Model):
     def __str__(self):
         return f"{self.url}"
 
+
+class GumtreeSyncRun(models.Model):
+    """
+    Append-only log of each Gumtree profile sync attempt (cron, on-approval, or
+    manual).
+
+    GumtreeProfileListing is a single MUTABLE row overwritten on every run, so it
+    cannot answer "did the LAST sync succeed, and which ad ids did Gumtree return?"
+    Worse, on a failed/empty profile fetch the old code wrote nothing at all. This
+    model preserves per-run history so dealer diagnostics can:
+    - tell a FAILED fetch (e.g. ZenRows HTTP 402) apart from a genuinely EMPTY
+      profile — a failed run's zero ads is NEVER read as "no ads exist", and
+    - reconcile the last known Gumtree ad set against the database WITHOUT
+      re-hitting Gumtree on every diagnostics call.
+
+    Mirrors the append-only FBVerificationEvent pattern.
+    """
+    OUTCOME_CHOICES = [
+        ('success', 'Succeeded — ads returned'),
+        ('empty', 'Succeeded — profile has no ads'),
+        ('failed', 'Fetch failed (ZenRows/network/parse error)'),
+    ]
+    SOURCE_CHOICES = [
+        ('cron', 'Scheduled cron'),
+        ('approval', 'First sync on approval'),
+        ('manual', 'Manual / admin-triggered'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='gumtree_sync_runs')
+    # The profile this run was for (SET_NULL so pruning a profile keeps the history).
+    profile = models.ForeignKey(
+        GumtreeProfileListing, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sync_runs'
+    )
+    seller_profile_id = models.CharField(max_length=255, null=True, blank=True)
+    outcome = models.CharField(max_length=20, choices=OUTCOME_CHOICES)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='cron')
+    # Number of ads Gumtree returned for the profile (0 on empty/failed).
+    fetched_count = models.IntegerField(default=0)
+    # The exact Gumtree ad ids (list_id) returned by this run. Empty on a failed
+    # run — callers MUST NOT read an empty list on outcome='failed' as "no ads".
+    returned_list_ids = models.JSONField(default=list, blank=True)
+    # HTTP status / error text when outcome='failed' (e.g. 402 = ZenRows quota).
+    http_status = models.IntegerField(null=True, blank=True)
+    error_detail = models.CharField(max_length=500, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['user', 'outcome', 'created_at']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user_id} gumtree sync {self.outcome} ({self.fetched_count}) @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
 class CustomDomainProfileListing(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     url = models.URLField(null=True,blank=True)

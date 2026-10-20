@@ -21,6 +21,8 @@ from .views import (
     get_top_dealers,
     sync_facebook_listing_snapshot,
     get_facebook_listing_snapshots,
+    get_gumtree_reconciliation,
+    get_my_stats,
     facebook_verification_status,
     list_facebook_verification_blocked_dealers,
 )
@@ -55,6 +57,8 @@ urlpatterns = [
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
     path('fb-snapshot/', sync_facebook_listing_snapshot, name='sync_facebook_listing_snapshot'),
     path('fb-snapshots/', get_facebook_listing_snapshots, name='get_facebook_listing_snapshots'),
+    path('gumtree-reconciliation/', get_gumtree_reconciliation, name='get_gumtree_reconciliation'),
+    path('my-stats/', get_my_stats, name='get_my_stats'),
     path('fb-verification-status/', facebook_verification_status, name='facebook_verification_status'),
     path('fb-verification-blocked/', list_facebook_verification_blocked_dealers, name='list_facebook_verification_blocked_dealers'),
     path('verify-active/', verify_listing_active, name='verify_listing_active'),
