@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from . import activity
 from .models import ExtensionLog
 from .serializers import ExtensionLogSerializer
 
@@ -40,3 +41,46 @@ class ExtensionLogCreateView(APIView):
             ExtensionLogSerializer(record).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class ExtensionActivityView(APIView):
+    """
+    POST /api/extension-logs/activity/   record a usage event for the authenticated user
+        {"event": "open"}                         — extension opened (first_seen / last_seen)
+        {"event": "listed", "count": 1}           — also: relisted, deleted, other
+    GET  /api/extension-logs/activity/?days=14   the authenticated user's daily summary
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Record an extension usage event for the authenticated user",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['event'],
+            properties={
+                'event': openapi.Schema(type=openapi.TYPE_STRING, enum=list(activity.VALID_EVENTS)),
+                'count': openapi.Schema(type=openapi.TYPE_INTEGER, default=1),
+            },
+        ),
+        responses={200: "Today's activity row", 400: "Validation error"},
+    )
+    def post(self, request):
+        data = request.data if isinstance(request.data, dict) else {}
+        event = str(data.get('event') or '').strip().lower()
+        count = data.get('count', 1)
+        try:
+            row = activity.record_activity(request.user, event, count)
+        except ValueError as exc:
+            return Response({'success': False, 'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'success': True, 'today': activity.serialize_day(row)}, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="Daily usage summary for the authenticated user",
+        manual_parameters=[openapi.Parameter('days', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=14)],
+    )
+    def get(self, request):
+        try:
+            days = int(request.GET.get('days', 14))
+        except (TypeError, ValueError):
+            return Response({'success': False, 'error': 'days must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'success': True, **activity.daily_summary(request.user, days)})
