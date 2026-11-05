@@ -2,7 +2,7 @@ from django.contrib import admin
 
 # Register your models here
 from .models import VehicleListing, ListingUrl, Vehicle
-from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,HostedImage,VehicleListingImage
+from .models import FacebookListing, FacebookUserCredentials,GumtreeProfileListing,FacebookProfileListing, RelistingFacebooklisting,Invoice,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,HostedImage,VehicleListingImage,PublishFailure
 from .utils import reactivate_listing
 
 class FacebookListingAdmin(admin.ModelAdmin):
@@ -137,3 +137,12 @@ class VehicleListingImageAdmin(admin.ModelAdmin):
     raw_id_fields = ('listing', 'hosted_image')
 
 admin.site.register(VehicleListingImage, VehicleListingImageAdmin)
+
+
+class PublishFailureAdmin(admin.ModelAdmin):
+    list_display = ('user', 'listing', 'fail_count', 'unknown_outcome', 'is_held', 'last_fail_at', 'reason')
+    search_fields = ('user__email', 'listing__id', 'reason')
+    list_filter = ('user', 'unknown_outcome')
+    readonly_fields = ('created_at', 'updated_at')
+
+admin.site.register(PublishFailure, PublishFailureAdmin)
