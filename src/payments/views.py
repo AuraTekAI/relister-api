@@ -1608,6 +1608,52 @@ def _sync_custom_plan_to_stripe(plan):
         return False
 
 
+def _archive_custom_plan_stripe_prices(plan):
+    """
+    Deactivate the plan's current Stripe prices (base + overage) and their product
+    so they stop accepting new subscriptions, then clear the IDs on the plan so
+    _sync_custom_plan_to_stripe() creates fresh ones. Stripe prices are immutable,
+    so this archive-then-recreate is the only way to change a plan's price.
+
+    Best-effort: a Stripe failure while archiving is logged and the IDs are still
+    cleared, because the DB price is already the new source of truth and a fresh
+    product must be created regardless. Existing subscribers keep their old
+    subscription item price until their subscription is changed.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    old_price_id = plan.stripe_price_id
+    old_overage_id = plan.stripe_overage_price_id
+    if old_price_id:
+        try:
+            existing_price = stripe.Price.retrieve(old_price_id)
+            old_product_id = getattr(existing_price, 'product', None)
+            stripe.Price.modify(old_price_id, active=False)
+            if old_overage_id:
+                try:
+                    stripe.Price.modify(old_overage_id, active=False)
+                except stripe.error.StripeError:
+                    pass
+            if old_product_id:
+                stripe.Product.modify(old_product_id, active=False)
+            logger.info(
+                f"AdminCustomPlan: Archived old Stripe product '{old_product_id}' and prices "
+                f"({old_price_id}, {old_overage_id}) for plan '{plan.name}'."
+            )
+        except stripe.error.InvalidRequestError:
+            logger.warning(
+                f"AdminCustomPlan: stripe_price_id '{old_price_id}' no longer exists in Stripe "
+                f"for plan '{plan.name}' — nothing to archive."
+            )
+        except stripe.error.StripeError as exc:
+            logger.warning(
+                f"AdminCustomPlan: Could not archive old Stripe product for plan '{plan.name}': "
+                f"{exc} — proceeding to create fresh prices anyway."
+            )
+    plan.stripe_price_id = None
+    plan.stripe_overage_price_id = None
+    plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+
+
 class AdminCustomPlanListCreateView(APIView):
     """
     GET  /api/payments/admin/custom-plans/  — list all custom plans.
@@ -1696,12 +1742,19 @@ class AdminCustomPlanDetailView(APIView):
         operation_summary="[Admin] Update custom plan",
         operation_description=(
             "Update plan details or assigned users. "
-            "If price_aud or overage_rate_aud is changed, the DB is updated immediately but Stripe is NOT — "
-            "Stripe prices are immutable. The response will include a `stripe_action_required` flag. "
-            "Call /retry-stripe-sync/ afterwards to archive the old Stripe prices and create new ones."
+            "If price_aud or overage_rate_aud is changed, the change is pushed to Stripe automatically: "
+            "the old Stripe prices/product are archived (Stripe prices are immutable) and new ones are created, "
+            "so future subscribers are charged the updated amount. Existing subscribers stay on their current "
+            "price until their subscription is changed. On a Stripe failure the plan stays updated locally and "
+            "a 502 is returned with the plan body — call /retry-stripe-sync/ to try again."
         ),
         request_body=AdminCustomPlanSerializer,
-        responses={200: AdminCustomPlanSerializer(), 400: "Validation error.", 404: "Not found."},
+        responses={
+            200: AdminCustomPlanSerializer(),
+            400: "Validation error.",
+            404: "Not found.",
+            502: "Price updated locally but Stripe sync failed — retry via /retry-stripe-sync/.",
+        },
     )
     def patch(self, request, pk):
         plan = self._get_plan(pk)
@@ -1724,19 +1777,43 @@ class AdminCustomPlanDetailView(APIView):
             or plan.overage_rate_aud != old_overage_rate_aud
         )
 
+        if not price_changed or not plan.is_active:
+            return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+        # Price changed — push it to Stripe now. Stripe prices are immutable, so
+        # archive the old product/prices (if any) and create fresh ones. A plan
+        # whose initial sync failed (no Stripe IDs yet) simply gets created.
+        logger.info(
+            f"AdminCustomPlan: Price changed for plan '{plan.name}' "
+            f"(price_aud {old_price_aud} → {plan.price_aud}, overage {old_overage_rate_aud} → {plan.overage_rate_aud}) "
+            f"— syncing to Stripe."
+        )
+        if plan.stripe_price_id:
+            _archive_custom_plan_stripe_prices(plan)
+        stripe_ok = _sync_custom_plan_to_stripe(plan)
+        plan.refresh_from_db()
+
         response_data = AdminCustomPlanSerializer(plan).data
-        if price_changed and plan.stripe_price_id:
-            response_data['stripe_action_required'] = (
-                'Price was updated in the database but Stripe prices are immutable — '
-                'existing subscribers continue on the old price until their cycle ends. '
-                'Call POST /retry-stripe-sync/ to archive the old Stripe prices and create new ones '
-                'so future subscribers are charged the updated amount.'
+        if not stripe_ok:
+            logger.error(
+                f"AdminCustomPlan: Price changed for plan '{plan.name}' but Stripe sync failed — "
+                f"plan updated locally, Stripe IDs cleared. Admin must call retry-stripe-sync."
             )
-            logger.warning(
-                f"AdminCustomPlan: Price changed for plan '{plan.name}' but Stripe not updated. "
-                f"stripe_action_required=True. Admin must call retry-stripe-sync."
+            return Response(
+                {
+                    'plan': response_data,
+                    'warning': (
+                        'Price updated locally but Stripe sync failed, so no Stripe price exists for this plan yet. '
+                        'Retry via /retry-stripe-sync/.'
+                    ),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        response_data['stripe_synced'] = (
+            'New Stripe prices created for the updated amount; old ones archived. '
+            'Existing subscribers stay on their current price until their subscription is changed.'
+        )
         return Response(response_data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
@@ -1971,38 +2048,14 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
                             status=status.HTTP_409_CONFLICT,
                         )
 
-                    # Price changed — archive old Stripe product so it no longer accepts new subscriptions
-                    # then fall through to create fresh product + prices below
+                    # Price changed — archive old Stripe product/prices so they no longer
+                    # accept new subscriptions, then fall through to create fresh ones below.
                     logger.info(
                         f"AdminCustomPlan retry-sync: Price changed for plan '{plan.name}' "
                         f"(Stripe={stripe_unit_amount} cents, DB={db_unit_amount} cents). "
                         f"Archiving old Stripe product before re-sync."
                     )
-                    try:
-                        old_product_id = getattr(existing_price, 'product', None)
-                        if old_product_id:
-                            # Deactivate old prices first (required before archiving product)
-                            stripe.Price.modify(plan.stripe_price_id, active=False)
-                            if plan.stripe_overage_price_id:
-                                try:
-                                    stripe.Price.modify(plan.stripe_overage_price_id, active=False)
-                                except stripe.error.StripeError:
-                                    pass
-                            stripe.Product.modify(old_product_id, active=False)
-                            logger.info(
-                                f"AdminCustomPlan retry-sync: Archived old Stripe product '{old_product_id}' "
-                                f"and prices for plan '{plan.name}'."
-                            )
-                    except stripe.error.StripeError as exc:
-                        logger.warning(
-                            f"AdminCustomPlan retry-sync: Could not archive old Stripe product for "
-                            f"plan '{plan.name}': {exc} — proceeding with re-sync anyway."
-                        )
-
-                    # Clear old IDs so _sync_custom_plan_to_stripe starts fresh
-                    plan.stripe_price_id = None
-                    plan.stripe_overage_price_id = None
-                    plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+                    _archive_custom_plan_stripe_prices(plan)
 
             except stripe.error.InvalidRequestError:
                 # Old price no longer exists in Stripe — safe to re-sync
