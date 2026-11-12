@@ -2,6 +2,8 @@
 import logging
 from decimal import Decimal
 
+import stripe
+
 logger = logging.getLogger('relister_views')
 
 
@@ -41,13 +43,48 @@ def sync_overage_subscription_item(subscription, stripe_sub, plan):
     return True
 
 
+def _get(obj, key, default=None):
+    """Read `key` from a Stripe object or plain dict; None-safe."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _line_price_id(line):
-    price = line.get('price') if isinstance(line, dict) else getattr(line, 'price', None)
-    if price is None:
-        return None
-    if isinstance(price, dict):
-        return price.get('id')
-    return getattr(price, 'id', None)
+    """
+    The Price id behind an invoice line, on every Stripe API version:
+      • pre-2025-03-31: `line.price` is the Price object (or id);
+      • 2025-03-31.basil and later: `price` is gone — the id lives at
+        `line.pricing.price_details.price`.
+    """
+    price = _get(line, 'price')
+    if price is not None:
+        if isinstance(price, str):
+            return price
+        pid = _get(price, 'id')
+        if pid:
+            return pid
+    pricing = _get(line, 'pricing')
+    details = _get(pricing, 'price_details')
+    pid = _get(details, 'price')
+    return pid if isinstance(pid, str) else _get(pid, 'id')
+
+
+def _line_subscription_item_id(line):
+    """
+    The subscription item this line bills, on every API version:
+    `line.subscription_item` (old) or
+    `line.parent.subscription_item_details.subscription_item` (basil+).
+    """
+    sid = _get(line, 'subscription_item')
+    if sid:
+        return sid if isinstance(sid, str) else _get(sid, 'id')
+    parent = _get(line, 'parent')
+    details = _get(parent, 'subscription_item_details')
+    sid = _get(details, 'subscription_item')
+    return sid if isinstance(sid, str) else _get(sid, 'id')
 
 
 def _line_amount(line):
@@ -69,27 +106,79 @@ def _invoice_lines(invoice):
     return lines.data if hasattr(lines, 'data') else lines.get('data', []) if isinstance(lines, dict) else []
 
 
-def _line_price(line):
-    return line.get('price') if isinstance(line, dict) else getattr(line, 'price', None)
+def _line_price(line, cache=None):
+    """
+    The full Price object behind an invoice line, on every API version.
+
+    Old API versions embed it as `line.price`. From 2025-03-31.basil the line
+    only carries the id (`pricing.price_details.price`), so we fetch the Price
+    (memoised in `cache` per invoice — a plan has at most two prices). Returns
+    None when the line has no price or the fetch fails; callers then fall back
+    to the line-level `pricing` fields.
+    """
+    price = _get(line, 'price')
+    if price is not None and not isinstance(price, str) and _get(price, 'id'):
+        return price
+    pid = _line_price_id(line)
+    if not pid:
+        return None
+    if cache is not None and pid in cache:
+        return cache[pid]
+    fetched = None
+    try:
+        fetched = stripe.Price.retrieve(pid)
+    except Exception as exc:  # stripe.error.StripeError, network, …
+        logger.warning(f"_line_price: could not retrieve Stripe price '{pid}': {exc}")
+    if cache is not None:
+        cache[pid] = fetched
+    return fetched
 
 
 def _price_usage_type(price):
     """'metered' / 'licensed' for recurring prices, None for one-time lines."""
-    if price is None:
-        return None
-    recurring = price.get('recurring') if isinstance(price, dict) else getattr(price, 'recurring', None)
+    recurring = _get(price, 'recurring')
     if not recurring:
         return None
-    return recurring.get('usage_type') if isinstance(recurring, dict) else getattr(recurring, 'usage_type', None)
+    return _get(recurring, 'usage_type')
 
 
-def _price_unit_amount(price):
-    if price is None:
+def _price_unit_amount(price, line=None):
+    """
+    Unit amount in cents: from the Price, else from the basil line-level
+    `pricing.unit_amount_decimal` (so the rate is still read when the Price
+    could not be fetched).
+    """
+    unit = _get(price, 'unit_amount')
+    if unit is not None:
+        return int(unit)
+    pricing = _get(line, 'pricing')
+    dec = _get(pricing, 'unit_amount_decimal')
+    if dec is None:
         return None
-    return price.get('unit_amount') if isinstance(price, dict) else getattr(price, 'unit_amount', None)
+    try:
+        return int(Decimal(str(dec)).quantize(Decimal('1')))
+    except (ValueError, ArithmeticError):
+        return None
 
 
-def extract_base_charge_from_stripe_invoice(invoice, plan):
+def _is_overage_line(line, price, plan, subscription=None):
+    """
+    Is this line the plan's extra-listings charge? True when it bills the
+    plan's overage price, OR the subscription's recorded overage item (so an
+    archived overage price, or a plan whose overage id is missing after a
+    failed sync, is still recognised), OR — last resort — any metered price.
+    """
+    pid = _line_price_id(line)
+    target = _get(plan, 'stripe_overage_price_id')
+    if target and pid == target:
+        return True
+    sub_item = _get(subscription, 'stripe_overage_subscription_item_id')
+    if sub_item and _line_subscription_item_id(line) == sub_item:
+        return True
+    return _price_usage_type(price) == 'metered'
+
+
+def extract_base_charge_from_stripe_invoice(invoice, plan, subscription=None):
     """
     The base plan charge Stripe ACTUALLY billed: the sum of the recurring,
     non-metered subscription lines (the plan's monthly price — current or an
@@ -99,13 +188,12 @@ def extract_base_charge_from_stripe_invoice(invoice, plan):
     data = _invoice_lines(invoice)
     if not data:
         return None
-    overage_id = getattr(plan, 'stripe_overage_price_id', None) if plan else None
+    cache = {}
     total_cents = 0
     found = False
     for line in data:
-        price = _line_price(line)
-        pid = _line_price_id(line)
-        if pid and pid == overage_id:
+        price = _line_price(line, cache)
+        if _is_overage_line(line, price, plan, subscription):
             continue
         if _price_usage_type(price) != 'licensed':
             continue
@@ -116,41 +204,38 @@ def extract_base_charge_from_stripe_invoice(invoice, plan):
     return (Decimal(total_cents) / Decimal('100')).quantize(Decimal('0.01'))
 
 
-def extract_overage_rate_from_stripe_invoice(invoice, plan):
+def extract_overage_rate_from_stripe_invoice(invoice, plan, subscription=None):
     """
     The per-listing overage rate Stripe ACTUALLY used: unit_amount of the
-    plan's metered overage line (plan.stripe_overage_price_id), else of any
-    metered line. Returns Decimal AUD or None.
+    plan's overage line (see _is_overage_line). Returns Decimal AUD or None.
     """
     data = _invoice_lines(invoice)
     if not data:
         return None
-    target = getattr(plan, 'stripe_overage_price_id', None) if plan else None
-    fallback = None
+    cache = {}
     for line in data:
-        price = _line_price(line)
-        unit = _price_unit_amount(price)
+        price = _line_price(line, cache)
+        if not _is_overage_line(line, price, plan, subscription):
+            continue
+        unit = _price_unit_amount(price, line)
         if unit is None:
             continue
-        if target and _line_price_id(line) == target:
-            return (Decimal(int(unit)) / Decimal('100')).quantize(Decimal('0.01'))
-        if fallback is None and _price_usage_type(price) == 'metered':
-            fallback = (Decimal(int(unit)) / Decimal('100')).quantize(Decimal('0.01'))
-    return fallback
+        return (Decimal(unit) / Decimal('100')).quantize(Decimal('0.01'))
+    return None
 
 
-def extract_metered_overage_from_stripe_invoice(invoice, plan, rate=None):
+def extract_metered_overage_from_stripe_invoice(invoice, plan, rate=None, subscription=None):
     """
-    Sum metered line amounts for plan.stripe_overage_price_id (falling back to
-    any metered line, so a subscriber still on an archived overage price is
-    still read correctly). `rate` (Decimal) overrides plan.overage_rate_aud when
-    deriving the listing count — pass the rate Stripe actually charged.
+    Sum the extra-listings line(s) of the invoice (see _is_overage_line — the
+    plan's overage price, the subscription's overage item, or any metered line,
+    so an archived price or a missing plan id never hides a real charge).
+    `rate` (Decimal) overrides plan.overage_rate_aud when deriving the listing
+    count — pass the rate Stripe actually charged.
     Returns (overage_listings_count, overage_charge_aud) or (None, None) if no matching lines.
     """
-    if not plan or not getattr(plan, 'stripe_overage_price_id', None):
+    if not plan:
         return None, None
 
-    target = plan.stripe_overage_price_id
     total_cents = 0
     line_qty = 0
 
@@ -158,9 +243,8 @@ def extract_metered_overage_from_stripe_invoice(invoice, plan, rate=None):
     if data is None:
         return None, None
 
-    matched = [line for line in data if _line_price_id(line) == target]
-    if not matched:
-        matched = [line for line in data if _price_usage_type(_line_price(line)) == 'metered']
+    cache = {}
+    matched = [line for line in data if _is_overage_line(line, _line_price(line, cache), plan, subscription)]
 
     for line in matched:
         total_cents += _line_amount(line)

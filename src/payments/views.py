@@ -26,6 +26,21 @@ def _sget(obj, key, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _invoice_subscription_id(invoice):
+    """
+    The subscription an invoice belongs to, on every Stripe API version:
+    `invoice.subscription` (pre-2025-03-31) or
+    `invoice.parent.subscription_details.subscription` (basil and later).
+    """
+    sub = _sget(invoice, 'subscription')
+    if not sub:
+        details = _sget(_sget(invoice, 'parent'), 'subscription_details')
+        sub = _sget(details, 'subscription')
+    if sub and not isinstance(sub, str):
+        sub = _sget(sub, 'id')
+    return sub or None
 from .models import Plan, Subscription, DiscountCode
 from VehicleListing.models import Invoice
 from .serializers import (
@@ -636,7 +651,7 @@ class WebhookView(APIView):
         logger.info(f"customer.subscription.deleted: User {user.email} subscription cancelled.")
 
     def _handle_invoice_payment_failed(self, invoice):
-        stripe_subscription_id = _sget(invoice, 'subscription')
+        stripe_subscription_id = _invoice_subscription_id(invoice)
         if not stripe_subscription_id:
             return
         try:
@@ -671,7 +686,7 @@ class WebhookView(APIView):
         generate_invoice.delay(subscription.id, stripe_invoice_id=_sget(invoice, 'id'), paid=False)
 
     def _handle_invoice_payment_succeeded(self, invoice):
-        stripe_subscription_id = _sget(invoice, 'subscription')
+        stripe_subscription_id = _invoice_subscription_id(invoice)
         stripe_customer_id = _sget(invoice, 'customer')
         logger.info(
             f"invoice.payment_succeeded: processing invoice {_sget(invoice, 'id')} — "
@@ -1620,10 +1635,39 @@ def _migrate_plan_subscribers_to_new_prices(plan, old_price_id, old_overage_pric
     so nothing is credited/charged mid-cycle — the new amounts simply apply from
     the next invoice. Returns {'migrated': [emails], 'failed': [{email, error}],
     'skipped': [emails]} for the API response / logs. Never raises.
+
+    `old_price_id` / `old_overage_price_id` are only hints. The archive step clears
+    the plan's Stripe IDs BEFORE the new prices are created, so when the first
+    sync fails and the admin retries, the caller no longer knows which prices the
+    subscriber is on (both hints are None). Each item is therefore classified by
+    the price itself (expanded): a `licensed` price is the base item, a `metered`
+    price is the overage item, with the price metadata `type` as a fallback. Any
+    item that is not on a current price is moved — never left behind, and never
+    duplicated by adding a second overage item next to the old one.
     """
     result = {'migrated': [], 'failed': [], 'skipped': []}
     if not plan.stripe_price_id:
         return result
+
+    def _item_kind(price, price_id):
+        """'base' | 'overage' | None for a subscription item's price."""
+        if price_id and price_id == old_price_id:
+            return 'base'
+        if price_id and old_overage_price_id and price_id == old_overage_price_id:
+            return 'overage'
+        recurring = _sget(price, 'recurring') if price is not None else None
+        usage_type = _sget(recurring, 'usage_type') if recurring is not None else None
+        if usage_type == 'metered':
+            return 'overage'
+        if usage_type == 'licensed':
+            return 'base'
+        metadata = _sget(price, 'metadata') if price is not None else None
+        meta_type = _sget(metadata, 'type') if metadata is not None else None
+        if meta_type == 'overage_per_listing':
+            return 'overage'
+        if meta_type == 'base_monthly':
+            return 'base'
+        return None
 
     stripe.api_key = settings.STRIPE_SECRET_KEY
     subs = Subscription.objects.select_related('user').filter(
@@ -1650,14 +1694,22 @@ def _migrate_plan_subscribers_to_new_prices(plan, old_price_id, old_overage_pric
                     if price_id == plan.stripe_overage_price_id:
                         has_overage_item = True
                     continue
-                if price_id == old_price_id:
+                kind = _item_kind(price, price_id)
+                if kind == 'base':
                     new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_price_id})
-                elif old_overage_price_id and price_id == old_overage_price_id:
-                    if plan.stripe_overage_price_id:
+                elif kind == 'overage':
+                    if plan.stripe_overage_price_id and not has_overage_item:
                         new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_overage_price_id})
                         has_overage_item = True
                     else:
+                        # No overage on the plan any more, or a second stale
+                        # overage item — remove it so extra listings bill once.
                         new_items.append({'id': _sget(item, 'id'), 'deleted': True})
+                else:
+                    logger.warning(
+                        f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) has an item "
+                        f"on unrecognised price '{price_id}' — left untouched."
+                    )
             if plan.stripe_overage_price_id and not has_overage_item:
                 new_items.append({'price': plan.stripe_overage_price_id})
 
