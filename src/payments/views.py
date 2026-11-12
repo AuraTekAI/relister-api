@@ -1608,6 +1608,89 @@ def _sync_custom_plan_to_stripe(plan):
         return False
 
 
+def _migrate_plan_subscribers_to_new_prices(plan, old_price_id, old_overage_price_id):
+    """
+    Move every live subscriber of `plan` onto the plan's CURRENT Stripe prices
+    (plan.stripe_price_id / plan.stripe_overage_price_id) without proration —
+    the same switch that was done by hand for Sandy (Global Auto Solutions).
+
+    For each subscription: the item on the old base price is pointed at the new
+    base price; the item on the old overage price is pointed at the new overage
+    price (or added when the plan only just gained one). `proration_behavior='none'`
+    so nothing is credited/charged mid-cycle — the new amounts simply apply from
+    the next invoice. Returns {'migrated': [emails], 'failed': [{email, error}],
+    'skipped': [emails]} for the API response / logs. Never raises.
+    """
+    result = {'migrated': [], 'failed': [], 'skipped': []}
+    if not plan.stripe_price_id:
+        return result
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    subs = Subscription.objects.select_related('user').filter(
+        plan=plan,
+        status__in=['active', 'past_due', 'trial'],
+        stripe_subscription_id__isnull=False,
+    ).exclude(stripe_subscription_id='')
+
+    for sub in subs:
+        email = sub.user.email
+        try:
+            stripe_sub = stripe.Subscription.retrieve(
+                sub.stripe_subscription_id, expand=['items.data.price']
+            )
+            items_obj = _sget(stripe_sub, 'items')
+            items_data = getattr(items_obj, 'data', None) if not isinstance(items_obj, dict) else items_obj.get('data')
+            new_items = []
+            has_overage_item = False
+            for item in items_data or []:
+                price = _sget(item, 'price')
+                price_id = _sget(price, 'id') if price is not None else None
+                if price_id == plan.stripe_price_id or price_id == plan.stripe_overage_price_id:
+                    # Already on a current price — nothing to change for this item.
+                    if price_id == plan.stripe_overage_price_id:
+                        has_overage_item = True
+                    continue
+                if price_id == old_price_id:
+                    new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_price_id})
+                elif old_overage_price_id and price_id == old_overage_price_id:
+                    if plan.stripe_overage_price_id:
+                        new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_overage_price_id})
+                        has_overage_item = True
+                    else:
+                        new_items.append({'id': _sget(item, 'id'), 'deleted': True})
+            if plan.stripe_overage_price_id and not has_overage_item:
+                new_items.append({'price': plan.stripe_overage_price_id})
+
+            if not new_items:
+                result['skipped'].append(email)
+                logger.info(
+                    f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) already on "
+                    f"current prices for plan '{plan.name}' — nothing to do."
+                )
+                continue
+
+            updated = stripe.Subscription.modify(
+                sub.stripe_subscription_id,
+                items=new_items,
+                proration_behavior='none',
+                expand=['items.data.price'],
+            )
+            sync_overage_subscription_item(sub, updated, plan)
+            result['migrated'].append(email)
+            logger.info(
+                f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) moved to "
+                f"base={plan.stripe_price_id} overage={plan.stripe_overage_price_id} for plan "
+                f"'{plan.name}' (no proration)."
+            )
+        except stripe.error.StripeError as exc:
+            result['failed'].append({'email': email, 'error': str(exc)})
+            logger.error(
+                f"_migrate_plan_subscribers: FAILED to move '{sub.stripe_subscription_id}' ({email}) "
+                f"to the new prices for plan '{plan.name}': {exc}"
+            )
+    return result
+
+
 def _archive_custom_plan_stripe_prices(plan):
     """
     Deactivate the plan's current Stripe prices (base + overage) and their product
@@ -1788,6 +1871,9 @@ class AdminCustomPlanDetailView(APIView):
             f"(price_aud {old_price_aud} → {plan.price_aud}, overage {old_overage_rate_aud} → {plan.overage_rate_aud}) "
             f"— syncing to Stripe."
         )
+        # Remember the prices subscribers are currently on — the archive clears them.
+        old_stripe_price_id = plan.stripe_price_id
+        old_stripe_overage_price_id = plan.stripe_overage_price_id
         if plan.stripe_price_id:
             _archive_custom_plan_stripe_prices(plan)
         stripe_ok = _sync_custom_plan_to_stripe(plan)
@@ -1810,9 +1896,17 @@ class AdminCustomPlanDetailView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Move existing subscribers onto the new prices (no proration) so they are
+        # charged the updated amounts from their next invoice.
+        migration = _migrate_plan_subscribers_to_new_prices(
+            plan, old_stripe_price_id, old_stripe_overage_price_id
+        )
+        response_data['subscribers_migrated'] = migration['migrated']
+        response_data['subscribers_migration_failed'] = migration['failed']
         response_data['stripe_synced'] = (
             'New Stripe prices created for the updated amount; old ones archived. '
-            'Existing subscribers stay on their current price until their subscription is changed.'
+            f"{len(migration['migrated'])} existing subscriber(s) moved to the new prices without proration"
+            + (f"; {len(migration['failed'])} could not be moved — see subscribers_migration_failed." if migration['failed'] else '.')
         )
         return Response(response_data, status=status.HTTP_200_OK)
 
@@ -2023,6 +2117,10 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Prices subscribers are on right now (cleared by the archive below).
+        old_stripe_price_id = plan.stripe_price_id
+        old_stripe_overage_price_id = plan.stripe_overage_price_id
+
         if plan.stripe_price_id:
             try:
                 existing_price = stripe.Price.retrieve(plan.stripe_price_id)
@@ -2084,4 +2182,12 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
             )
 
         logger.info(f"AdminCustomPlan: Stripe sync retried for plan '{plan.name}' by admin {request.user.email}.")
-        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+        # Same subscriber move as PATCH: anyone still on the previous prices (or on
+        # none, after a failed earlier sync) is put on the new ones without proration.
+        migration = _migrate_plan_subscribers_to_new_prices(
+            plan, old_stripe_price_id, old_stripe_overage_price_id
+        )
+        response_data = AdminCustomPlanSerializer(plan).data
+        response_data['subscribers_migrated'] = migration['migrated']
+        response_data['subscribers_migration_failed'] = migration['failed']
+        return Response(response_data, status=status.HTTP_200_OK)
