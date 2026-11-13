@@ -639,3 +639,45 @@ class VehicleListingImage(models.Model):
 
     def __str__(self):
         return f"{self.listing_id}:{self.position} ({self.status})"
+
+
+class PublishFailure(models.Model):
+    """Server-side failed-publish history for one (dealer, listing) pair.
+
+    The browser extension used to keep this ONLY in chrome.storage.local, so a
+    "Retry now", a manual publish, an admin republish, a reinstall or a second
+    computer silently reset the count and the hold never stuck. This row is the
+    source of truth now: every genuine failed attempt (including the Facebook
+    tab being closed mid-publish) increments `fail_count`; nothing resets it
+    except a confirmed successful publish (row deleted).
+
+    Hold rule (decided by the extension from these fields, mirrored by
+    `is_held`): `fail_count >= HOLD_THRESHOLD` (2), or `unknown_outcome` (the
+    form may have been submitted but Facebook could not be read — never
+    auto-retried, a duplicate would be worse than a missing ad).
+    """
+    HOLD_THRESHOLD = 2
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='publish_failures')
+    listing = models.ForeignKey(VehicleListing, on_delete=models.CASCADE, related_name='publish_failures')
+    fail_count = models.PositiveIntegerField(default=0)
+    last_fail_at = models.DateTimeField()
+    unknown_outcome = models.BooleanField(default=False)
+    # Human-readable cause of the LAST failure (e.g. "the model 'Forester' could
+    # not be filled on Facebook's form"). Logging / admin display only.
+    reason = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('user', 'listing')]
+        indexes = [
+            models.Index(fields=['user', 'last_fail_at'], name='vl_pubfail_user_last_idx'),
+        ]
+
+    @property
+    def is_held(self):
+        return self.unknown_outcome or self.fail_count >= self.HOLD_THRESHOLD
+
+    def __str__(self):
+        return f"listing {self.listing_id}: {self.fail_count} fail(s){' (unknown outcome)' if self.unknown_outcome else ''}"

@@ -26,6 +26,21 @@ def _sget(obj, key, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _invoice_subscription_id(invoice):
+    """
+    The subscription an invoice belongs to, on every Stripe API version:
+    `invoice.subscription` (pre-2025-03-31) or
+    `invoice.parent.subscription_details.subscription` (basil and later).
+    """
+    sub = _sget(invoice, 'subscription')
+    if not sub:
+        details = _sget(_sget(invoice, 'parent'), 'subscription_details')
+        sub = _sget(details, 'subscription')
+    if sub and not isinstance(sub, str):
+        sub = _sget(sub, 'id')
+    return sub or None
 from .models import Plan, Subscription, DiscountCode
 from VehicleListing.models import Invoice
 from .serializers import (
@@ -636,7 +651,7 @@ class WebhookView(APIView):
         logger.info(f"customer.subscription.deleted: User {user.email} subscription cancelled.")
 
     def _handle_invoice_payment_failed(self, invoice):
-        stripe_subscription_id = _sget(invoice, 'subscription')
+        stripe_subscription_id = _invoice_subscription_id(invoice)
         if not stripe_subscription_id:
             return
         try:
@@ -671,7 +686,7 @@ class WebhookView(APIView):
         generate_invoice.delay(subscription.id, stripe_invoice_id=_sget(invoice, 'id'), paid=False)
 
     def _handle_invoice_payment_succeeded(self, invoice):
-        stripe_subscription_id = _sget(invoice, 'subscription')
+        stripe_subscription_id = _invoice_subscription_id(invoice)
         stripe_customer_id = _sget(invoice, 'customer')
         logger.info(
             f"invoice.payment_succeeded: processing invoice {_sget(invoice, 'id')} — "
@@ -1608,6 +1623,172 @@ def _sync_custom_plan_to_stripe(plan):
         return False
 
 
+def _migrate_plan_subscribers_to_new_prices(plan, old_price_id, old_overage_price_id):
+    """
+    Move every live subscriber of `plan` onto the plan's CURRENT Stripe prices
+    (plan.stripe_price_id / plan.stripe_overage_price_id) without proration —
+    the same switch that was done by hand for Sandy (Global Auto Solutions).
+
+    For each subscription: the item on the old base price is pointed at the new
+    base price; the item on the old overage price is pointed at the new overage
+    price (or added when the plan only just gained one). `proration_behavior='none'`
+    so nothing is credited/charged mid-cycle — the new amounts simply apply from
+    the next invoice. Returns {'migrated': [emails], 'failed': [{email, error}],
+    'skipped': [emails]} for the API response / logs. Never raises.
+
+    `old_price_id` / `old_overage_price_id` are only hints. The archive step clears
+    the plan's Stripe IDs BEFORE the new prices are created, so when the first
+    sync fails and the admin retries, the caller no longer knows which prices the
+    subscriber is on (both hints are None). Each item is therefore classified by
+    the price itself (expanded): a `licensed` price is the base item, a `metered`
+    price is the overage item, with the price metadata `type` as a fallback. Any
+    item that is not on a current price is moved — never left behind, and never
+    duplicated by adding a second overage item next to the old one.
+    """
+    result = {'migrated': [], 'failed': [], 'skipped': []}
+    if not plan.stripe_price_id:
+        return result
+
+    def _item_kind(price, price_id):
+        """'base' | 'overage' | None for a subscription item's price."""
+        if price_id and price_id == old_price_id:
+            return 'base'
+        if price_id and old_overage_price_id and price_id == old_overage_price_id:
+            return 'overage'
+        recurring = _sget(price, 'recurring') if price is not None else None
+        usage_type = _sget(recurring, 'usage_type') if recurring is not None else None
+        if usage_type == 'metered':
+            return 'overage'
+        if usage_type == 'licensed':
+            return 'base'
+        metadata = _sget(price, 'metadata') if price is not None else None
+        meta_type = _sget(metadata, 'type') if metadata is not None else None
+        if meta_type == 'overage_per_listing':
+            return 'overage'
+        if meta_type == 'base_monthly':
+            return 'base'
+        return None
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    subs = Subscription.objects.select_related('user').filter(
+        plan=plan,
+        status__in=['active', 'past_due', 'trial'],
+        stripe_subscription_id__isnull=False,
+    ).exclude(stripe_subscription_id='')
+
+    for sub in subs:
+        email = sub.user.email
+        try:
+            stripe_sub = stripe.Subscription.retrieve(
+                sub.stripe_subscription_id, expand=['items.data.price']
+            )
+            items_obj = _sget(stripe_sub, 'items')
+            items_data = getattr(items_obj, 'data', None) if not isinstance(items_obj, dict) else items_obj.get('data')
+            new_items = []
+            has_overage_item = False
+            for item in items_data or []:
+                price = _sget(item, 'price')
+                price_id = _sget(price, 'id') if price is not None else None
+                if price_id == plan.stripe_price_id or price_id == plan.stripe_overage_price_id:
+                    # Already on a current price — nothing to change for this item.
+                    if price_id == plan.stripe_overage_price_id:
+                        has_overage_item = True
+                    continue
+                kind = _item_kind(price, price_id)
+                if kind == 'base':
+                    new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_price_id})
+                elif kind == 'overage':
+                    if plan.stripe_overage_price_id and not has_overage_item:
+                        new_items.append({'id': _sget(item, 'id'), 'price': plan.stripe_overage_price_id})
+                        has_overage_item = True
+                    else:
+                        # No overage on the plan any more, or a second stale
+                        # overage item — remove it so extra listings bill once.
+                        new_items.append({'id': _sget(item, 'id'), 'deleted': True})
+                else:
+                    logger.warning(
+                        f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) has an item "
+                        f"on unrecognised price '{price_id}' — left untouched."
+                    )
+            if plan.stripe_overage_price_id and not has_overage_item:
+                new_items.append({'price': plan.stripe_overage_price_id})
+
+            if not new_items:
+                result['skipped'].append(email)
+                logger.info(
+                    f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) already on "
+                    f"current prices for plan '{plan.name}' — nothing to do."
+                )
+                continue
+
+            updated = stripe.Subscription.modify(
+                sub.stripe_subscription_id,
+                items=new_items,
+                proration_behavior='none',
+                expand=['items.data.price'],
+            )
+            sync_overage_subscription_item(sub, updated, plan)
+            result['migrated'].append(email)
+            logger.info(
+                f"_migrate_plan_subscribers: '{sub.stripe_subscription_id}' ({email}) moved to "
+                f"base={plan.stripe_price_id} overage={plan.stripe_overage_price_id} for plan "
+                f"'{plan.name}' (no proration)."
+            )
+        except stripe.error.StripeError as exc:
+            result['failed'].append({'email': email, 'error': str(exc)})
+            logger.error(
+                f"_migrate_plan_subscribers: FAILED to move '{sub.stripe_subscription_id}' ({email}) "
+                f"to the new prices for plan '{plan.name}': {exc}"
+            )
+    return result
+
+
+def _archive_custom_plan_stripe_prices(plan):
+    """
+    Deactivate the plan's current Stripe prices (base + overage) and their product
+    so they stop accepting new subscriptions, then clear the IDs on the plan so
+    _sync_custom_plan_to_stripe() creates fresh ones. Stripe prices are immutable,
+    so this archive-then-recreate is the only way to change a plan's price.
+
+    Best-effort: a Stripe failure while archiving is logged and the IDs are still
+    cleared, because the DB price is already the new source of truth and a fresh
+    product must be created regardless. Existing subscribers keep their old
+    subscription item price until their subscription is changed.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    old_price_id = plan.stripe_price_id
+    old_overage_id = plan.stripe_overage_price_id
+    if old_price_id:
+        try:
+            existing_price = stripe.Price.retrieve(old_price_id)
+            old_product_id = getattr(existing_price, 'product', None)
+            stripe.Price.modify(old_price_id, active=False)
+            if old_overage_id:
+                try:
+                    stripe.Price.modify(old_overage_id, active=False)
+                except stripe.error.StripeError:
+                    pass
+            if old_product_id:
+                stripe.Product.modify(old_product_id, active=False)
+            logger.info(
+                f"AdminCustomPlan: Archived old Stripe product '{old_product_id}' and prices "
+                f"({old_price_id}, {old_overage_id}) for plan '{plan.name}'."
+            )
+        except stripe.error.InvalidRequestError:
+            logger.warning(
+                f"AdminCustomPlan: stripe_price_id '{old_price_id}' no longer exists in Stripe "
+                f"for plan '{plan.name}' — nothing to archive."
+            )
+        except stripe.error.StripeError as exc:
+            logger.warning(
+                f"AdminCustomPlan: Could not archive old Stripe product for plan '{plan.name}': "
+                f"{exc} — proceeding to create fresh prices anyway."
+            )
+    plan.stripe_price_id = None
+    plan.stripe_overage_price_id = None
+    plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+
+
 class AdminCustomPlanListCreateView(APIView):
     """
     GET  /api/payments/admin/custom-plans/  — list all custom plans.
@@ -1696,12 +1877,19 @@ class AdminCustomPlanDetailView(APIView):
         operation_summary="[Admin] Update custom plan",
         operation_description=(
             "Update plan details or assigned users. "
-            "If price_aud or overage_rate_aud is changed, the DB is updated immediately but Stripe is NOT — "
-            "Stripe prices are immutable. The response will include a `stripe_action_required` flag. "
-            "Call /retry-stripe-sync/ afterwards to archive the old Stripe prices and create new ones."
+            "If price_aud or overage_rate_aud is changed, the change is pushed to Stripe automatically: "
+            "the old Stripe prices/product are archived (Stripe prices are immutable) and new ones are created, "
+            "so future subscribers are charged the updated amount. Existing subscribers stay on their current "
+            "price until their subscription is changed. On a Stripe failure the plan stays updated locally and "
+            "a 502 is returned with the plan body — call /retry-stripe-sync/ to try again."
         ),
         request_body=AdminCustomPlanSerializer,
-        responses={200: AdminCustomPlanSerializer(), 400: "Validation error.", 404: "Not found."},
+        responses={
+            200: AdminCustomPlanSerializer(),
+            400: "Validation error.",
+            404: "Not found.",
+            502: "Price updated locally but Stripe sync failed — retry via /retry-stripe-sync/.",
+        },
     )
     def patch(self, request, pk):
         plan = self._get_plan(pk)
@@ -1724,19 +1912,54 @@ class AdminCustomPlanDetailView(APIView):
             or plan.overage_rate_aud != old_overage_rate_aud
         )
 
+        if not price_changed or not plan.is_active:
+            return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+
+        # Price changed — push it to Stripe now. Stripe prices are immutable, so
+        # archive the old product/prices (if any) and create fresh ones. A plan
+        # whose initial sync failed (no Stripe IDs yet) simply gets created.
+        logger.info(
+            f"AdminCustomPlan: Price changed for plan '{plan.name}' "
+            f"(price_aud {old_price_aud} → {plan.price_aud}, overage {old_overage_rate_aud} → {plan.overage_rate_aud}) "
+            f"— syncing to Stripe."
+        )
+        # Remember the prices subscribers are currently on — the archive clears them.
+        old_stripe_price_id = plan.stripe_price_id
+        old_stripe_overage_price_id = plan.stripe_overage_price_id
+        if plan.stripe_price_id:
+            _archive_custom_plan_stripe_prices(plan)
+        stripe_ok = _sync_custom_plan_to_stripe(plan)
+        plan.refresh_from_db()
+
         response_data = AdminCustomPlanSerializer(plan).data
-        if price_changed and plan.stripe_price_id:
-            response_data['stripe_action_required'] = (
-                'Price was updated in the database but Stripe prices are immutable — '
-                'existing subscribers continue on the old price until their cycle ends. '
-                'Call POST /retry-stripe-sync/ to archive the old Stripe prices and create new ones '
-                'so future subscribers are charged the updated amount.'
+        if not stripe_ok:
+            logger.error(
+                f"AdminCustomPlan: Price changed for plan '{plan.name}' but Stripe sync failed — "
+                f"plan updated locally, Stripe IDs cleared. Admin must call retry-stripe-sync."
             )
-            logger.warning(
-                f"AdminCustomPlan: Price changed for plan '{plan.name}' but Stripe not updated. "
-                f"stripe_action_required=True. Admin must call retry-stripe-sync."
+            return Response(
+                {
+                    'plan': response_data,
+                    'warning': (
+                        'Price updated locally but Stripe sync failed, so no Stripe price exists for this plan yet. '
+                        'Retry via /retry-stripe-sync/.'
+                    ),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Move existing subscribers onto the new prices (no proration) so they are
+        # charged the updated amounts from their next invoice.
+        migration = _migrate_plan_subscribers_to_new_prices(
+            plan, old_stripe_price_id, old_stripe_overage_price_id
+        )
+        response_data['subscribers_migrated'] = migration['migrated']
+        response_data['subscribers_migration_failed'] = migration['failed']
+        response_data['stripe_synced'] = (
+            'New Stripe prices created for the updated amount; old ones archived. '
+            f"{len(migration['migrated'])} existing subscriber(s) moved to the new prices without proration"
+            + (f"; {len(migration['failed'])} could not be moved — see subscribers_migration_failed." if migration['failed'] else '.')
+        )
         return Response(response_data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
@@ -1946,6 +2169,10 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Prices subscribers are on right now (cleared by the archive below).
+        old_stripe_price_id = plan.stripe_price_id
+        old_stripe_overage_price_id = plan.stripe_overage_price_id
+
         if plan.stripe_price_id:
             try:
                 existing_price = stripe.Price.retrieve(plan.stripe_price_id)
@@ -1971,38 +2198,14 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
                             status=status.HTTP_409_CONFLICT,
                         )
 
-                    # Price changed — archive old Stripe product so it no longer accepts new subscriptions
-                    # then fall through to create fresh product + prices below
+                    # Price changed — archive old Stripe product/prices so they no longer
+                    # accept new subscriptions, then fall through to create fresh ones below.
                     logger.info(
                         f"AdminCustomPlan retry-sync: Price changed for plan '{plan.name}' "
                         f"(Stripe={stripe_unit_amount} cents, DB={db_unit_amount} cents). "
                         f"Archiving old Stripe product before re-sync."
                     )
-                    try:
-                        old_product_id = getattr(existing_price, 'product', None)
-                        if old_product_id:
-                            # Deactivate old prices first (required before archiving product)
-                            stripe.Price.modify(plan.stripe_price_id, active=False)
-                            if plan.stripe_overage_price_id:
-                                try:
-                                    stripe.Price.modify(plan.stripe_overage_price_id, active=False)
-                                except stripe.error.StripeError:
-                                    pass
-                            stripe.Product.modify(old_product_id, active=False)
-                            logger.info(
-                                f"AdminCustomPlan retry-sync: Archived old Stripe product '{old_product_id}' "
-                                f"and prices for plan '{plan.name}'."
-                            )
-                    except stripe.error.StripeError as exc:
-                        logger.warning(
-                            f"AdminCustomPlan retry-sync: Could not archive old Stripe product for "
-                            f"plan '{plan.name}': {exc} — proceeding with re-sync anyway."
-                        )
-
-                    # Clear old IDs so _sync_custom_plan_to_stripe starts fresh
-                    plan.stripe_price_id = None
-                    plan.stripe_overage_price_id = None
-                    plan.save(update_fields=['stripe_price_id', 'stripe_overage_price_id'])
+                    _archive_custom_plan_stripe_prices(plan)
 
             except stripe.error.InvalidRequestError:
                 # Old price no longer exists in Stripe — safe to re-sync
@@ -2031,4 +2234,12 @@ class AdminCustomPlanRetryStripeSyncView(APIView):
             )
 
         logger.info(f"AdminCustomPlan: Stripe sync retried for plan '{plan.name}' by admin {request.user.email}.")
-        return Response(AdminCustomPlanSerializer(plan).data, status=status.HTTP_200_OK)
+        # Same subscriber move as PATCH: anyone still on the previous prices (or on
+        # none, after a failed earlier sync) is put on the new ones without proration.
+        migration = _migrate_plan_subscribers_to_new_prices(
+            plan, old_stripe_price_id, old_stripe_overage_price_id
+        )
+        response_data = AdminCustomPlanSerializer(plan).data
+        response_data['subscribers_migrated'] = migration['migrated']
+        response_data['subscribers_migration_failed'] = migration['failed']
+        return Response(response_data, status=status.HTTP_200_OK)
