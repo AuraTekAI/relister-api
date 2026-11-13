@@ -83,30 +83,42 @@ def generate_invoice(self, subscription_id, stripe_invoice_id=None, paid=True):
         )
         try:
             stripe.api_key = settings.STRIPE_SECRET_KEY
-            stripe_invoice = stripe.Invoice.retrieve(
-                stripe_invoice_id, expand=['lines.data.price']
-            )
-            stripe_base = extract_base_charge_from_stripe_invoice(stripe_invoice, plan)
+            # No `expand=['lines.data.price']`: from Stripe API 2025-03-31.basil
+            # invoice lines no longer have a `price` field (the id moved to
+            # `pricing.price_details.price`), and asking to expand it raises
+            # InvalidRequestError — which used to land us in the except below
+            # and record a plan-only invoice with the extra-listings charge
+            # silently dropped. The helpers resolve the Price themselves on
+            # every API version.
+            stripe_invoice = stripe.Invoice.retrieve(stripe_invoice_id)
+            stripe_base = extract_base_charge_from_stripe_invoice(stripe_invoice, plan, subscription)
             if stripe_base is not None and stripe_base != base_charge:
                 logger.info(
                     f"generate_invoice: base charge on Stripe invoice {stripe_invoice_id} is "
                     f"{stripe_base} (plan DB says {base_charge}) — recording the Stripe amount."
                 )
                 base_charge = stripe_base
-            stripe_rate = extract_overage_rate_from_stripe_invoice(stripe_invoice, plan)
+            stripe_rate = extract_overage_rate_from_stripe_invoice(stripe_invoice, plan, subscription)
             if stripe_rate is not None and stripe_rate != overage_rate:
                 logger.info(
                     f"generate_invoice: overage rate on Stripe invoice {stripe_invoice_id} is "
                     f"{stripe_rate} (plan DB says {overage_rate}) — recording the Stripe rate."
                 )
                 overage_rate = stripe_rate
-            if plan.stripe_overage_price_id:
-                metered_count, metered_charge = extract_metered_overage_from_stripe_invoice(
-                    stripe_invoice, plan, rate=overage_rate
-                )
-                if metered_count is not None and metered_charge is not None:
-                    overage_count = metered_count
-                    overage_charge = metered_charge
+            # Always look for an extra-listings line — even when the plan's
+            # overage price id is missing (failed sync) or the subscriber is
+            # still on an archived overage price — so a real charge is never
+            # left off our record.
+            metered_count, metered_charge = extract_metered_overage_from_stripe_invoice(
+                stripe_invoice, plan, rate=overage_rate, subscription=subscription
+            )
+            if metered_count is not None and metered_charge is not None:
+                overage_count = metered_count
+                overage_charge = metered_charge
+            logger.info(
+                f"generate_invoice: Stripe invoice {stripe_invoice_id} read — base={base_charge}, "
+                f"overage={overage_count} × {overage_rate} = {overage_charge}."
+            )
         except stripe.error.StripeError as exc:
             logger.warning(
                 f"generate_invoice: could not read amounts from Stripe invoice "
