@@ -261,7 +261,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         # Set trial metadata — trial starts from registration date
         validated_data['account_status'] = 'trial'
         validated_data['trial_start_date'] = now
-        validated_data['trial_end_date'] = now + timedelta(days=30)
+        validated_data['trial_end_date'] = now + timedelta(days=14)  # 14-day free trial
         # Mark trial as used immediately so this email can never claim another trial.
         validated_data['trial_used'] = True
         # is_approved stays False (default) — admin must approve before the
