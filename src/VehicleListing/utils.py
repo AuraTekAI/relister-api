@@ -305,7 +305,7 @@ def send_welcome_email(user):
 def send_trial_expiry_notification(user, days_remaining):
     """
     Send trial expiry warning email.
-    days_remaining: 14, 4, or 0 (expired)
+    days_remaining: 7, 4, or 0 (expired)
     """
     logger.info(f"Sending trial expiry ({days_remaining}d) email to {user.email}")
     try:
@@ -316,9 +316,9 @@ def send_trial_expiry_notification(user, days_remaining):
             'trial_end_date': trial_end,
         }
 
-        if days_remaining == 14:
-            template = 'listings/trial_expiry_14days.html'
-            subject = 'Your Relister free trial ends in 14 days – Choose a plan to continue'
+        if days_remaining == 7:
+            template = 'listings/trial_expiry_7days.html'
+            subject = 'Your Relister free trial ends in 7 days – Choose a plan to continue'
         elif days_remaining == 4:
             template = 'listings/trial_expiry_4days.html'
             subject = "Your Relister free trial ends in 4 days – Don't lose access"

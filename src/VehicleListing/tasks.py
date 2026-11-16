@@ -1220,7 +1220,9 @@ def cleanup_old_logs(self):
 def check_trial_expiry_task():
     """
     Daily task that:
-    1. Sends warning emails at 14 days and 4 days before trial_end_date.
+    1. Sends warning emails at 7 days and 4 days before trial_end_date.
+       (The trial is 14 days, so a 14-day warning would land on sign-up day
+       together with the welcome email — the first reminder is at 7 days.)
     2. On the expiry date: sets account_status = 'trial_expired' and sends expiry email.
     Runs once per day via Celery Beat.
     """
@@ -1230,15 +1232,15 @@ def check_trial_expiry_task():
     now = timezone.now()
     today = now.date()
 
-    # --- 14-day warning ---
-    target_14 = today + timedelta(days=14)
-    users_14 = User.objects.filter(
+    # --- 7-day warning ---
+    target_7 = today + timedelta(days=7)
+    users_7 = User.objects.filter(
         account_status='trial',
-        trial_end_date__date=target_14,
+        trial_end_date__date=target_7,
     )
-    for user in users_14:
-        logger.info(f"Sending 14-day trial warning to {user.email}")
-        send_trial_expiry_notification(user, days_remaining=14)
+    for user in users_7:
+        logger.info(f"Sending 7-day trial warning to {user.email}")
+        send_trial_expiry_notification(user, days_remaining=7)
 
     # --- 4-day warning ---
     target_4 = today + timedelta(days=4)
@@ -1264,7 +1266,7 @@ def check_trial_expiry_task():
 
     logger.info(
         f"Trial expiry check complete. "
-        f"14d warnings: {users_14.count()}, "
+        f"7d warnings: {users_7.count()}, "
         f"4d warnings: {users_4.count()}, "
         f"Expired: {expired_users.count()}"
     )
