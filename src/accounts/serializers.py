@@ -125,6 +125,20 @@ class UserListSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
+        # Trial re-activation: an admin extending an EXPIRED trial's end date into
+        # the future puts the account back on trial automatically. Only when the
+        # end date is actually being changed, the account is currently
+        # trial_expired, and the request did not set account_status itself (an
+        # explicit status in the same PATCH always wins).
+        if (
+            'trial_end_date' in validated_data
+            and 'account_status' not in validated_data
+            and instance.account_status == 'trial_expired'
+            and instance.trial_end_date is not None
+            and instance.trial_end_date > timezone.now()
+        ):
+            instance.account_status = 'trial'
+
         instance.save()
 
         if custom_domain_changed:
@@ -247,7 +261,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         # Set trial metadata — trial starts from registration date
         validated_data['account_status'] = 'trial'
         validated_data['trial_start_date'] = now
-        validated_data['trial_end_date'] = now + timedelta(days=30)
+        validated_data['trial_end_date'] = now + timedelta(days=14)  # 14-day free trial
         # Mark trial as used immediately so this email can never claim another trial.
         validated_data['trial_used'] = True
         # is_approved stays False (default) — admin must approve before the
