@@ -9,7 +9,7 @@ from .permissions import HasNoFacebookVerificationBlock
 from rest_framework import filters
 from .serializers import VehicleListingSerializer, ListingUrlSerializer, FacebookUserCredentialsSerializer,FacebookProfileListingSerializer,GumtreeProfileListingSerializer,CustomDomainProfileListingSerializer,CustomDomainVehicleListingSerializer,ProductListSerializer,ProductDetailSerializer,DealerListSerializer
 from accounts.models import User
-from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent,VehicleListingImage
+from .models import VehicleListing, ListingUrl, FacebookUserCredentials, FacebookListing,GumtreeProfileListing,FacebookProfileListing,RelistingFacebooklisting,CustomDomainProfileListing,FacebookListingSnapshot,UnpublishedListingSnapshot,ExtensionSyncStatus,FBVerificationEvent,VehicleListingImage,PublishFailure
 from .image_pipeline import ensure_listing_image_ingest
 from .serializers import _resolve_extension_images
 import json
@@ -3050,3 +3050,110 @@ def get_my_stats(request):
     live = str(request.query_params.get('live', '')).lower() in ('1', 'true', 'yes')
     data = _build_dealer_stats(request.user, live=live)
     return JsonResponse({'success': True, 'user_id': request.user.id, **data}, status=200)
+
+def _publish_failure_payload(pf):
+    return {
+        'fail_count': pf.fail_count,
+        'last_fail_at': pf.last_fail_at.isoformat() if pf.last_fail_at else None,
+        'unknown_outcome': pf.unknown_outcome,
+        'reason': pf.reason,
+        'is_held': pf.is_held,
+    }
+
+
+@api_view(['GET', 'POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def publish_failures(request):
+    """
+    Server-side failed-publish history (replaces the extension's Chrome-only
+    `failedPublishes:<userId>` map, which was lost on "Retry now", manual or
+    admin republish, reinstall, or a different computer).
+
+    GET    — every PublishFailure row for the caller, keyed by listing id.
+             Returns { "success": true, "hold_threshold": 2,
+                       "data": { "<listing_id>": { fail_count, last_fail_at,
+                                                   unknown_outcome, reason, is_held } } }
+
+    POST   — record ONE more genuine failed attempt for a listing.
+             Body: { "id": 123, "reason": "...", "unknown_outcome": false,
+                     "at_least_fail_count": 2 }     (last three optional)
+             `fail_count` is incremented atomically (never reset). `unknown_outcome`
+             is sticky-true once set (the car must stay held until a human checks
+             Facebook). `at_least_fail_count` is used ONLY to import history the
+             extension still holds locally from before this endpoint existed: the
+             row's count is raised to max(current, value) instead of incremented.
+             Returns { "success": true, "data": { ...payload... } }
+
+    DELETE — clear the row after a CONFIRMED successful publish.
+             Body: { "id": 123 }. Idempotent (clearing a missing row still 200s).
+
+    The listing must belong to the caller — anything else is a 404.
+    """
+    try:
+        raw = request.body or b''
+        data = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'Invalid JSON body'}, status=400)
+    if not isinstance(data, dict):
+        return JsonResponse({'success': False, 'error': 'Request body must be a JSON object'}, status=400)
+
+    if request.method == 'GET':
+        rows = PublishFailure.objects.filter(user=request.user)
+        return JsonResponse({
+            'success': True,
+            'hold_threshold': PublishFailure.HOLD_THRESHOLD,
+            'data': {str(pf.listing_id): _publish_failure_payload(pf) for pf in rows},
+        })
+
+    if 'id' not in data:
+        return JsonResponse({'success': False, 'error': 'Vehicle listing ID is required'}, status=400)
+    try:
+        listing_id = int(data['id'])
+        if listing_id <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'Vehicle listing ID must be a positive integer'}, status=400)
+
+    if not VehicleListing.objects.filter(id=listing_id, user=request.user).exists():
+        return JsonResponse({'success': False, 'error': 'Vehicle listing not found'}, status=404)
+
+    if request.method == 'DELETE':
+        deleted, _ = PublishFailure.objects.filter(user=request.user, listing_id=listing_id).delete()
+        logger.info("publish-failures DELETE user=%s listing=%s deleted=%s", request.user.id, listing_id, deleted)
+        return JsonResponse({'success': True, 'data': {'id': listing_id, 'cleared': bool(deleted)}})
+
+    # POST — record a failure.
+    reason = data.get('reason')
+    if reason is not None:
+        reason = str(reason)[:2000]
+    unknown_outcome = bool(data.get('unknown_outcome', False))
+    at_least = data.get('at_least_fail_count')
+    try:
+        at_least = int(at_least) if at_least is not None else None
+        if at_least is not None and at_least < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'at_least_fail_count must be a non-negative integer'}, status=400)
+
+    now = timezone.now()
+    with transaction.atomic():
+        pf, created = PublishFailure.objects.select_for_update().get_or_create(
+            user=request.user, listing_id=listing_id,
+            defaults={'fail_count': 0, 'last_fail_at': now},
+        )
+        if at_least is not None:
+            # History import: raise to the known count, never lower, never add.
+            pf.fail_count = max(pf.fail_count, at_least)
+        else:
+            pf.fail_count = pf.fail_count + 1
+        pf.last_fail_at = now
+        pf.unknown_outcome = pf.unknown_outcome or unknown_outcome
+        if reason:
+            pf.reason = reason
+        pf.save()
+
+    logger.info(
+        "publish-failures POST user=%s listing=%s fail_count=%s unknown=%s held=%s import=%s",
+        request.user.id, listing_id, pf.fail_count, pf.unknown_outcome, pf.is_held, at_least is not None,
+    )
+    return JsonResponse({'success': True, 'data': {'id': listing_id, **_publish_failure_payload(pf)}})

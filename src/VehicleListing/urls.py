@@ -25,6 +25,7 @@ from .views import (
     get_my_stats,
     facebook_verification_status,
     list_facebook_verification_blocked_dealers,
+    publish_failures,
 )
 from .price_estimation import estimate_vehicle_price
 from .vehicle_export import export_vehicle_data
@@ -54,6 +55,8 @@ urlpatterns = [
     path('mark-changed/', update_vehicle_listing_is_changed, name='update_vehicle_listing_is_changed'),
     path('relist-recovery/', relist_recovery, name='relist_recovery'),
     path('facebook-id/', update_vehicle_listing_facebook_id, name='update_vehicle_listing_facebook_id'),
+    # Server-side failed-publish history (hold after 2 fails) — see publish_failures.
+    path('publish-failures/', publish_failures, name='publish_failures'),
     path('old-listings/', get_old_vehicle_listings, name='get_old_vehicle_listings'),
     path('fb-snapshot/', sync_facebook_listing_snapshot, name='sync_facebook_listing_snapshot'),
     path('fb-snapshots/', get_facebook_listing_snapshots, name='get_facebook_listing_snapshots'),
