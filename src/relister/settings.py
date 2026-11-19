@@ -561,6 +561,16 @@ EMAIL_HOST_USER = DEFAULT_FROM_EMAIL
 MAX_RETRIES_ATTEMPTS = int(env('MAX_RETRIES_ATTEMPTS'))
 ADMIN_EMAIL = env('ADMIN_EMAIL')
 TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
+
+# ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
+# Database + Redis are checked; after this many consecutive failures ONE alert
+# email goes to HEALTHCHECK_ALERT_EMAIL via Flashpost. State lives in a file
+# because the DB/Redis themselves may be the thing that is down.
+# Set these in .env — change the recipient or the check interval without a code change.
+HEALTHCHECK_ALERT_EMAIL = env('HEALTHCHECK_ALERT_EMAIL', default='kazp@citysubaru.com.au')
+HEALTHCHECK_INTERVAL_MINUTES = env.int('HEALTHCHECK_INTERVAL_MINUTES', default=5)
+HEALTHCHECK_FAILURES_BEFORE_ALERT = env.int('HEALTHCHECK_FAILURES_BEFORE_ALERT', default=2)
+HEALTHCHECK_STATE_FILE = env('HEALTHCHECK_STATE_FILE', default=os.path.join(LOG_DIR, 'infra_healthcheck_state.json'))
 MAX_DAILY_LISTINGS_COUNT = int(env('MAX_DAILY_LISTINGS_COUNT'))
 
 DELAY_START_TIME_BEFORE_ACCESS_BROWSER = int(env('DELAY_START_TIME_BEFORE_ACCESS_BROWSER'))

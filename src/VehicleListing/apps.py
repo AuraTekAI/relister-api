@@ -35,6 +35,11 @@ class VehiclelistingConfig(AppConfig):
                     "daily_midnight_5": CrontabSchedule.objects.get_or_create(minute='5', hour='0')[0],
                     "daily_midnight_10": CrontabSchedule.objects.get_or_create(minute='10', hour='0')[0],
                     "daily_6am": CrontabSchedule.objects.get_or_create(minute='0', hour='6')[0],
+                    # Interval comes from HEALTHCHECK_INTERVAL_MINUTES in .env (default 5).
+                    "healthcheck_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'HEALTHCHECK_INTERVAL_MINUTES', 5))))}",
+                        hour='*',
+                    )[0],
                 }
 
                 tasks = [
@@ -87,6 +92,13 @@ class VehiclelistingConfig(AppConfig):
                         # Daily at 06:00 UTC — reports each dealer's active-over-quota
                         # overage to Stripe (action='set'). Dry-run until OVERAGE_BILLING_DRYRUN=False.
                         "crontab": crontab_map["daily_6am"],
+                    },
+                    {
+                        "name": "Infrastructure_Health_Check",
+                        "task": "team_alerts.tasks.infrastructure_health_check",
+                        # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts HEALTHCHECK_ALERT_EMAIL
+                        # after HEALTHCHECK_FAILURES_BEFORE_ALERT consecutive failures (all from .env).
+                        "crontab": crontab_map["healthcheck_interval"],
                     },
                 ]
 
