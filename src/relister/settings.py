@@ -562,6 +562,22 @@ MAX_RETRIES_ATTEMPTS = int(env('MAX_RETRIES_ATTEMPTS'))
 ADMIN_EMAIL = env('ADMIN_EMAIL')
 TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
 
+# ── Host-level server monitoring (team_alerts/host_monitor.py, via Beat) ──────
+# Disk + memory of the SERVER (not the container). All tunable from .env.
+# Recipient reuses HEALTHCHECK_ALERT_EMAIL so every monitoring alert goes to
+# the same KAZ address.
+HOST_MONITOR_ALERT_EMAIL = env('HEALTHCHECK_ALERT_EMAIL', default='kazp@citysubaru.com.au')
+HOST_MONITOR_INTERVAL_MINUTES = env.int('HOST_MONITOR_INTERVAL_MINUTES', default=5)
+HOST_MONITOR_DISK_WARN_PCT = env.int('HOST_MONITOR_DISK_WARN_PCT', default=80)
+HOST_MONITOR_DISK_CRIT_PCT = env.int('HOST_MONITOR_DISK_CRIT_PCT', default=90)
+HOST_MONITOR_MEMORY_LOW_MB = env.int('HOST_MONITOR_MEMORY_LOW_MB', default=300)
+HOST_MONITOR_MEMORY_LOW_MINUTES = env.int('HOST_MONITOR_MEMORY_LOW_MINUTES', default=10)
+# Mount the host root into the worker (`- /:/host:ro`) so /host is the real server disk.
+HOST_MONITOR_DISK_PATHS = env.list('HOST_MONITOR_DISK_PATHS', default=['/host', '/'])
+HOST_MONITOR_STATE_FILE = env('HOST_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'host_monitor_state.json'))
+# host_monitor.py is not a tasks.py module, so tell Celery to import it.
+CELERY_IMPORTS = ('team_alerts.host_monitor',)
+
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
 # Database + Redis are checked; after this many consecutive failures ONE alert
 # email goes to HEALTHCHECK_ALERT_EMAIL via Flashpost. State lives in a file

@@ -40,6 +40,11 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{max(1, min(59, int(getattr(settings, 'HEALTHCHECK_INTERVAL_MINUTES', 5))))}",
                         hour='*',
                     )[0],
+                    # Interval comes from HOST_MONITOR_INTERVAL_MINUTES in .env (default 5).
+                    "host_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'HOST_MONITOR_INTERVAL_MINUTES', 5))))}",
+                        hour='*',
+                    )[0],
                 }
 
                 tasks = [
@@ -99,6 +104,13 @@ class VehiclelistingConfig(AppConfig):
                         # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts HEALTHCHECK_ALERT_EMAIL
                         # after HEALTHCHECK_FAILURES_BEFORE_ALERT consecutive failures (all from .env).
                         "crontab": crontab_map["healthcheck_interval"],
+                    },
+                    {
+                        "name": "Host_Resource_Monitor",
+                        "task": "team_alerts.host_monitor.host_resource_monitor",
+                        # Server disk (80% warn / 90% critical) + memory (<300 MB for 10 min);
+                        # thresholds, interval and recipient all from .env.
+                        "crontab": crontab_map["host_monitor_interval"],
                     },
                 ]
 
