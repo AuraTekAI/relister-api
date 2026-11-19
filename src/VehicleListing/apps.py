@@ -45,6 +45,12 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{max(1, min(59, int(getattr(settings, 'HOST_MONITOR_INTERVAL_MINUTES', 5))))}",
                         hour='*',
                     )[0],
+                    # Interval from SCHEDULE_MONITOR_INTERVAL_MINUTES in .env (default 60):
+                    # under an hour → every N minutes; otherwise → every N/60 hours on the hour.
+                    "schedule_monitor_interval": (lambda m: CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{m}" if m < 60 else '0',
+                        hour='*' if m < 60 else f"*/{max(1, min(23, m // 60))}",
+                    )[0])(max(1, int(getattr(settings, 'SCHEDULE_MONITOR_INTERVAL_MINUTES', 60)))),
                 }
 
                 tasks = [
@@ -111,6 +117,12 @@ class VehiclelistingConfig(AppConfig):
                         # Server disk (80% warn / 90% critical) + memory (<300 MB for 10 min);
                         # thresholds, interval and recipient all from .env.
                         "crontab": crontab_map["host_monitor_interval"],
+                    },
+                    {
+                        "name": "Scheduled_Task_Monitor",
+                        "task": "team_alerts.schedule_monitor.scheduled_task_monitor",
+                        # Checks the Beat tasks above ran on schedule (+ grace); alerts KAZ_AND_TEAM.
+                        "crontab": crontab_map["schedule_monitor_interval"],
                     },
                 ]
 

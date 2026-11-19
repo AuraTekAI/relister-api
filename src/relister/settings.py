@@ -575,8 +575,25 @@ HOST_MONITOR_MEMORY_LOW_MINUTES = env.int('HOST_MONITOR_MEMORY_LOW_MINUTES', def
 # Mount the host root into the worker (`- /:/host:ro`) so /host is the real server disk.
 HOST_MONITOR_DISK_PATHS = env.list('HOST_MONITOR_DISK_PATHS', default=['/host', '/'])
 HOST_MONITOR_STATE_FILE = env('HOST_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'host_monitor_state.json'))
-# host_monitor.py is not a tasks.py module, so tell Celery to import it.
-CELERY_IMPORTS = ('team_alerts.host_monitor',)
+# ── Scheduled-task monitoring (team_alerts/schedule_monitor.py, via Beat) ────
+# Watches the Beat tasks below via PeriodicTask.last_run_at; alerts KAZ_AND_TEAM
+# when one has not run by its schedule + grace. Replaces the queue-backlog alert.
+KAZ_AND_TEAM = env.list('KAZ_AND_TEAM', default=['kazp@citysubaru.com.au'])
+SCHEDULE_MONITOR_INTERVAL_MINUTES = env.int('SCHEDULE_MONITOR_INTERVAL_MINUTES', default=60)
+SCHEDULE_MONITOR_GRACE_MINUTES = env.int('SCHEDULE_MONITOR_GRACE_MINUTES', default=120)
+SCHEDULE_MONITOR_TASK_NAMES = env.list('SCHEDULE_MONITOR_TASK_NAMES', default=[
+    'Check_Gumtree_Profile_Re-Listings',
+    'Check_Custom_Domain_Profile_Re-Listings',
+    'Check_Trial_Expiry',
+    'Check_Subscription_Renewal_Warnings',
+    'Mark_Overdue_Invoices',
+    'Report_Listing_Overage_Usage',
+    'Clean_30_days_Old_logs',
+])
+SCHEDULE_MONITOR_STATE_FILE = env('SCHEDULE_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'schedule_monitor_state.json'))
+
+# host_monitor.py / schedule_monitor.py are not tasks.py modules, so tell Celery to import them.
+CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor')
 
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
 # Database + Redis are checked; after this many consecutive failures ONE alert
