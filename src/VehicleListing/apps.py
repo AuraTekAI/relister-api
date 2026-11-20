@@ -51,6 +51,12 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{m}" if m < 60 else '0',
                         hour='*' if m < 60 else f"*/{max(1, min(23, m // 60))}",
                     )[0])(max(1, int(getattr(settings, 'SCHEDULE_MONITOR_INTERVAL_MINUTES', 60)))),
+                    # Beat fires at the ELEVATED cadence (every N hours); the task itself
+                    # only calls ZenRows daily until usage passes the elevated threshold.
+                    "zenrows_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute='15',
+                        hour=f"*/{max(1, min(23, int(getattr(settings, 'ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', 3))))}",
+                    )[0],
                 }
 
                 tasks = [
@@ -123,6 +129,13 @@ class VehiclelistingConfig(AppConfig):
                         "task": "team_alerts.schedule_monitor.scheduled_task_monitor",
                         # Checks the Beat tasks above ran on schedule (+ grace); alerts KAZ_AND_TEAM.
                         "crontab": crontab_map["schedule_monitor_interval"],
+                    },
+                    {
+                        "name": "ZenRows_Usage_Monitor",
+                        "task": "team_alerts.zenrows_monitor.zenrows_usage_monitor",
+                        # Daily usage check (every 3 h once ≥80%); alerts KAZ_AND_TEAM at 80%/95%
+                        # and when credits are projected to run out before renewal.
+                        "crontab": crontab_map["zenrows_monitor_interval"],
                     },
                 ]
 

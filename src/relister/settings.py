@@ -592,8 +592,24 @@ SCHEDULE_MONITOR_TASK_NAMES = env.list('SCHEDULE_MONITOR_TASK_NAMES', default=[
 ])
 SCHEDULE_MONITOR_STATE_FILE = env('SCHEDULE_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'schedule_monitor_state.json'))
 
-# host_monitor.py / schedule_monitor.py are not tasks.py modules, so tell Celery to import them.
-CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor')
+# ── ZenRows credit monitoring (team_alerts/zenrows_monitor.py) ──────────────
+# Usage is read from ZenRows' subscription endpoint daily; once usage reaches
+# ELEVATED_FROM_PCT the check runs every ELEVATED_INTERVAL_HOURS instead.
+# Alerts (to KAZ_AND_TEAM): WARN_PCT, CRIT_PCT, and a run-out projection when
+# the current rate exhausts credits before the renewal date. A 402 from any
+# scraper call alerts immediately (repeats throttled by 402_ALERT_COOLDOWN).
+ZENROWS_USAGE_URL = env('ZENROWS_USAGE_URL', default='https://api.zenrows.com/v1/subscriptions/self/details')
+ZENROWS_MONITOR_INTERVAL_HOURS = env.int('ZENROWS_MONITOR_INTERVAL_HOURS', default=24)
+ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS = env.int('ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', default=3)
+ZENROWS_MONITOR_ELEVATED_FROM_PCT = env.int('ZENROWS_MONITOR_ELEVATED_FROM_PCT', default=80)
+ZENROWS_MONITOR_WARN_PCT = env.int('ZENROWS_MONITOR_WARN_PCT', default=80)
+ZENROWS_MONITOR_CRIT_PCT = env.int('ZENROWS_MONITOR_CRIT_PCT', default=95)
+ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT = env.int('ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT', default=10)
+ZENROWS_402_ALERT_COOLDOWN_MINUTES = env.int('ZENROWS_402_ALERT_COOLDOWN_MINUTES', default=60)
+ZENROWS_MONITOR_STATE_FILE = env('ZENROWS_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'zenrows_monitor_state.json'))
+
+# These monitors are not tasks.py modules, so tell Celery to import them.
+CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor')
 
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
 # Database + Redis are checked; after this many consecutive failures ONE alert
