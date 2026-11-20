@@ -608,8 +608,24 @@ ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT = env.int('ZENROWS_MONITOR_PROJECTION
 ZENROWS_402_ALERT_COOLDOWN_MINUTES = env.int('ZENROWS_402_ALERT_COOLDOWN_MINUTES', default=60)
 ZENROWS_MONITOR_STATE_FILE = env('ZENROWS_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'zenrows_monitor_state.json'))
 
+# ── Failure-spike + Facebook account issue alerts (Kaz only) ─────────────────
+# team_alerts/failure_monitor.py: per kind (publish / delete / form_fill), the
+# failures in the last WINDOW are a spike when >= MIN_COUNT and >= FACTOR × the
+# average per-window count over the previous BASELINE_DAYS. One email per spike.
+# team_alerts/account_events.py: extension reports restricted / checkpoint /
+# logged_out per dealer; one email per open issue, re-armed by a "resolved"
+# report (or after REALERT_DAYS with no resolution).
+KAZ_ONLY = env.list('KAZ_ONLY', default=['kazp@citysubaru.com.au'])
+FAILURE_SPIKE_CHECK_MINUTES = env.int('FAILURE_SPIKE_CHECK_MINUTES', default=15)
+FAILURE_SPIKE_WINDOW_MINUTES = env.int('FAILURE_SPIKE_WINDOW_MINUTES', default=60)
+FAILURE_SPIKE_BASELINE_DAYS = env.int('FAILURE_SPIKE_BASELINE_DAYS', default=7)
+FAILURE_SPIKE_MIN_COUNT = env.int('FAILURE_SPIKE_MIN_COUNT', default=5)
+FAILURE_SPIKE_FACTOR = env.float('FAILURE_SPIKE_FACTOR', default=3.0)
+FAILURE_SPIKE_STATE_FILE = env('FAILURE_SPIKE_STATE_FILE', default=os.path.join(LOG_DIR, 'failure_spike_state.json'))
+FB_ACCOUNT_ISSUE_REALERT_DAYS = env.int('FB_ACCOUNT_ISSUE_REALERT_DAYS', default=7)
+
 # These monitors are not tasks.py modules, so tell Celery to import them.
-CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor')
+CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor')
 
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
 # Database + Redis are checked; after this many consecutive failures ONE alert

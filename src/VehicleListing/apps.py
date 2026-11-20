@@ -57,6 +57,11 @@ class VehiclelistingConfig(AppConfig):
                         minute='15',
                         hour=f"*/{max(1, min(23, int(getattr(settings, 'ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', 3))))}",
                     )[0],
+                    # Interval from FAILURE_SPIKE_CHECK_MINUTES in .env (default 15).
+                    "failure_spike_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'FAILURE_SPIKE_CHECK_MINUTES', 15))))}",
+                        hour='*',
+                    )[0],
                 }
 
                 tasks = [
@@ -136,6 +141,12 @@ class VehiclelistingConfig(AppConfig):
                         # Daily usage check (every 3 h once ≥80%); alerts KAZ_AND_TEAM at 80%/95%
                         # and when credits are projected to run out before renewal.
                         "crontab": crontab_map["zenrows_monitor_interval"],
+                    },
+                    {
+                        "name": "Failure_Spike_Monitor",
+                        "task": "team_alerts.failure_monitor.failure_spike_monitor",
+                        # Sudden rise in publish / delete / form-fill failures vs the 7-day norm → Kaz only.
+                        "crontab": crontab_map["failure_spike_interval"],
                     },
                 ]
 
