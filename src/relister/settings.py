@@ -562,11 +562,23 @@ MAX_RETRIES_ATTEMPTS = int(env('MAX_RETRIES_ATTEMPTS'))
 ADMIN_EMAIL = env('ADMIN_EMAIL')
 TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
 
+# ── Central alert sender (team_alerts/alerting.py) ───────────────────────────
+# Every monitoring email goes through raise_alert / resolve_alert: first
+# occurrence immediately, a reminder only if still failing after
+# ALERT_REMIND_HOURS, and one [RESOLVED] email when fixed. Two recipient lists:
+#   KAZ_ONLY      Gumtree, Facebook, restricted / checkpoint / logged-out alerts
+#   KAZ_AND_TEAM  website, database, Redis, disk, backups, email + image
+#                 storage, scheduled tasks (and ZenRows credits)
+# support@autorelister.com.au is dropped automatically (Flashpost rejects it).
+ALERT_REMIND_HOURS = env.float('ALERT_REMIND_HOURS', default=24)
+ALERT_STATE_FILE = env('ALERT_STATE_FILE', default=os.path.join(LOG_DIR, 'alert_state.json'))
+# Weekly "[TEST]" email to BOTH lists (Beat task Weekly_Alert_Test_Email).
+ALERT_WEEKLY_TEST_DAY = env('ALERT_WEEKLY_TEST_DAY', default='mon')   # cron day_of_week
+ALERT_WEEKLY_TEST_HOUR = env.int('ALERT_WEEKLY_TEST_HOUR', default=9)  # UTC
+
 # ── Host-level server monitoring (team_alerts/host_monitor.py, via Beat) ──────
 # Disk + memory of the SERVER (not the container). All tunable from .env.
-# Recipient reuses HEALTHCHECK_ALERT_EMAIL so every monitoring alert goes to
-# the same KAZ address.
-HOST_MONITOR_ALERT_EMAIL = env('HEALTHCHECK_ALERT_EMAIL', default='kazp@citysubaru.com.au')
+# Alerts go to KAZ_AND_TEAM through the central sender.
 HOST_MONITOR_INTERVAL_MINUTES = env.int('HOST_MONITOR_INTERVAL_MINUTES', default=5)
 HOST_MONITOR_DISK_WARN_PCT = env.int('HOST_MONITOR_DISK_WARN_PCT', default=80)
 HOST_MONITOR_DISK_CRIT_PCT = env.int('HOST_MONITOR_DISK_CRIT_PCT', default=90)
@@ -597,7 +609,7 @@ SCHEDULE_MONITOR_STATE_FILE = env('SCHEDULE_MONITOR_STATE_FILE', default=os.path
 # ELEVATED_FROM_PCT the check runs every ELEVATED_INTERVAL_HOURS instead.
 # Alerts (to KAZ_AND_TEAM): WARN_PCT, CRIT_PCT, and a run-out projection when
 # the current rate exhausts credits before the renewal date. A 402 from any
-# scraper call alerts immediately (repeats throttled by 402_ALERT_COOLDOWN).
+# scraper call alerts immediately (repeats handled by the central sender).
 ZENROWS_USAGE_URL = env('ZENROWS_USAGE_URL', default='https://api.zenrows.com/v1/subscriptions/self/details')
 ZENROWS_MONITOR_INTERVAL_HOURS = env.int('ZENROWS_MONITOR_INTERVAL_HOURS', default=24)
 ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS = env.int('ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', default=3)
@@ -605,7 +617,6 @@ ZENROWS_MONITOR_ELEVATED_FROM_PCT = env.int('ZENROWS_MONITOR_ELEVATED_FROM_PCT',
 ZENROWS_MONITOR_WARN_PCT = env.int('ZENROWS_MONITOR_WARN_PCT', default=80)
 ZENROWS_MONITOR_CRIT_PCT = env.int('ZENROWS_MONITOR_CRIT_PCT', default=95)
 ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT = env.int('ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT', default=10)
-ZENROWS_402_ALERT_COOLDOWN_MINUTES = env.int('ZENROWS_402_ALERT_COOLDOWN_MINUTES', default=60)
 ZENROWS_MONITOR_STATE_FILE = env('ZENROWS_MONITOR_STATE_FILE', default=os.path.join(LOG_DIR, 'zenrows_monitor_state.json'))
 
 # ── Failure-spike + Facebook account issue alerts (Kaz only) ─────────────────
@@ -622,21 +633,18 @@ FAILURE_SPIKE_BASELINE_DAYS = env.int('FAILURE_SPIKE_BASELINE_DAYS', default=7)
 FAILURE_SPIKE_MIN_COUNT = env.int('FAILURE_SPIKE_MIN_COUNT', default=5)
 FAILURE_SPIKE_FACTOR = env.float('FAILURE_SPIKE_FACTOR', default=3.0)
 FAILURE_SPIKE_STATE_FILE = env('FAILURE_SPIKE_STATE_FILE', default=os.path.join(LOG_DIR, 'failure_spike_state.json'))
-FB_ACCOUNT_ISSUE_REALERT_DAYS = env.int('FB_ACCOUNT_ISSUE_REALERT_DAYS', default=7)
 # team_alerts/gumtree_listing_monitor.py: after each scheduled Gumtree check, a
 # dealer returning 0 listings or fewer than this fraction of their previous run
 # is reported to KAZ_ONLY (failed fetches are skipped, never read as 0).
 GUMTREE_DROP_ALERT_RATIO = env.float('GUMTREE_DROP_ALERT_RATIO', default=0.5)
 
 # These monitors are not tasks.py modules, so tell Celery to import them.
-CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor')
+CELERY_IMPORTS = ('team_alerts.alerting', 'team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor')
 
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
-# Database + Redis are checked; after this many consecutive failures ONE alert
-# email goes to HEALTHCHECK_ALERT_EMAIL via Flashpost. State lives in a file
+# Database + Redis are checked; after this many consecutive failures the alert
+# goes to KAZ_AND_TEAM through the central sender. State lives in a file
 # because the DB/Redis themselves may be the thing that is down.
-# Set these in .env — change the recipient or the check interval without a code change.
-HEALTHCHECK_ALERT_EMAIL = env('HEALTHCHECK_ALERT_EMAIL', default='kazp@citysubaru.com.au')
 HEALTHCHECK_INTERVAL_MINUTES = env.int('HEALTHCHECK_INTERVAL_MINUTES', default=5)
 HEALTHCHECK_FAILURES_BEFORE_ALERT = env.int('HEALTHCHECK_FAILURES_BEFORE_ALERT', default=2)
 HEALTHCHECK_STATE_FILE = env('HEALTHCHECK_STATE_FILE', default=os.path.join(LOG_DIR, 'infra_healthcheck_state.json'))

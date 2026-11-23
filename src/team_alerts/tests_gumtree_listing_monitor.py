@@ -1,9 +1,11 @@
 """Gumtree listing-count monitor: 0 listings or < 50% of the previous run →
-one Kaz-only alert per batch; failed fetches are skipped; no repeats while the
-condition persists; re-alerts after a normal run.
+Kaz-only alert via the central sender (one per dealer/profile); failed fetches
+skipped; no repeats while the condition persists; [RESOLVED] after a normal run.
 
 Run: python src/manage.py test team_alerts.tests_gumtree_listing_monitor
 """
+import os
+import tempfile
 from datetime import timedelta
 from unittest import mock
 
@@ -11,6 +13,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import User
+from team_alerts import alerting
 from team_alerts import gumtree_listing_monitor as gm
 from team_alerts.models import TeamAlertLog
 from VehicleListing.models import GumtreeSyncRun
@@ -18,9 +21,16 @@ from VehicleListing.models import GumtreeSyncRun
 KAZ = ['kazp@citysubaru.com.au']
 
 
-@override_settings(KAZ_ONLY=KAZ, GUMTREE_DROP_ALERT_RATIO=0.5)
 class GumtreeListingMonitorTests(TestCase):
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        ctx = override_settings(
+            KAZ_ONLY=KAZ, GUMTREE_DROP_ALERT_RATIO=0.5,
+            ALERT_STATE_FILE=os.path.join(self.tmp.name, 'alerts.json'), ALERT_REMIND_HOURS=24,
+        )
+        ctx.enable()
+        self.addCleanup(ctx.disable)
         self.dealer = User.objects.create_user(email='dealer@example.com', password='x', dealership_name='Motoroo')
         self.other = User.objects.create_user(email='other@example.com', password='x', dealership_name='CarWow')
         self.t0 = timezone.now()
@@ -31,17 +41,11 @@ class GumtreeListingMonitorTests(TestCase):
         GumtreeSyncRun.objects.filter(pk=run.pk).update(created_at=self.t0 - timedelta(hours=hours_ago))
         return GumtreeSyncRun.objects.get(pk=run.pk)
 
-    def _monitor(self, since_hours_ago=1):
-        since = self.t0 - timedelta(hours=since_hours_ago)
-        with mock.patch.object(gm, 'EmailMessage') as email_cls:
+    def _monitor(self, since_hours_ago=1, send_side_effect=None):
+        with mock.patch.object(alerting, 'EmailMessage') as email_cls:
             email_cls.return_value.send.return_value = 1
-            summary = gm.monitor_gumtree_listing_counts(since=since)
-        # Runs are backdated in these tests, so backdate the alert log the same
-        # way (in production both are real time, in order).
-        newest = GumtreeSyncRun.objects.filter(created_at__gte=since).order_by('-created_at').first()
-        if newest:
-            TeamAlertLog.objects.filter(alert_type=gm.ALERT_TYPE, sent_at__gte=self.t0 - timedelta(seconds=5)) \
-                .update(sent_at=newest.created_at + timedelta(minutes=1))
+            email_cls.return_value.send.side_effect = send_side_effect
+            summary = gm.monitor_gumtree_listing_counts(since=self.t0 - timedelta(hours=since_hours_ago))
         return summary, email_cls
 
     # ── rule ────────────────────────────────────────────────────────────────
@@ -61,21 +65,20 @@ class GumtreeListingMonitorTests(TestCase):
         self.assertEqual(summary['alerts'], 0)
         email.assert_not_called()
 
-    def test_drop_and_zero_alert_kaz_in_one_email_and_are_logged(self):
+    def test_drop_and_zero_alert_kaz_per_dealer_and_are_logged(self):
         self._run(self.dealer, 40, hours_ago=5)
         self._run(self.dealer, 15, hours_ago=0.5)          # 37% → drop
         self._run(self.other, 12, hours_ago=5, seller='222')
         self._run(self.other, 0, hours_ago=0.5, seller='222')  # zero
         summary, email = self._monitor()
         self.assertEqual(summary['alerts'], 2)
-        email.assert_called_once()
-        kwargs = email.call_args.kwargs
-        self.assertEqual(kwargs['to'], KAZ)
-        self.assertIn('2 dealer(s)', kwargs['subject'])
-        self.assertIn('Motoroo', kwargs['body'])
-        self.assertIn('dropped to 15 from 40', kwargs['body'])
-        self.assertIn('returned 0 listings', kwargs['body'])
-        email.return_value.send.assert_called_once_with(fail_silently=False)
+        self.assertEqual(email.call_count, 2)
+        subjects = [c.kwargs['subject'] for c in email.call_args_list]
+        self.assertTrue(any('Motoroo: 15 listings (dropped to 15 from 40)' in s for s in subjects))
+        self.assertTrue(any('CarWow: 0 listings (returned 0 listings)' in s for s in subjects))
+        for c in email.call_args_list:
+            self.assertEqual(c.kwargs['to'], KAZ)
+        email.return_value.send.assert_called_with(fail_silently=False)
         logs = TeamAlertLog.objects.filter(alert_type='gumtree_listing_drop').order_by('user_id')
         self.assertEqual([(l.user_id, l.active_listings, l.inactive_listings) for l in logs],
                          [(self.dealer.id, 15, 40), (self.other.id, 0, 12)])
@@ -103,7 +106,7 @@ class GumtreeListingMonitorTests(TestCase):
         summary, email = self._monitor()
         self.assertEqual(summary['alerts'], 1)
 
-    def test_persisting_zero_is_not_repeated_but_realerts_after_recovery(self):
+    def test_persisting_zero_is_not_repeated_then_resolves_and_realerts(self):
         self._run(self.dealer, 30, hours_ago=20)
         self._run(self.dealer, 0, hours_ago=15)
         _, email = self._monitor(since_hours_ago=16)
@@ -112,12 +115,14 @@ class GumtreeListingMonitorTests(TestCase):
         summary, email = self._monitor(since_hours_ago=11)
         self.assertEqual(summary['suppressed'], 1)
         email.assert_not_called()
-        self._run(self.dealer, 25, hours_ago=5)   # back to normal
+        self._run(self.dealer, 25, hours_ago=5)   # back to normal → [RESOLVED]
         _, email = self._monitor(since_hours_ago=6)
-        email.assert_not_called()
+        email.assert_called_once()
+        self.assertTrue(email.call_args.kwargs['subject'].startswith('[RESOLVED] Gumtree listings dropped'))
         self._run(self.dealer, 0, hours_ago=0.5)  # drops again
         _, email = self._monitor()
         email.assert_called_once()
+        self.assertTrue(email.call_args.kwargs['subject'].startswith('[ALERT]'))
 
     def test_profiles_compared_separately_and_only_this_batch(self):
         self._run(self.dealer, 40, hours_ago=5, seller='111')
@@ -144,9 +149,7 @@ class GumtreeListingMonitorTests(TestCase):
     def test_failed_send_logs_nothing_so_next_run_retries(self):
         self._run(self.dealer, 40, hours_ago=5)
         self._run(self.dealer, 0, hours_ago=0.5)
-        with mock.patch.object(gm, 'EmailMessage') as email_cls:
-            email_cls.return_value.send.side_effect = Exception('flashpost 500')
-            summary = gm.monitor_gumtree_listing_counts(since=self.t0 - timedelta(hours=1))
+        summary, _ = self._monitor(send_side_effect=Exception('flashpost 500'))
         self.assertEqual(summary['alerts'], 0)
         self.assertEqual(TeamAlertLog.objects.count(), 0)
         _, email = self._monitor()

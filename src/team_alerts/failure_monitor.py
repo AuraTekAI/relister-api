@@ -16,22 +16,21 @@ FAILURE_SPIKE_BASELINE_DAYS. It is a SPIKE when
     current >= FAILURE_SPIKE_MIN_COUNT  and  current >= FAILURE_SPIKE_FACTOR × baseline
 
 (so a brand-new kind with no history still needs MIN_COUNT failures, and a
-busy kind needs FACTOR× its usual rate). One email goes to KAZ_ONLY per spike
-episode; the kind re-arms once a check finds it back under the line.
+busy kind needs FACTOR× its usual rate). Emails go to KAZ_ONLY through
+team_alerts.alerting: one when the spike starts, a reminder after
+ALERT_REMIND_HOURS if it persists, [RESOLVED] when the rate is normal again.
 """
-import json
 import logging
-import os
 import re
-import tempfile
 from collections import Counter
 from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.db.models import Count
 from django.utils import timezone
+
+from .alerting import raise_alert, recipients, resolve_alert
 
 logger = logging.getLogger('relister_views')
 
@@ -48,10 +47,7 @@ def _setting(name, default):
 
 
 def kaz_only():
-    raw = _setting('KAZ_ONLY', ['kazp@citysubaru.com.au'])
-    if isinstance(raw, str):
-        raw = [p.strip() for p in raw.split(',')]
-    return [r for r in raw if r]
+    return recipients('kaz')
 
 
 def classify_publish_failure_kind(reason, explicit_kind=None):
@@ -76,37 +72,6 @@ def record_failure_event(user, kind, listing_id=None, reason=None, occurred_at=N
     except Exception as exc:
         logger.error(f"failure_monitor: could not record {kind} failure event: {exc}")
         return None
-
-
-# ── state ──────────────────────────────────────────────────────────────────
-
-def _state_file():
-    return _setting('FAILURE_SPIKE_STATE_FILE', os.path.join(tempfile.gettempdir(), 'relister_failure_spike.json'))
-
-
-def _load_state():
-    try:
-        with open(_state_file(), 'r', encoding='utf-8') as fh:
-            data = json.load(fh)
-        if isinstance(data, dict):
-            return data
-    except FileNotFoundError:
-        pass
-    except Exception as exc:
-        logger.warning(f"failure_monitor: could not read state file: {exc}")
-    return {}
-
-
-def _save_state(state):
-    path = _state_file()
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as fh:
-            json.dump(state, fh)
-        os.replace(tmp, path)
-    except Exception as exc:
-        logger.error(f"failure_monitor: could not write state file {path}: {exc}")
 
 
 # ── detection ──────────────────────────────────────────────────────────────
@@ -142,8 +107,7 @@ def _window_stats(kind, now):
     }
 
 
-def _send_spike_alert(kind, stats):
-    to = kaz_only()
+def _spike_email(kind, stats):
     label = KIND_LABELS[kind]
     subject = f"[ALERT] Spike in {label} failures: {stats['current']} in the last {stats['window_minutes']} min (normal ≈ {stats['baseline']:.1f})"
     lines = [
@@ -162,26 +126,14 @@ def _send_spike_alert(kind, stats):
     lines += [
         '',
         'A spike across several dealers usually means Facebook changed something or is blocking; a single dealer usually means that account.',
-        'This is sent once per spike; it re-arms when the rate returns to normal.',
         f"Checked at: {timezone.now().strftime('%Y-%m-%d %H:%M UTC')}",
     ]
-    try:
-        sent = EmailMessage(subject=subject, body='\n'.join(lines) + '\n', from_email=settings.DEFAULT_FROM_EMAIL, to=to).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"failure_monitor: Flashpost reported {sent} sent for '{subject}' — will retry next run.")
-            return False
-        logger.info(f"failure_monitor: spike alert sent to {to}: {subject}")
-        return True
-    except Exception as exc:
-        logger.error(f"failure_monitor: FAILED to send spike alert to {to}: {exc} — will retry next run.")
-        return False
+    return subject, '\n'.join(lines) + '\n'
 
 
 @shared_task(queue='scheduling_queue')
 def failure_spike_monitor():
     now = timezone.now()
-    state = _load_state()
-    alerted = state.setdefault('alerted', {})
     summary = {}
     for kind in KINDS:
         try:
@@ -192,18 +144,12 @@ def failure_spike_monitor():
             continue
         spike = is_spike(stats['current'], stats['baseline'])
         summary[kind] = f"{'SPIKE' if spike else 'ok'} {stats['current']} vs {stats['baseline']:.1f}"
+        key = f'failures:{kind}'
         if not spike:
-            if alerted.get(kind):
-                logger.info(f"failure_monitor: {kind} failures back to normal — alert re-armed.")
-            alerted[kind] = False
-            continue
-        if alerted.get(kind):
-            logger.warning(f"failure_monitor: {kind} spike continues ({stats['current']} in window) — already alerted.")
+            resolve_alert(key, note=f"{stats['current']} {KIND_LABELS[kind]} failures in the last {stats['window_minutes']} minutes (normal ≈ {stats['baseline']:.1f}).")
             continue
         logger.error(f"failure_monitor: {kind} failure SPIKE — {stats['current']} in {stats['window_minutes']}m (normal {stats['baseline']:.1f}).")
-        if _send_spike_alert(kind, stats):
-            alerted[kind] = True
-    state['checked_at'] = now.isoformat()
-    _save_state(state)
+        subject, body = _spike_email(kind, stats)
+        raise_alert(key, 'kaz', subject, body)
     logger.info(f"failure_monitor: {summary}")
     return summary

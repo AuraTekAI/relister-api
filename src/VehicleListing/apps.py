@@ -62,6 +62,12 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{max(1, min(59, int(getattr(settings, 'FAILURE_SPIKE_CHECK_MINUTES', 15))))}",
                         hour='*',
                     )[0],
+                    # Weekly alert-system test email: ALERT_WEEKLY_TEST_DAY / _HOUR from .env.
+                    "weekly_alert_test": CrontabSchedule.objects.get_or_create(
+                        minute='0',
+                        hour=str(max(0, min(23, int(getattr(settings, 'ALERT_WEEKLY_TEST_HOUR', 9))))),
+                        day_of_week=str(getattr(settings, 'ALERT_WEEKLY_TEST_DAY', 'mon')),
+                    )[0],
                 }
 
                 tasks = [
@@ -118,7 +124,7 @@ class VehiclelistingConfig(AppConfig):
                     {
                         "name": "Infrastructure_Health_Check",
                         "task": "team_alerts.tasks.infrastructure_health_check",
-                        # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts HEALTHCHECK_ALERT_EMAIL
+                        # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts KAZ_AND_TEAM
                         # after HEALTHCHECK_FAILURES_BEFORE_ALERT consecutive failures (all from .env).
                         "crontab": crontab_map["healthcheck_interval"],
                     },
@@ -147,6 +153,12 @@ class VehiclelistingConfig(AppConfig):
                         "task": "team_alerts.failure_monitor.failure_spike_monitor",
                         # Sudden rise in publish / delete / form-fill failures vs the 7-day norm → Kaz only.
                         "crontab": crontab_map["failure_spike_interval"],
+                    },
+                    {
+                        "name": "Weekly_Alert_Test_Email",
+                        "task": "team_alerts.alerting.weekly_alert_test_email",
+                        # "[TEST]" email to KAZ_ONLY and KAZ_AND_TEAM once a week to prove alerts deliver.
+                        "crontab": crontab_map["weekly_alert_test"],
                     },
                 ]
 
