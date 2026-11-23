@@ -623,6 +623,10 @@ FAILURE_SPIKE_MIN_COUNT = env.int('FAILURE_SPIKE_MIN_COUNT', default=5)
 FAILURE_SPIKE_FACTOR = env.float('FAILURE_SPIKE_FACTOR', default=3.0)
 FAILURE_SPIKE_STATE_FILE = env('FAILURE_SPIKE_STATE_FILE', default=os.path.join(LOG_DIR, 'failure_spike_state.json'))
 FB_ACCOUNT_ISSUE_REALERT_DAYS = env.int('FB_ACCOUNT_ISSUE_REALERT_DAYS', default=7)
+# team_alerts/gumtree_listing_monitor.py: after each scheduled Gumtree check, a
+# dealer returning 0 listings or fewer than this fraction of their previous run
+# is reported to KAZ_ONLY (failed fetches are skipped, never read as 0).
+GUMTREE_DROP_ALERT_RATIO = env.float('GUMTREE_DROP_ALERT_RATIO', default=0.5)
 
 # These monitors are not tasks.py modules, so tell Celery to import them.
 CELERY_IMPORTS = ('team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor')
