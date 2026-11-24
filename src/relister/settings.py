@@ -572,6 +572,13 @@ TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
 # support@autorelister.com.au is dropped automatically (Flashpost rejects it).
 ALERT_REMIND_HOURS = env.float('ALERT_REMIND_HOURS', default=24)
 ALERT_STATE_FILE = env('ALERT_STATE_FILE', default=os.path.join(LOG_DIR, 'alert_state.json'))
+# Fallback transport for alerts ABOUT Flashpost (403 sending suspended, 422
+# recipient suppressed, network errors): Amazon SES in Kaz's AWS account.
+# The SES sender address must be verified in that account.
+ALERT_FALLBACK_SES_REGION = env('ALERT_FALLBACK_SES_REGION', default='')
+ALERT_FALLBACK_SES_ACCESS_KEY_ID = env('ALERT_FALLBACK_SES_ACCESS_KEY_ID', default='')
+ALERT_FALLBACK_SES_SECRET_ACCESS_KEY = env('ALERT_FALLBACK_SES_SECRET_ACCESS_KEY', default='')
+ALERT_FALLBACK_SES_FROM_EMAIL = env('ALERT_FALLBACK_SES_FROM_EMAIL', default='')
 # Weekly "[TEST]" email to BOTH lists (Beat task Weekly_Alert_Test_Email).
 ALERT_WEEKLY_TEST_DAY = env('ALERT_WEEKLY_TEST_DAY', default='mon')   # cron day_of_week
 ALERT_WEEKLY_TEST_HOUR = env.int('ALERT_WEEKLY_TEST_HOUR', default=9)  # UTC

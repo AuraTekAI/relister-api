@@ -34,6 +34,9 @@ Recipient lists are set in `.env`: `KAZ_ONLY` and `KAZ_AND_TEAM`
 | `[WARNING] Relister server disk 8x% full` | Disk at 80%+. | Tech team: free space soon. |
 | `[CRITICAL] Relister server disk 9x% full` | Disk at 90%+; the server can stop writing at 100%. | Tech team, immediately. |
 | `[ALERT] Relister server memory low` | Under 300 MB free for 10 minutes. | Tech team: check containers, restart if needed. |
+| `[ALERT] Flashpost email error 403: sending suspended` | Flashpost has suspended sending. Dealer emails, invoices and most alerts are not going out. This email arrives via Amazon SES, not Flashpost. | Tech team / Kaz: check the Flashpost account. |
+| `[ALERT] Flashpost email error 422: recipient suppressed` | Flashpost refuses one address (bounced or unsubscribed); the email in the body was not delivered. Sent via Amazon SES. | Kaz → dealer if it is a dealer address (confirm their email); tech team if it is ours. |
+| `[ALERT] S3 image upload failing` | Vehicle photos cannot be uploaded to Amazon S3, so listings publish without hosted images or fail. | Tech team: AWS credentials, bucket policy, S3 status. |
 | `[ALERT] Relister scheduled task did not run: <task>` | A nightly job (Gumtree check, trial expiry, invoices, overage report, log cleanup…) missed its slot by more than 2 hours. | Tech team: check Beat and the worker. |
 | `[WARNING] / [CRITICAL] ZenRows credits at 80% / 95%` | Scraping credits nearly used for this billing period. | Tech team / Kaz: top up or upgrade ZenRows. |
 | `[WARNING] ZenRows credits projected to run out <date>` | At the current rate credits run out before renewal. | Tech team / Kaz: top up or reduce scraping. |
