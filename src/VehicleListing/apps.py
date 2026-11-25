@@ -62,6 +62,11 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{max(1, min(59, int(getattr(settings, 'FAILURE_SPIKE_CHECK_MINUTES', 15))))}",
                         hour='*',
                     )[0],
+                    # Interval from RDS_MONITOR_INTERVAL_MINUTES in .env (default 30).
+                    "rds_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'RDS_MONITOR_INTERVAL_MINUTES', 30))))}",
+                        hour='*',
+                    )[0],
                     # Weekly alert-system test email: ALERT_WEEKLY_TEST_DAY / _HOUR from .env.
                     "weekly_alert_test": CrontabSchedule.objects.get_or_create(
                         minute='0',
@@ -153,6 +158,12 @@ class VehiclelistingConfig(AppConfig):
                         "task": "team_alerts.failure_monitor.failure_spike_monitor",
                         # Sudden rise in publish / delete / form-fill failures vs the 7-day norm → Kaz only.
                         "crontab": crontab_map["failure_spike_interval"],
+                    },
+                    {
+                        "name": "RDS_Backup_Monitor",
+                        "task": "team_alerts.rds_monitor.rds_backup_monitor",
+                        # Sydney DB + Melbourne copy: latest restorable time > 1 h behind → KAZ_AND_TEAM.
+                        "crontab": crontab_map["rds_monitor_interval"],
                     },
                     {
                         "name": "Weekly_Alert_Test_Email",
