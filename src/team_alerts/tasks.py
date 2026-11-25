@@ -6,11 +6,11 @@ Checks that the database accepts a query and that Redis answers PING. Each
 component keeps its own consecutive-failure count in a small JSON state file
 (NOT in the DB or Redis — those are exactly what may be down). After
 HEALTHCHECK_FAILURES_BEFORE_ALERT failures in a row (default 2, i.e. ~10 min of
-outage) ONE alert email is sent to HEALTHCHECK_ALERT_EMAIL through the existing
-Flashpost email backend. The count resets as soon as the component recovers.
-
-The email is sent with fail_silently=False so a Flashpost rejection is logged
-and the alert is retried on the next run instead of being silently lost.
+outage) the alert is raised through team_alerts.alerting to KAZ_AND_TEAM: one
+email at once, a reminder only if still down after ALERT_REMIND_HOURS, and a
+[RESOLVED] email when the component answers again. The failure count resets as
+soon as the component recovers. A failed delivery is logged and retried on the
+next run — it is never recorded as sent.
 """
 import json
 import logging
@@ -19,7 +19,6 @@ import tempfile
 
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
 
 logger = logging.getLogger('relister_views')
@@ -90,39 +89,24 @@ CHECKS = {
 }
 
 
-def _send_alert(component, failures, error):
-    """Send the alert through the existing Flashpost backend. Returns True on delivery."""
-    to_email = getattr(settings, 'HEALTHCHECK_ALERT_EMAIL', 'kazp@citysubaru.com.au')
+def _alert_body(component, failures, error):
     interval = getattr(settings, 'HEALTHCHECK_INTERVAL_MINUTES', 5)
     now = timezone.now().strftime('%Y-%m-%d %H:%M UTC')
-    subject = f"[ALERT] Relister {component} is DOWN — {failures} consecutive checks failed"
-    body = (
+    return (
         f"Component: {component}\n"
         f"Status: DOWN\n"
         f"Consecutive failed checks: {failures} (checked every {interval} minutes)\n"
         f"Detected at: {now}\n"
-        f"Last error: {error}\n\n"
-        "This alert is sent once per outage. The failure counter resets when the component recovers.\n"
+        f"Last error: {error}\n"
     )
-    try:
-        sent = EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[to_email],
-        ).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"infra_health_check: Flashpost reported {sent} sent for {component} alert — will retry next run.")
-            return False
-        logger.info(f"infra_health_check: alert for {component} sent to {to_email}.")
-        return True
-    except Exception as exc:
-        logger.error(f"infra_health_check: FAILED to send {component} alert to {to_email}: {exc} — will retry next run.")
-        return False
 
 
 @shared_task(queue='scheduling_queue')
 def infrastructure_health_check():
+    # Emails go through team_alerts.alerting (KAZ_AND_TEAM): first occurrence,
+    # reminder after ALERT_REMIND_HOURS, [RESOLVED] on recovery.
+    from .alerting import raise_alert, resolve_alert
+
     threshold = int(getattr(settings, 'HEALTHCHECK_FAILURES_BEFORE_ALERT', 2))
     state = _load_state()
     summary = {}
@@ -130,7 +114,6 @@ def infrastructure_health_check():
     for component in COMPONENTS:
         entry = state.get(component) or {}
         failures = int(entry.get('failures') or 0)
-        alerted = bool(entry.get('alerted'))
 
         try:
             CHECKS[component]()
@@ -141,17 +124,21 @@ def infrastructure_health_check():
         if ok:
             if failures:
                 logger.info(f"infra_health_check: {component} recovered after {failures} failed check(s).")
-            state[component] = {'failures': 0, 'alerted': False, 'last_ok': timezone.now().isoformat()}
+                resolve_alert(f'infra:{component}', note=f"{component} answered again after {failures} failed check(s).")
+            state[component] = {'failures': 0, 'last_ok': timezone.now().isoformat()}
             summary[component] = 'ok'
             continue
 
         failures += 1
         logger.error(f"infra_health_check: {component} check FAILED ({failures} in a row): {error}")
-        if failures >= threshold and not alerted:
-            alerted = _send_alert(component, failures, error)
+        if failures >= threshold:
+            raise_alert(
+                f'infra:{component}', 'team',
+                f"[ALERT] Relister {component} is DOWN — {failures} consecutive checks failed",
+                _alert_body(component, failures, error),
+            )
         state[component] = {
             'failures': failures,
-            'alerted': alerted,
             'last_error': error,
             'last_failed': timezone.now().isoformat(),
         }
