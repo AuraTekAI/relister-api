@@ -1,9 +1,9 @@
 """
 ZenRows credit monitoring — usage thresholds, run-out projection and 402 alerts.
 
-Two independent pieces, both alerting KAZ_AND_TEAM through the existing
-Flashpost email backend (fail_silently=False → a rejected send is logged and
-retried on the next run instead of being lost):
+All emails go to KAZ_AND_TEAM through team_alerts.alerting (first occurrence,
+reminder after ALERT_REMIND_HOURS, escalation when a level changes, [RESOLVED]
+when the condition clears).
 
 1. USAGE MONITOR (Beat task "ZenRows_Usage_Monitor")
    Calls ZenRows' subscription endpoint
@@ -16,27 +16,23 @@ retried on the next run instead of being lost):
      - usage below ZENROWS_MONITOR_ELEVATED_FROM_PCT (80%): once every
        ZENROWS_MONITOR_INTERVAL_HOURS (24 h → daily);
      - usage at/above 80%: every run (every 3 h).
-   So escalation happens automatically with no Beat schedule rewrite, and
-   the daily cadence costs one tiny request per day.
 
-   Alerts (each sent ONCE per billing period, re-armed when the period rolls
-   over or usage drops back below the level):
-     - [WARNING]  usage >= ZENROWS_MONITOR_WARN_PCT  (80%)
-     - [CRITICAL] usage >= ZENROWS_MONITOR_CRIT_PCT  (95%)
-     - [WARNING]  run-out projection: at the current average rate
-       (usage so far ÷ time elapsed in the period) credits reach 100% before
-       period_ends_at. Only evaluated once at least
-       ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT (10%) of the period has
-       elapsed, so day-one spikes do not cry wolf.
+   Alerts:
+     - 'zenrows:usage'      WARNING at ZENROWS_MONITOR_WARN_PCT (80%),
+                            CRITICAL at ZENROWS_MONITOR_CRIT_PCT (95%);
+                            resolved when usage is back under 80% (new period).
+     - 'zenrows:projection' at the current average rate (usage so far ÷ time
+                            elapsed in the period) credits reach 100% before
+                            period_ends_at. Evaluated once at least
+                            ZENROWS_MONITOR_PROJECTION_MIN_ELAPSED_PCT (10%)
+                            of the period has elapsed; resolved when on track.
 
 2. 402 HOOK (installed by team_alerts/apps.py at startup)
    `ZenRowsClient.get` is wrapped so every scraper response passes through
    `report_zenrows_response()`. A 402 (Payment Required / out of credits)
-   triggers an IMMEDIATE email. The response is returned untouched, so no
-   scraper logic changes. To avoid one email per vehicle during a dealer
-   sync, repeats are suppressed for ZENROWS_402_ALERT_COOLDOWN_MINUTES
-   (default 60) — the suppression key lives in the Redis cache so web and
-   worker processes share it, falling back to the state file.
+   raises 'zenrows:402' immediately; the central sender suppresses repeats
+   (one email, then a reminder after ALERT_REMIND_HOURS). The first non-402
+   response seen afterwards resolves it. Responses are returned untouched.
 """
 import json
 import logging
@@ -47,24 +43,17 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 import requests
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
+
+from .alerting import raise_alert, resolve_alert
 
 logger = logging.getLogger('relister_views')
 
 USAGE_URL_DEFAULT = 'https://api.zenrows.com/v1/subscriptions/self/details'
-LEVEL_RANK = {'ok': 0, 'warning': 1, 'critical': 2}
 
 
 def _setting(name, default):
     return getattr(settings, name, default)
-
-
-def _recipients():
-    raw = _setting('KAZ_AND_TEAM', ['kazp@citysubaru.com.au'])
-    if isinstance(raw, str):
-        raw = [p.strip() for p in raw.split(',')]
-    return [r for r in raw if r]
 
 
 def _state_file():
@@ -94,21 +83,6 @@ def _save_state(state):
         os.replace(tmp, path)
     except Exception as exc:
         logger.error(f"zenrows_monitor: could not write state file {path}: {exc}")
-
-
-def _send_alert(subject, lines):
-    to = _recipients()
-    body = '\n'.join(lines) + f"\n\nChecked at: {timezone.now().strftime('%Y-%m-%d %H:%M UTC')}\n"
-    try:
-        sent = EmailMessage(subject=subject, body=body, from_email=settings.DEFAULT_FROM_EMAIL, to=to).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"zenrows_monitor: Flashpost reported {sent} sent for '{subject}' — will retry.")
-            return False
-        logger.info(f"zenrows_monitor: alert sent to {to}: {subject}")
-        return True
-    except Exception as exc:
-        logger.error(f"zenrows_monitor: FAILED to send '{subject}' to {to}: {exc} — will retry.")
-        return False
 
 
 # ── Usage API ───────────────────────────────────────────────────────────────
@@ -220,18 +194,7 @@ def zenrows_usage_monitor(force=False):
     percent = usage['percent']
     level = usage_level(percent)
     period_end = usage['period_end']
-    period_key = period_end.isoformat() if period_end else None
-
-    # New billing period → everything re-arms.
-    if state.get('period_key') != period_key:
-        state.update({'period_key': period_key, 'alerted_level': 'ok', 'projection_alerted': False})
-    # Usage fell back below the level we alerted at → re-arm that level.
-    if LEVEL_RANK[level] < LEVEL_RANK.get(state.get('alerted_level', 'ok'), 0):
-        state['alerted_level'] = level
-
     will_run_out, projected_end_pct, runout_at = project_runout(percent, usage['period_start'], period_end, now)
-    if will_run_out is False:
-        state['projection_alerted'] = False
 
     summary_lines = [
         f"Plan: {usage['plan']}  (status: {usage['status']})",
@@ -243,34 +206,32 @@ def zenrows_usage_monitor(force=False):
     if runout_at is not None:
         summary_lines.append(f"Estimated run-out at the current rate: {_fmt(runout_at)}")
 
-    sent = []
-    # Threshold alerts — once per level per period.
-    if LEVEL_RANK[level] > LEVEL_RANK.get(state.get('alerted_level', 'ok'), 0):
+    alerts = {}
+    if level == 'ok':
+        resolve_alert('zenrows:usage', note=f"ZenRows usage is {percent:.1f}% of the plan limit.")
+    else:
         tag = 'CRITICAL' if level == 'critical' else 'WARNING'
-        subject = f"[{tag}] ZenRows credits at {percent:.0f}% of the monthly limit"
-        lines = [f"ZenRows credit usage has reached {percent:.1f}% of the plan limit.", ''] + summary_lines + [
-            '',
-            'Gumtree, custom-domain and image scraping stop working once credits are exhausted (ZenRows returns 402).',
-            'Consider a top-up or plan upgrade at https://app.zenrows.com/.',
-            f"Monitoring is now running every {_setting('ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', 3)} hours until the period renews.",
-        ]
-        if _send_alert(subject, lines):
-            state['alerted_level'] = level
-            sent.append(level)
+        alerts['usage'] = raise_alert(
+            'zenrows:usage', 'team',
+            f"[{tag}] ZenRows credits at {percent:.0f}% of the monthly limit",
+            '\n'.join([f"ZenRows credit usage has reached {percent:.1f}% of the plan limit.", ''] + summary_lines + [
+                '',
+                'Gumtree, custom-domain and image scraping stop working once credits are exhausted (ZenRows returns 402).',
+                'Consider a top-up or plan upgrade at https://app.zenrows.com/.',
+                f"Monitoring is now running every {_setting('ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', 3)} hours until the period renews.",
+            ]) + '\n',
+            severity=level,
+        )
 
-    # Projection alert — once per period, re-armed if the rate drops back under.
-    if will_run_out and not state.get('projection_alerted') and level != 'critical':
-        subject = f"[WARNING] ZenRows credits projected to run out {_fmt(runout_at)} — before renewal {_fmt(period_end)}"
-        lines = [
-            'At the current usage rate the ZenRows credits will be exhausted before the billing period renews.',
-            '',
-        ] + summary_lines + [
-            '',
-            'Either reduce scraping volume or arrange a top-up/upgrade before the estimated run-out date.',
-        ]
-        if _send_alert(subject, lines):
-            state['projection_alerted'] = True
-            sent.append('projection')
+    if will_run_out and level != 'critical':
+        alerts['projection'] = raise_alert(
+            'zenrows:projection', 'team',
+            f"[WARNING] ZenRows credits projected to run out {_fmt(runout_at)} — before renewal {_fmt(period_end)}",
+            '\n'.join(['At the current usage rate the ZenRows credits will be exhausted before the billing period renews.', '']
+                      + summary_lines + ['', 'Either reduce scraping volume or arrange a top-up/upgrade before the estimated run-out date.']) + '\n',
+        )
+    elif will_run_out is False or level == 'critical':
+        resolve_alert('zenrows:projection', note=f"Projected usage by renewal is now {projected_end_pct:.0f}%." if projected_end_pct is not None else None)
 
     state.update({
         'last_checked_at': now.isoformat(),
@@ -278,67 +239,54 @@ def zenrows_usage_monitor(force=False):
         'last_level': level,
         'last_error': None,
         'period_start': usage['period_start'].isoformat() if usage['period_start'] else None,
+        'period_end': period_end.isoformat() if period_end else None,
         'projected_end_pct': projected_end_pct,
         'runout_at': runout_at.isoformat() if runout_at else None,
     })
     _save_state(state)
-    logger.info(f"zenrows_monitor: usage {percent:.1f}% level={level} projected_end={projected_end_pct} alerts={sent}")
-    return {'checked': True, 'percent': percent, 'level': level, 'will_run_out': will_run_out, 'alerts': sent}
+    logger.info(f"zenrows_monitor: usage {percent:.1f}% level={level} projected_end={projected_end_pct} alerts={alerts}")
+    return {'checked': True, 'percent': percent, 'level': level, 'will_run_out': will_run_out, 'alerts': alerts}
 
 
 # ── 402 hook ────────────────────────────────────────────────────────────────
 
-def _acquire_402_slot(now):
-    """True if a 402 alert may be sent now (first 402, or cooldown expired).
-    Shared across processes via the Redis cache; state file as fallback."""
-    cooldown_min = int(_setting('ZENROWS_402_ALERT_COOLDOWN_MINUTES', 60))
-    try:
-        from django.core.cache import cache
-        return bool(cache.add('zenrows_monitor:402_alerted', now.isoformat(), timeout=cooldown_min * 60))
-    except Exception as exc:
-        logger.warning(f"zenrows_monitor: cache unavailable for 402 throttle ({exc}); using state file.")
-    state = _load_state()
-    last = _parse_iso(state.get('last_402_alert_at'))
-    if last and now - last < timedelta(minutes=cooldown_min):
-        return False
-    state['last_402_alert_at'] = now.isoformat()
-    _save_state(state)
-    return True
+# Set in the process that saw a 402 so its next successful response resolves the alert.
+_saw_402 = False
 
 
 def report_zenrows_response(response, url=None):
-    """Called for every ZenRows response. Only a 402 does anything."""
-    if getattr(response, 'status_code', None) != 402:
+    """Called for every ZenRows response. 402 raises the alert; the next non-402 resolves it."""
+    global _saw_402
+    status = getattr(response, 'status_code', None)
+    if status != 402:
+        if _saw_402 and status is not None:
+            _saw_402 = False
+            resolve_alert('zenrows:402', note=f"ZenRows answered HTTP {status} again for {url or 'a scraper request'}.")
         return False
-    now = timezone.now()
+    _saw_402 = True
     target = url or ''
     logger.error(f"zenrows_monitor: ZenRows returned 402 Payment Required (out of credits) for {target}")
-    if not _acquire_402_slot(now):
-        logger.warning("zenrows_monitor: 402 alert suppressed — one was sent within the cooldown window.")
-        return False
     detail = ''
     try:
         detail = (response.text or '')[:300]
     except Exception:
         pass
     state = _load_state()
-    lines = [
-        'ZenRows answered a scraper request with HTTP 402 Payment Required — the account is OUT OF CREDITS',
-        '(or the API key is invalid). Gumtree / custom-domain / image scraping is failing right now.',
-        '',
-        f"Requested page: {target or 'unknown'}",
-        f"ZenRows response: {detail or '(empty)'}",
-        f"Last known usage: {state.get('last_percent', 'unknown')}% at {state.get('last_checked_at', 'never')}",
-        '',
-        'Top up or upgrade the plan at https://app.zenrows.com/ and check the API key.',
-        f"Further 402s are suppressed for {_setting('ZENROWS_402_ALERT_COOLDOWN_MINUTES', 60)} minutes.",
-    ]
-    ok = _send_alert('[CRITICAL] ZenRows 402 — out of credits, scraping is failing', lines)
-    state['last_402_at'] = now.isoformat()
-    if ok:
-        state['last_402_alert_at'] = now.isoformat()
-    _save_state(state)
-    return ok
+    result = raise_alert(
+        'zenrows:402', 'team',
+        '[CRITICAL] ZenRows 402 — out of credits, scraping is failing',
+        '\n'.join([
+            'ZenRows answered a scraper request with HTTP 402 Payment Required — the account is OUT OF CREDITS',
+            '(or the API key is invalid). Gumtree / custom-domain / image scraping is failing right now.',
+            '',
+            f"Requested page: {target or 'unknown'}",
+            f"ZenRows response: {detail or '(empty)'}",
+            f"Last known usage: {state.get('last_percent', 'unknown')}% at {state.get('last_checked_at', 'never')}",
+            '',
+            'Top up or upgrade the plan at https://app.zenrows.com/ and check the API key.',
+        ]) + '\n',
+    )
+    return result in ('sent', 'reminded', 'escalated')
 
 
 def install_zenrows_402_hook():

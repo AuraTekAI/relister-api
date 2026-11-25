@@ -66,13 +66,18 @@ class FlashpostEmailBackend(BaseEmailBackend):
             )
             response.raise_for_status()
             logger.info(f'FlashpostEmailBackend: Sent "{email_message.subject}" to {email_message.to}')
+            _report_ok()
             return True
         except requests.exceptions.HTTPError as exc:
+            # 403 = sending suspended, 422 = recipient suppressed, etc. Reported
+            # to KAZ_AND_TEAM through Amazon SES (never through Flashpost itself).
+            _report_error(exc.response.status_code, exc.response.text[:500], email_message)
             self._handle_error(
                 f'HTTP {exc.response.status_code} from Flashpost for "{email_message.subject}": {exc.response.text[:500]}',
                 exc,
             )
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            _report_error('network', str(exc), email_message)
             self._handle_error(f'Network error sending "{email_message.subject}": {exc}', exc)
         except Exception as exc:
             self._handle_error(f'Unexpected error for "{email_message.subject}": {exc}', exc)
@@ -103,6 +108,24 @@ class FlashpostEmailBackend(BaseEmailBackend):
         if not payload['to']:
             raise ValueError('EmailMessage has no recipients.')
         return payload
+
+
+def _report_error(status, detail, email_message):
+    """Hand a Flashpost delivery error to the central alert system (SES route).
+    Imported lazily so the backend has no import-time dependency on team_alerts."""
+    try:
+        from team_alerts.alerting import report_flashpost_error
+        report_flashpost_error(status, detail, subject=email_message.subject, to=list(email_message.to))
+    except Exception as exc:  # alerting must never break email sending
+        logger.error(f'FlashpostEmailBackend: could not report delivery error {status} to the alert system: {exc}')
+
+
+def _report_ok():
+    try:
+        from team_alerts.alerting import report_flashpost_ok
+        report_flashpost_ok()
+    except Exception as exc:
+        logger.error(f'FlashpostEmailBackend: could not report recovery to the alert system: {exc}')
 
 
 def _strip_html(html: str) -> str:
