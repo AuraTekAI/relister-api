@@ -40,6 +40,39 @@ class VehiclelistingConfig(AppConfig):
                         minute=f"*/{max(1, min(59, int(getattr(settings, 'HEALTHCHECK_INTERVAL_MINUTES', 5))))}",
                         hour='*',
                     )[0],
+                    # Interval comes from HOST_MONITOR_INTERVAL_MINUTES in .env (default 5).
+                    "host_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'HOST_MONITOR_INTERVAL_MINUTES', 5))))}",
+                        hour='*',
+                    )[0],
+                    # Interval from SCHEDULE_MONITOR_INTERVAL_MINUTES in .env (default 60):
+                    # under an hour → every N minutes; otherwise → every N/60 hours on the hour.
+                    "schedule_monitor_interval": (lambda m: CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{m}" if m < 60 else '0',
+                        hour='*' if m < 60 else f"*/{max(1, min(23, m // 60))}",
+                    )[0])(max(1, int(getattr(settings, 'SCHEDULE_MONITOR_INTERVAL_MINUTES', 60)))),
+                    # Beat fires at the ELEVATED cadence (every N hours); the task itself
+                    # only calls ZenRows daily until usage passes the elevated threshold.
+                    "zenrows_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute='15',
+                        hour=f"*/{max(1, min(23, int(getattr(settings, 'ZENROWS_MONITOR_ELEVATED_INTERVAL_HOURS', 3))))}",
+                    )[0],
+                    # Interval from FAILURE_SPIKE_CHECK_MINUTES in .env (default 15).
+                    "failure_spike_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'FAILURE_SPIKE_CHECK_MINUTES', 15))))}",
+                        hour='*',
+                    )[0],
+                    # Interval from RDS_MONITOR_INTERVAL_MINUTES in .env (default 30).
+                    "rds_monitor_interval": CrontabSchedule.objects.get_or_create(
+                        minute=f"*/{max(1, min(59, int(getattr(settings, 'RDS_MONITOR_INTERVAL_MINUTES', 30))))}",
+                        hour='*',
+                    )[0],
+                    # Weekly alert-system test email: ALERT_WEEKLY_TEST_DAY / _HOUR from .env.
+                    "weekly_alert_test": CrontabSchedule.objects.get_or_create(
+                        minute='0',
+                        hour=str(max(0, min(23, int(getattr(settings, 'ALERT_WEEKLY_TEST_HOUR', 9))))),
+                        day_of_week=str(getattr(settings, 'ALERT_WEEKLY_TEST_DAY', 'mon')),
+                    )[0],
                 }
 
                 tasks = [
@@ -96,9 +129,47 @@ class VehiclelistingConfig(AppConfig):
                     {
                         "name": "Infrastructure_Health_Check",
                         "task": "team_alerts.tasks.infrastructure_health_check",
-                        # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts HEALTHCHECK_ALERT_EMAIL
+                        # DB + Redis every HEALTHCHECK_INTERVAL_MINUTES; alerts KAZ_AND_TEAM
                         # after HEALTHCHECK_FAILURES_BEFORE_ALERT consecutive failures (all from .env).
                         "crontab": crontab_map["healthcheck_interval"],
+                    },
+                    {
+                        "name": "Host_Resource_Monitor",
+                        "task": "team_alerts.host_monitor.host_resource_monitor",
+                        # Server disk (80% warn / 90% critical) + memory (<300 MB for 10 min);
+                        # thresholds, interval and recipient all from .env.
+                        "crontab": crontab_map["host_monitor_interval"],
+                    },
+                    {
+                        "name": "Scheduled_Task_Monitor",
+                        "task": "team_alerts.schedule_monitor.scheduled_task_monitor",
+                        # Checks the Beat tasks above ran on schedule (+ grace); alerts KAZ_AND_TEAM.
+                        "crontab": crontab_map["schedule_monitor_interval"],
+                    },
+                    {
+                        "name": "ZenRows_Usage_Monitor",
+                        "task": "team_alerts.zenrows_monitor.zenrows_usage_monitor",
+                        # Daily usage check (every 3 h once ≥80%); alerts KAZ_AND_TEAM at 80%/95%
+                        # and when credits are projected to run out before renewal.
+                        "crontab": crontab_map["zenrows_monitor_interval"],
+                    },
+                    {
+                        "name": "Failure_Spike_Monitor",
+                        "task": "team_alerts.failure_monitor.failure_spike_monitor",
+                        # Sudden rise in publish / delete / form-fill failures vs the 7-day norm → Kaz only.
+                        "crontab": crontab_map["failure_spike_interval"],
+                    },
+                    {
+                        "name": "RDS_Backup_Monitor",
+                        "task": "team_alerts.rds_monitor.rds_backup_monitor",
+                        # Sydney DB + Melbourne copy: latest restorable time > 1 h behind → KAZ_AND_TEAM.
+                        "crontab": crontab_map["rds_monitor_interval"],
+                    },
+                    {
+                        "name": "Weekly_Alert_Test_Email",
+                        "task": "team_alerts.alerting.weekly_alert_test_email",
+                        # "[TEST]" email to KAZ_ONLY and KAZ_AND_TEAM once a week to prove alerts deliver.
+                        "crontab": crontab_map["weekly_alert_test"],
                     },
                 ]
 
