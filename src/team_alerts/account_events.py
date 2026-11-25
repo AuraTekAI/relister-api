@@ -10,11 +10,11 @@ POST /api/team-alerts/fb-account-events/     (extension, authenticated dealer)
       "dealer_id": 123 }                            (must match the caller)
 
 Every report is stored as a FacebookAccountEvent (dealer, issue type, exact
-timestamp). On a `detected` report Kaz is emailed ONCE for that open issue:
-an issue is "open" from its first `detected` until a `resolved` report for the
-same dealer + issue type. Repeated `detected` reports while it is open are
-stored but not emailed. As a safety net, an issue with no `resolved` report
-for FB_ACCOUNT_ISSUE_REALERT_DAYS is treated as a new episode.
+timestamp). A `detected` report raises the alert 'fb:<issue>:<dealer id>'
+through team_alerts.alerting (KAZ_ONLY): the first report emails Kaz, repeats
+while the issue is open are suppressed (a reminder goes out only after
+ALERT_REMIND_HOURS), and a `resolved` report sends the [RESOLVED] email.
+`alerted` on the stored event is True only when an email was actually sent.
 
 POST /api/team-alerts/failure-events/         (extension)
     { "kind": "delete" | "publish" | "form_fill", "listing_id": 123,
@@ -22,16 +22,15 @@ POST /api/team-alerts/failure-events/         (extension)
 Stores one FailureEvent row for the spike monitor (team_alerts/failure_monitor.py).
 """
 import logging
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 
-from django.conf import settings
-from django.core.mail import EmailMessage
 from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-from .failure_monitor import KINDS, kaz_only, record_failure_event
+from .alerting import raise_alert, resolve_alert
+from .failure_monitor import KINDS, record_failure_event
 from .models import FacebookAccountEvent
 
 logger = logging.getLogger('relister_views')
@@ -64,24 +63,16 @@ def _parse_dt(value):
         return None
 
 
-def issue_already_alerted(user, issue_type, now):
-    """Is there an OPEN issue (detected, not since resolved) that Kaz was already emailed for?"""
-    qs = FacebookAccountEvent.objects.filter(user=user, issue_type=issue_type)
-    last_resolved = qs.filter(status='resolved').order_by('-detected_at').first()
-    open_alerts = qs.filter(status='detected', alerted=True)
-    if last_resolved:
-        open_alerts = open_alerts.filter(detected_at__gt=last_resolved.detected_at)
-    realert_days = int(getattr(settings, 'FB_ACCOUNT_ISSUE_REALERT_DAYS', 7))
-    open_alerts = open_alerts.filter(detected_at__gt=now - timedelta(days=realert_days))
-    return open_alerts.exists()
+def _alert_key(event):
+    return f"fb:{event.issue_type}:{event.user_id}"
 
 
-def _send_account_alert(event):
+def _alert_email(event):
     user = event.user
     dealer = getattr(user, 'dealership_name', None) or user.email
     title = ISSUE_TITLES[event.issue_type]
     subject = f"[ALERT] {title} — {dealer}"
-    lines = [
+    body = '\n'.join([
         f"{title} for dealer {dealer}.",
         '',
         f"Dealer: {dealer}  (id {user.id}, {user.email})",
@@ -92,19 +83,8 @@ def _send_account_alert(event):
         f"Detail: {event.detail or '-'}",
         '',
         ISSUE_EXPLANATIONS[event.issue_type],
-        '',
-        'You will not be emailed again for this issue until the extension reports it resolved and it happens again.',
-    ]
-    try:
-        sent = EmailMessage(subject=subject, body='\n'.join(lines) + '\n', from_email=settings.DEFAULT_FROM_EMAIL, to=kaz_only()).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"fb-account-events: Flashpost reported {sent} sent for '{subject}'")
-            return False
-        logger.info(f"fb-account-events: alert sent to {kaz_only()}: {subject}")
-        return True
-    except Exception as exc:
-        logger.error(f"fb-account-events: FAILED to send '{subject}': {exc}")
-        return False
+    ]) + '\n'
+    return subject, body
 
 
 @api_view(['POST'])
@@ -135,13 +115,15 @@ def facebook_account_event(request):
     alerted = False
     suppressed = False
     if status == 'detected':
-        if issue_already_alerted(request.user, issue_type, now):
-            suppressed = True
-            logger.info(f"fb-account-events: {issue_type} for user {request.user.id} already alerted — not repeating.")
-        elif _send_account_alert(event):
+        subject, body = _alert_email(event)
+        result = raise_alert(_alert_key(event), 'kaz', subject, body)
+        alerted = result in ('sent', 'reminded', 'escalated')
+        suppressed = result == 'suppressed'
+        if alerted:
             event.alerted = True
             event.save(update_fields=['alerted'])
-            alerted = True
+    else:
+        resolve_alert(_alert_key(event), note=f"The extension reported the issue resolved at {detected_at.strftime('%Y-%m-%d %H:%M:%S UTC')}: {event.detail or '-'}")
     return JsonResponse({'success': True, 'event_id': event.id, 'alerted': alerted, 'suppressed': suppressed}, status=201)
 
 
