@@ -13,20 +13,17 @@ How the host (not the container) is measured
     skipped with a log line. `/` (the container overlay) is also reported, and
     on Docker it reflects the host disk that holds /var/lib/docker.
 
-Alert rules (emails go to HOST_MONITOR_ALERT_EMAIL — the same KAZ recipient as
-the other monitoring alerts — through the existing Flashpost email backend)
+Alert rules (emails go to KAZ_AND_TEAM through team_alerts.alerting, which
+sends the first occurrence, a reminder after ALERT_REMIND_HOURS, an immediate
+email when the severity escalates, and a [RESOLVED] email on recovery)
   • Disk: WARNING when usage >= HOST_MONITOR_DISK_WARN_PCT (80), CRITICAL when
-    >= HOST_MONITOR_DISK_CRIT_PCT (90). One email each time a path ENTERS a
-    level (ok→warning, warning→critical); re-armed once it drops below again.
+    >= HOST_MONITOR_DISK_CRIT_PCT (90).
   • Memory: alert when MemAvailable has been below HOST_MONITOR_MEMORY_LOW_MB
     (300) for HOST_MONITOR_MEMORY_LOW_MINUTES (10) consecutively — i.e.
-    ceil(10 / interval) consecutive low readings. One email per episode; the
-    counter resets when memory recovers.
+    ceil(10 / interval) consecutive low readings; resolved when it recovers.
 
 State (consecutive counts, current level per path) lives in a JSON file so it
-survives between runs without depending on the DB. Emails are sent with
-fail_silently=False: a Flashpost failure is logged and retried next run —
-an alert is never marked sent unless Flashpost accepted it.
+survives between runs without depending on the DB.
 """
 import json
 import logging
@@ -36,8 +33,9 @@ import tempfile
 
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
+
+from .alerting import raise_alert, resolve_alert
 
 logger = logging.getLogger('relister_views')
 
@@ -102,28 +100,8 @@ def read_memory_available_mb(meminfo_path=MEMINFO_PATH):
     raise RuntimeError('MemAvailable not found in meminfo')
 
 
-# ── alert email ──────────────────────────────────────────────────────────────
-
-def _send_alert(subject, lines):
-    """Send through the existing Flashpost backend. Returns True only when accepted."""
-    to_email = _setting('HOST_MONITOR_ALERT_EMAIL', 'kazp@citysubaru.com.au')
-    now = timezone.now().strftime('%Y-%m-%d %H:%M UTC')
-    body = '\n'.join(lines + ['', f'Detected at: {now}', f'Server: {os.uname().nodename}']) + '\n'
-    try:
-        sent = EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[to_email],
-        ).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"host_monitor: Flashpost reported {sent} sent for '{subject}' — will retry next run.")
-            return False
-        logger.info(f"host_monitor: alert '{subject}' sent to {to_email}.")
-        return True
-    except Exception as exc:
-        logger.error(f"host_monitor: FAILED to send '{subject}' to {to_email}: {exc} — will retry next run.")
-        return False
+def _body(lines):
+    return '\n'.join(lines + ['', f"Detected at: {timezone.now().strftime('%Y-%m-%d %H:%M UTC')}", f'Server: {os.uname().nodename}']) + '\n'
 
 
 # ── checks ───────────────────────────────────────────────────────────────────
@@ -157,34 +135,27 @@ def check_disk(state):
             continue
 
         level = _disk_level(pct, warn_pct, crit_pct)
-        entry = disk_state.get(path) or {}
-        prev_level = entry.get('level', 'ok')
-        alerted_level = entry.get('alerted_level', 'ok')  # highest level already emailed in this episode
+        prev_level = (disk_state.get(path) or {}).get('level', 'ok')
         summary[path] = f"{level} {pct}%"
+        key = f'host:disk:{path}'
 
-        if LEVELS[level] > LEVELS[alerted_level]:
+        if level == 'ok':
+            resolve_alert(key, note=f"Disk usage on {path} is back to {pct}%.")
+        else:
             label = 'CRITICAL' if level == 'critical' else 'WARNING'
             threshold = crit_pct if level == 'critical' else warn_pct
-            ok = _send_alert(
+            raise_alert(
+                key, 'team',
                 f"[{label}] Relister server disk {pct:.0f}% full ({path})",
-                [
+                _body([
                     f"Disk usage on {path} is {pct}% ({used_gb} GB of {total_gb} GB used).",
                     f"Threshold: {threshold:.0f}% ({label.lower()}).",
-                    'Free up space or extend the volume. Another email is sent only if usage reaches the next level,'
-                    ' or if it drops below the threshold and rises again.',
-                ],
+                    'Free up space or extend the volume.',
+                ]),
+                severity=level,
             )
-            if ok:
-                alerted_level = level
-        elif LEVELS[level] < LEVELS[alerted_level]:
-            # Dropped back below the alerted threshold — re-arm so a future rise alerts again.
-            logger.info(f"host_monitor: disk {path} back to {level} ({pct}%) from {alerted_level}.")
-            alerted_level = level
 
-        disk_state[path] = {
-            'level': level, 'alerted_level': alerted_level, 'pct': pct,
-            'checked_at': timezone.now().isoformat(),
-        }
+        disk_state[path] = {'level': level, 'pct': pct, 'checked_at': timezone.now().isoformat()}
         if prev_level != level:
             logger.warning(f"host_monitor: disk {path} {prev_level} → {level} ({pct}%).")
     return summary
@@ -204,27 +175,27 @@ def check_memory(state):
 
     mem = state.get('memory') or {}
     low_count = int(mem.get('low_count') or 0)
-    alerted = bool(mem.get('alerted'))
 
     if available_mb >= low_mb:
         if low_count:
             logger.info(f"host_monitor: memory recovered — {available_mb:.0f} MB available after {low_count} low reading(s).")
-        state['memory'] = {'low_count': 0, 'alerted': False, 'available_mb': round(available_mb), 'checked_at': timezone.now().isoformat()}
+            resolve_alert('host:memory', note=f"Available memory is back to {available_mb:.0f} MB.")
+        state['memory'] = {'low_count': 0, 'available_mb': round(available_mb), 'checked_at': timezone.now().isoformat()}
         return f"ok {available_mb:.0f}MB"
 
     low_count += 1
     logger.warning(f"host_monitor: memory LOW — {available_mb:.0f} MB available (< {low_mb:.0f} MB) for {low_count} consecutive check(s).")
-    if low_count >= needed and not alerted:
-        alerted = _send_alert(
+    if low_count >= needed:
+        raise_alert(
+            'host:memory', 'team',
             f"[ALERT] Relister server memory low — {available_mb:.0f} MB available",
-            [
+            _body([
                 f"Available memory has stayed below {low_mb:.0f} MB for about {low_count * interval:.0f} minutes"
                 f" ({low_count} consecutive checks, every {interval:.0f} minutes).",
                 f"Current MemAvailable: {available_mb:.0f} MB.",
-                'This alert is sent once per episode; the counter resets when memory recovers.',
-            ],
+            ]),
         )
-    state['memory'] = {'low_count': low_count, 'alerted': alerted, 'available_mb': round(available_mb), 'checked_at': timezone.now().isoformat()}
+    state['memory'] = {'low_count': low_count, 'available_mb': round(available_mb), 'checked_at': timezone.now().isoformat()}
     return f"low {available_mb:.0f}MB ({low_count}/{needed})"
 
 

@@ -211,13 +211,37 @@ def _s3_client():
 
 
 def upload_variant(key, body_bytes, content_type='image/webp'):
-    _s3_client().put_object(
-        Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
-        Key=key,
-        Body=body_bytes,
-        ContentType=content_type,
-        CacheControl='public, max-age=31536000, immutable',
-    )
+    try:
+        _s3_client().put_object(
+            Bucket=settings.AWS_VEHICLE_IMAGE_BUCKET,
+            Key=key,
+            Body=body_bytes,
+            ContentType=content_type,
+            CacheControl='public, max-age=31536000, immutable',
+        )
+    except (BotoCoreError, ClientError) as exc:
+        # Alert KAZ_AND_TEAM (once per outage; resolved on the next success).
+        # The exception is re-raised unchanged so the task's retry/backoff and
+        # FAILED-slot handling behave exactly as before.
+        _report_s3_failure(key, exc)
+        raise
+    _report_s3_ok()
+
+
+def _report_s3_failure(key, exc):
+    try:
+        from team_alerts.alerting import report_s3_upload_failure
+        report_s3_upload_failure(key, exc, bucket=settings.AWS_VEHICLE_IMAGE_BUCKET)
+    except Exception as report_exc:  # alerting must never break the upload path
+        logger.error("Could not report S3 upload failure for key %s to the alert system: %s", key, report_exc)
+
+
+def _report_s3_ok():
+    try:
+        from team_alerts.alerting import report_s3_upload_ok
+        report_s3_upload_ok()
+    except Exception as report_exc:
+        logger.error("Could not report S3 upload recovery to the alert system: %s", report_exc)
 
 
 def delete_variants_from_s3(hosted_image):
