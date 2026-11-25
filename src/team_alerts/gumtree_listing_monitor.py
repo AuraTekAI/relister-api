@@ -16,20 +16,19 @@ Alert when  current == 0,  or  previous > 0 and current < RATIO × previous
 (GUMTREE_DROP_ALERT_RATIO, default 0.5). With no previous good run only the
 zero rule applies and the missing baseline is logged.
 
-One email per batch to KAZ_ONLY listing every affected dealer. Each alert is
-logged in the existing TeamAlertLog (alert_type 'gumtree_listing_drop',
-active_listings = current count, inactive_listings = previous count) and that
-log is also the de-duplication: a dealer is not re-alerted while the condition
-persists from one run to the next (e.g. a profile that stays at 0). Once a run
-is back to normal, a later drop alerts again.
+Emails go to KAZ_ONLY through team_alerts.alerting, one alert key per
+(dealer, profile): first drop emails Kaz, a persisting drop is suppressed
+(reminder only after ALERT_REMIND_HOURS), and a normal run sends [RESOLVED].
+Each email actually sent is also logged in the existing TeamAlertLog
+(alert_type 'gumtree_listing_drop', active_listings = current count,
+inactive_listings = previous count) for the admin audit trail.
 """
 import logging
 
 from django.conf import settings
-from django.core.mail import EmailMessage
 from django.utils import timezone
 
-from .failure_monitor import kaz_only
+from .alerting import raise_alert, resolve_alert
 from .models import TeamAlertLog
 
 logger = logging.getLogger('relister_views')
@@ -66,47 +65,26 @@ def _previous_good_run(run):
     return qs.order_by('-created_at').first()
 
 
-def _already_alerted_since(run, previous):
-    """An alert logged after the previous run means the condition has persisted
-    since then and was already reported — do not repeat it."""
-    qs = TeamAlertLog.objects.filter(user_id=run.user_id, alert_type=ALERT_TYPE)
-    if previous is not None:
-        qs = qs.filter(sent_at__gt=previous.created_at)
-    return qs.exists()
+def _key(run):
+    return f"gumtree:drop:{run.user_id}:{run.seller_profile_id or 'profile'}"
 
 
-def _send_alert(items):
-    to = kaz_only()
-    names = ', '.join(i['dealer'] for i in items)
-    subject = f"[ALERT] Gumtree listings dropped for {len(items)} dealer(s): {names}"[:200]
-    lines = [
-        f"The scheduled Gumtree check found {len(items)} dealer profile(s) returning 0 listings or under "
-        f"{_ratio():.0%} of their previous run.",
+def _email(run, dealer, previous, reason):
+    prev_count = previous.fetched_count if previous else None
+    profile = run.seller_profile_id or (run.profile.url if run.profile else 'unknown')
+    subject = f"[ALERT] Gumtree listings dropped — {dealer}: {run.fetched_count} listings ({reason.split(' (')[0]})"
+    body = '\n'.join([
+        f"The scheduled Gumtree check found dealer {dealer} {reason}.",
         '',
-    ]
-    for i in items:
-        lines += [
-            f"Dealer: {i['dealer']}  (id {i['user_id']}, {i['email']})",
-            f"  Gumtree profile: {i['profile']}",
-            f"  Now: {i['current']} listings  ({i['reason']})",
-            f"  Previous run: {i['previous_text']}",
-            '',
-        ]
-    lines += [
+        f"Dealer: {dealer}  (id {run.user_id}, {run.user.email})",
+        f"Gumtree profile: {profile}",
+        f"Now: {run.fetched_count} listings",
+        f"Previous run: {f'{prev_count} listings at {previous.created_at:%Y-%m-%d %H:%M} UTC' if previous else 'none recorded'}",
+        '',
         'A genuine drop means the dealer removed ads on Gumtree; an unexpected one usually means the profile URL changed or Gumtree is blocking the fetch.',
-        'Each dealer is reported once per drop; it alerts again only after a normal run.',
         f"Checked at: {timezone.now().strftime('%Y-%m-%d %H:%M UTC')}",
-    ]
-    try:
-        sent = EmailMessage(subject=subject, body='\n'.join(lines) + '\n', from_email=settings.DEFAULT_FROM_EMAIL, to=to).send(fail_silently=False)
-        if sent != 1:
-            logger.error(f"gumtree_listing_monitor: Flashpost reported {sent} sent for '{subject}'")
-            return False
-        logger.info(f"gumtree_listing_monitor: alert sent to {to}: {names}")
-        return True
-    except Exception as exc:
-        logger.error(f"gumtree_listing_monitor: FAILED to send alert to {to}: {exc}")
-        return False
+    ]) + '\n'
+    return subject, body
 
 
 def monitor_gumtree_listing_counts(since, source='cron'):
@@ -115,12 +93,11 @@ def monitor_gumtree_listing_counts(since, source='cron'):
     from VehicleListing.models import GumtreeSyncRun
     summary = {'checked': 0, 'failed_runs': 0, 'alerts': 0, 'suppressed': 0, 'no_baseline': 0}
     try:
-        runs = GumtreeSyncRun.objects.filter(created_at__gte=since, source=source).select_related('user').order_by('created_at')
+        runs = GumtreeSyncRun.objects.filter(created_at__gte=since, source=source).select_related('user', 'profile').order_by('created_at')
         latest = {}
         for run in runs:  # keep only the last run per (dealer, profile) in this batch
             latest[(run.user_id, run.seller_profile_id)] = run
 
-        items = []
         for run in latest.values():
             summary['checked'] += 1
             dealer = getattr(run.user, 'dealership_name', None) or run.user.email
@@ -139,29 +116,19 @@ def monitor_gumtree_listing_counts(since, source='cron'):
             alert, reason = evaluate_counts(run.fetched_count, prev_count)
             if not alert:
                 logger.info(f"gumtree_listing_monitor: {dealer} profile {run.seller_profile_id}: {run.fetched_count} listings (previous {prev_count}) — {reason}")
-                continue
-            if _already_alerted_since(run, previous):
-                summary['suppressed'] += 1
-                logger.warning(f"gumtree_listing_monitor: {dealer} profile {run.seller_profile_id}: still {run.fetched_count} listings — already alerted, not repeating.")
+                resolve_alert(_key(run), note=f"{dealer} now returns {run.fetched_count} listings (previous {prev_count}).")
                 continue
             logger.error(f"gumtree_listing_monitor: {dealer} profile {run.seller_profile_id}: {reason} (previous run {prev_count}).")
-            items.append({
-                'run': run, 'previous': previous, 'user_id': run.user_id, 'email': run.user.email, 'dealer': dealer,
-                'profile': run.seller_profile_id or (run.profile.url if run.profile else 'unknown'),
-                'current': run.fetched_count, 'reason': reason,
-                'previous_text': (f"{prev_count} listings at {previous.created_at.strftime('%Y-%m-%d %H:%M UTC')}" if previous else 'none recorded'),
-            })
-
-        if items and _send_alert(items):
-            for i in items:
+            subject, body = _email(run, dealer, previous, reason)
+            result = raise_alert(_key(run), 'kaz', subject, body)
+            if result in ('sent', 'reminded', 'escalated'):
+                summary['alerts'] += 1
                 TeamAlertLog.objects.create(
-                    user_id=i['user_id'], alert_type=ALERT_TYPE,
-                    active_listings=i['current'],
-                    inactive_listings=i['previous'].fetched_count if i['previous'] else 0,
+                    user_id=run.user_id, alert_type=ALERT_TYPE,
+                    active_listings=run.fetched_count, inactive_listings=prev_count or 0,
                 )
-            summary['alerts'] = len(items)
-        elif items:
-            logger.error("gumtree_listing_monitor: alert email not sent — nothing logged, so the next run will report again.")
+            elif result == 'suppressed':
+                summary['suppressed'] += 1
     except Exception as exc:
         logger.error(f"gumtree_listing_monitor: unexpected error: {exc}", exc_info=True)
     logger.info(f"gumtree_listing_monitor: {summary}")

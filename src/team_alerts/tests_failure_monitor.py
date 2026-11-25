@@ -1,5 +1,5 @@
 """Failure-spike monitor: publish / delete / form-fill events vs the 7-day norm,
-one Kaz-only email per spike, re-armed when the rate returns to normal.
+one Kaz-only email per spike via the central sender, [RESOLVED] when normal.
 
 Run: python src/manage.py test team_alerts.tests_failure_monitor
 """
@@ -15,6 +15,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from team_alerts import alerting
 from team_alerts import failure_monitor as fm
 from team_alerts.models import FailureEvent
 from VehicleListing.models import VehicleListing
@@ -27,7 +28,7 @@ class FailureSpikeMonitorTests(TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         ctx = override_settings(
-            FAILURE_SPIKE_STATE_FILE=os.path.join(self.tmp.name, 'state.json'),
+            ALERT_STATE_FILE=os.path.join(self.tmp.name, 'alerts.json'), ALERT_REMIND_HOURS=24,
             FAILURE_SPIKE_WINDOW_MINUTES=60, FAILURE_SPIKE_BASELINE_DAYS=7,
             FAILURE_SPIKE_MIN_COUNT=5, FAILURE_SPIKE_FACTOR=3.0,
             KAZ_ONLY=KAZ,
@@ -42,9 +43,10 @@ class FailureSpikeMonitorTests(TestCase):
         for _ in range(n):
             FailureEvent.objects.create(user=user or self.dealer, kind=kind, reason=reason, occurred_at=at)
 
-    def _run(self):
-        with mock.patch.object(fm, 'EmailMessage') as email_cls:
+    def _run(self, send_side_effect=None):
+        with mock.patch.object(alerting, 'EmailMessage') as email_cls:
             email_cls.return_value.send.return_value = 1
+            email_cls.return_value.send.side_effect = send_side_effect
             result = fm.failure_spike_monitor()
         return result, email_cls
 
@@ -68,7 +70,7 @@ class FailureSpikeMonitorTests(TestCase):
         email2.assert_not_called()
 
     def test_busy_kind_needs_factor_times_baseline(self):
-        # 7 days × 24 windows = 168 windows; 336 past failures → baseline 2/window.
+        # 7 days × 24 windows = 168 windows; ~334 past failures → baseline ≈ 2/window.
         for h in range(2, 170):
             self._events('delete', 2, minutes_ago=h * 60)
         self._events('delete', 5)  # 5 < 3 × 2 → normal
@@ -79,21 +81,21 @@ class FailureSpikeMonitorTests(TestCase):
         email.assert_called_once()
         self.assertIn('delete failures', email.call_args.kwargs['subject'])
 
-    def test_recovery_rearms_alert(self):
+    def test_recovery_resolves_and_rearms(self):
         self._events('form_fill', 6)
         self._run()
         FailureEvent.objects.all().delete()  # window quiet again
-        self._run()
+        _, email = self._run()
+        email.assert_called_once()
+        self.assertTrue(email.call_args.kwargs['subject'].startswith('[RESOLVED] Spike in Facebook form-fill failures'))
         self._events('form_fill', 6)
         _, email = self._run()
         email.assert_called_once()
-        self.assertIn('Facebook form-fill failures', email.call_args.kwargs['subject'])
+        self.assertTrue(email.call_args.kwargs['subject'].startswith('[ALERT] Spike in Facebook form-fill failures'))
 
     def test_failed_send_is_retried_next_run(self):
         self._events('publish', 6)
-        with mock.patch.object(fm, 'EmailMessage') as email_cls:
-            email_cls.return_value.send.side_effect = Exception('flashpost 500')
-            fm.failure_spike_monitor()
+        self._run(send_side_effect=Exception('flashpost 500'))
         _, email = self._run()
         email.assert_called_once()
 
