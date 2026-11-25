@@ -572,6 +572,23 @@ TECH_SUPPORT_EMAIL = env('TECH_SUPPORT_EMAIL')
 # support@autorelister.com.au is dropped automatically (Flashpost rejects it).
 ALERT_REMIND_HOURS = env.float('ALERT_REMIND_HOURS', default=24)
 ALERT_STATE_FILE = env('ALERT_STATE_FILE', default=os.path.join(LOG_DIR, 'alert_state.json'))
+# Fallback transport for alerts ABOUT Flashpost (403 sending suspended, 422
+# recipient suppressed, network errors): Amazon SES in Kaz's AWS account.
+# The SES sender address must be verified in that account.
+ALERT_FALLBACK_SES_REGION = env('ALERT_FALLBACK_SES_REGION', default='')
+ALERT_FALLBACK_SES_ACCESS_KEY_ID = env('ALERT_FALLBACK_SES_ACCESS_KEY_ID', default='')
+ALERT_FALLBACK_SES_SECRET_ACCESS_KEY = env('ALERT_FALLBACK_SES_SECRET_ACCESS_KEY', default='')
+ALERT_FALLBACK_SES_FROM_EMAIL = env('ALERT_FALLBACK_SES_FROM_EMAIL', default='')
+# ── RDS backup monitoring (team_alerts/rds_monitor.py, via Beat) ─────────────
+# Latest restorable time of the Sydney database and the Melbourne copy; alerts
+# KAZ_AND_TEAM when either is more than MAX_LAG_MINUTES behind now. Uses a
+# DEDICATED read-only IAM user (rds:Describe* only) — never the S3 app key.
+# RDS_MONITOR_DATABASES: "name=region=db-instance-identifier", comma separated.
+RDS_MONITOR_ACCESS_KEY_ID = env('RDS_MONITOR_ACCESS_KEY_ID', default='')
+RDS_MONITOR_SECRET_ACCESS_KEY = env('RDS_MONITOR_SECRET_ACCESS_KEY', default='')
+RDS_MONITOR_DATABASES = env.list('RDS_MONITOR_DATABASES', default=[])
+RDS_MONITOR_MAX_LAG_MINUTES = env.int('RDS_MONITOR_MAX_LAG_MINUTES', default=60)
+RDS_MONITOR_INTERVAL_MINUTES = env.int('RDS_MONITOR_INTERVAL_MINUTES', default=30)
 # Weekly "[TEST]" email to BOTH lists (Beat task Weekly_Alert_Test_Email).
 ALERT_WEEKLY_TEST_DAY = env('ALERT_WEEKLY_TEST_DAY', default='mon')   # cron day_of_week
 ALERT_WEEKLY_TEST_HOUR = env.int('ALERT_WEEKLY_TEST_HOUR', default=9)  # UTC
@@ -639,7 +656,7 @@ FAILURE_SPIKE_STATE_FILE = env('FAILURE_SPIKE_STATE_FILE', default=os.path.join(
 GUMTREE_DROP_ALERT_RATIO = env.float('GUMTREE_DROP_ALERT_RATIO', default=0.5)
 
 # These monitors are not tasks.py modules, so tell Celery to import them.
-CELERY_IMPORTS = ('team_alerts.alerting', 'team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor')
+CELERY_IMPORTS = ('team_alerts.alerting', 'team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor', 'team_alerts.rds_monitor')
 
 # ── Infrastructure health check (team_alerts/tasks.py, every 5 min via Beat) ──
 # Database + Redis are checked; after this many consecutive failures the alert
