@@ -169,3 +169,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# External uptime monitor (monitoring/uptime_check.py) — local config + state
+monitoring/uptime.env
+monitoring/uptime_state.json

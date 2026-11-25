@@ -444,6 +444,7 @@ image_logger = logging.getLogger('vehicle_image_pipeline')
 def check_gumtree_profile_relisting_task(self):
     """Check gumtree profile relisting"""
     logger.info("Checking gumtree profile relisting")
+    batch_started_at = timezone.now()  # GumtreeSyncRun rows from this batch are >= this
     gumtree_profile_listings = GumtreeProfileListing.objects.all()
     if gumtree_profile_listings:
         for gumtree_profile_listing in gumtree_profile_listings:
@@ -457,6 +458,13 @@ def check_gumtree_profile_relisting_task(self):
                     logger.error(message)
             else:
                 logger.error(f"User is not approved {gumtree_profile_listing.user.email}")
+    # Listing-count monitoring (Kaz alert on 0 or a >50% drop vs the previous run).
+    # Reads the GumtreeSyncRun rows written above; never raises.
+    try:
+        from team_alerts.gumtree_listing_monitor import monitor_gumtree_listing_counts
+        monitor_gumtree_listing_counts(since=batch_started_at)
+    except Exception as monitor_error:
+        logger.error(f"Gumtree listing-count monitor failed: {monitor_error}")
 
 
 @shared_task(bind=True, base=CustomExceptionHandler, queue='relister_queue')

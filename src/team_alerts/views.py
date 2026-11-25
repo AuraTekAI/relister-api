@@ -1,4 +1,5 @@
-from django.core.mail import EmailMessage
+import logging
+
 from django.utils import timezone
 
 from drf_yasg import openapi
@@ -8,9 +9,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .alerting import send_email
 from .models import TeamAlertLog
 
-SUPPORT_EMAIL = 'support@autorelister.com.au'
+logger = logging.getLogger('relister_views')
 
 ALERT_SUBJECTS = {
     'duplicates_detected': '[Action Required] Client has duplicate FB listings',
@@ -100,12 +102,13 @@ class TeamAlertView(APIView):
                 alert_type, user,
                 active_listings, inactive_listings, old_listings_count,
             )
-            EmailMessage(
-                subject=f"{subject} — {client_label}",
-                body=body,
-                from_email=SUPPORT_EMAIL,
-                to=[SUPPORT_EMAIL],
-            ).send(fail_silently=True)
+            # Facebook-related → KAZ_ONLY via the central sender. support@ is
+            # never used (Flashpost: recipient_suppressed). The log row — which
+            # is also the once-per-day de-dup — is written ONLY when Flashpost
+            # accepted the email, so a failed send is retried on the next report.
+            if not send_email('kaz', f"{subject} — {client_label}", body):
+                logger.error(f"team-alerts: {alert_type} for {client_label} NOT delivered — not logged, will retry on next report.")
+                return Response({'status': 'not_sent'})
 
             TeamAlertLog.objects.create(
                 user=user,

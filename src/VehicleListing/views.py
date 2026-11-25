@@ -3156,4 +3156,17 @@ def publish_failures(request):
         "publish-failures POST user=%s listing=%s fail_count=%s unknown=%s held=%s import=%s",
         request.user.id, listing_id, pf.fail_count, pf.unknown_outcome, pf.is_held, at_least is not None,
     )
+
+    # Failure timeline for the spike monitor (team_alerts/failure_monitor.py).
+    # A history import is not a new failure. Optional `kind` ("publish" |
+    # "form_fill") from the extension wins; otherwise classified from the reason.
+    if at_least is None:
+        try:
+            from team_alerts.failure_monitor import classify_publish_failure_kind, record_failure_event
+            record_failure_event(
+                request.user, classify_publish_failure_kind(reason, data.get('kind')),
+                listing_id=listing_id, reason=reason, occurred_at=now,
+            )
+        except Exception as exc:  # never let monitoring break the failure record
+            logger.error("publish-failures: could not record failure event: %s", exc)
     return JsonResponse({'success': True, 'data': {'id': listing_id, **_publish_failure_payload(pf)}})
