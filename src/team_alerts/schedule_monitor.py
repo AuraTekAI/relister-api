@@ -8,7 +8,7 @@ renewal warnings, overdue invoices, overage report, log cleanup) and asks: has
 each one run when its schedule said it should?
 
 For each task the expected next run is derived from the task's OWN crontab:
-    due = last_run_at + schedule.remaining_estimate(last_run_at)
+    due = now + schedule.remaining_estimate(last_run_at)   # = first scheduled run after last_run_at
 (or from date_changed when it has never run). If now > due + grace period
 (SCHEDULE_MONITOR_GRACE_MINUTES) the task is OVERDUE.
 
@@ -55,8 +55,12 @@ def expected_due_time(periodic_task, now):
     if anchor is None:
         anchor = periodic_task.date_changed or now
         label = 'enabled/changed'
+    # remaining_estimate(anchor) is the time from NOW until the first scheduled
+    # run after `anchor` (Celery measures it against its own clock, not against
+    # anchor). Adding it to anchor shifted the due time back by (now - anchor),
+    # so a daily task was flagged overdue ~13 h after running on time.
     remaining = periodic_task.schedule.remaining_estimate(anchor)
-    return anchor + remaining, anchor, label
+    return now + remaining, anchor, label
 
 
 @shared_task(queue='scheduling_queue')

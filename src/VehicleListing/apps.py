@@ -16,7 +16,12 @@ class VehiclelistingConfig(AppConfig):
 
         from . import signals  # noqa: F401 — registers the HostedImage S3-cleanup receiver
 
-        @receiver(post_migrate)
+        # weak=False: Django holds signal receivers by weak reference, and this
+        # function is a local of ready() — once ready() returns nothing else
+        # references it, so it was garbage-collected and post_migrate silently
+        # created none of the Beat rows. dispatch_uid keeps it connected once
+        # even if ready() runs twice (tests).
+        @receiver(post_migrate, weak=False, dispatch_uid="team_alerts_beat_tasks")
         def setup_periodic_tasks(sender, **kwargs):
             # post_migrate fires once per app_config; only run our setup when
             # this app's migrations finish. Filtering by sender= in @receiver()

@@ -31,6 +31,9 @@ class ScheduledTaskMonitorTests(TestCase):
         )
         ctx.enable()
         self.addCleanup(ctx.disable)
+        # The post_migrate receiver in VehicleListing/apps.py creates the real Beat
+        # rows while the test DB is built; clear them so these fixtures own the names.
+        PeriodicTask.objects.all().delete()
         daily = CrontabSchedule.objects.create(minute='5', hour='0')
         self.trial = PeriodicTask.objects.create(
             name='Check_Trial_Expiry', task='VehicleListing.tasks.check_trial_expiry_task', crontab=daily, enabled=True,
@@ -56,6 +59,36 @@ class ScheduledTaskMonitorTests(TestCase):
         result, email = self._run()
         self.assertEqual(result, {'Check_Trial_Expiry': 'ok', 'Clean_30_days_Old_logs': 'ok'})
         email.assert_not_called()
+
+    def test_daily_task_that_ran_on_time_14h_ago_is_not_overdue(self):
+        # Regression: due used to be anchor + remaining_estimate(anchor), which
+        # flagged a daily task overdue ~13 h after it ran exactly on schedule.
+        now = timezone.now()
+        ran = (now - timedelta(hours=14)).replace(second=30, microsecond=0)
+        local = ran.astimezone(self.trial.crontab.timezone)
+        cron = CrontabSchedule.objects.create(minute=str(local.minute), hour=str(local.hour),
+                                              timezone=self.trial.crontab.timezone)
+        PeriodicTask.objects.filter(pk=self.trial.pk).update(crontab=cron, last_run_at=ran)
+        self._set_last_run(self.cleanup, timedelta(hours=3))
+        self.trial.refresh_from_db()
+        due, anchor, _ = sm.expected_due_time(self.trial, now)
+        self.assertEqual(anchor, ran)
+        self.assertGreater(due, now)                                  # next run is tomorrow
+        self.assertLess(due - ran, timedelta(hours=24, minutes=1))    # ...exactly one period later
+        result, email = self._run()
+        self.assertEqual(result['Check_Trial_Expiry'], 'ok')
+        email.assert_not_called()
+
+    def test_expected_due_time_is_now_plus_remaining(self):
+        now = timezone.now()
+        pt = mock.Mock(last_run_at=now - timedelta(hours=14), date_changed=None)
+        pt.schedule.remaining_estimate.return_value = timedelta(hours=10)
+        due, anchor, label = sm.expected_due_time(pt, now)
+        pt.schedule.remaining_estimate.assert_called_once_with(pt.last_run_at)
+        self.assertEqual((due, anchor, label), (now + timedelta(hours=10), pt.last_run_at, 'last run'))
+        # A run that was missed: Celery reports a negative remaining → due in the past.
+        pt.schedule.remaining_estimate.return_value = timedelta(hours=-5)
+        self.assertEqual(sm.expected_due_time(pt, now)[0], now - timedelta(hours=5))
 
     def test_task_missed_by_more_than_grace_alerts_team_once(self):
         # Last ran 2 days ago → the next daily run was due ~1 day ago, well past 2h grace.
