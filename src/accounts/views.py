@@ -206,7 +206,7 @@ class RegisterView(APIView):
             # (unchanged from original flow).
             return Response({
                 'success': True,
-                'message': 'Registration successful. Your 30-day free trial has started. Please wait for admin approval to access the app.',
+                'message': 'Registration successful. Your 14-day free trial has started. Please wait for admin approval to access the app.',
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

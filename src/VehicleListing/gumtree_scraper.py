@@ -77,6 +77,11 @@ def extract_stock_number(category_info):
     return DEFAULT_STOCK_NUMBER
 
 
+# Status set by views.relist_recovery when a delete-then-relist left a car on
+# neither Facebook nor the DB's "completed" state. Stored upper-case.
+NEEDS_MANUAL_RECOVERY = 'NEEDS_MANUAL_RECOVERY'
+
+
 def _apply_gumtree_update(existing, result):
     """Write freshly-scraped fields from `result` onto an existing
     VehicleListing and persist. Shared by the two "refresh a stale row"
@@ -799,7 +804,13 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
                     else:
                         logging.error(f"Failed to fetch details for updating the listing {listing_id}, skipping update")
                         continue
-            elif already_exists.status == "completed" and already_exists.listed_on < timezone.now() - timedelta(days=1):
+            # NEEDS_MANUAL_RECOVERY rows (a relist deleted the Facebook ad but the
+            # republish failed — see views.relist_recovery) were published once, so
+            # they are refreshed exactly like "completed" rows: Gumtree price/photo
+            # changes must land in the DB before the extension publishes them again.
+            # The status itself is left alone so the manual-recovery flow is unchanged.
+            elif (already_exists.status in ("completed", NEEDS_MANUAL_RECOVERY)
+                  and (already_exists.listed_on or already_exists.created_at) < timezone.now() - timedelta(days=1)):
                 logging.info(f"Listing ID {already_exists.list_id} is already exit and marked as {already_exists.status}")
                 result = get_gumtree_listing_details(listing_id)
                 if result and already_exists.year == result.get("year") and already_exists.make == result.get("make") and already_exists.model == result.get("model") and already_exists.price == str(result.get("price")) and set(already_exists.images) == set(result.get("image") or []) and already_exists.description == result.get("description"):
@@ -936,10 +947,13 @@ def gumtree_profile_listings_thread(listings, gumtree_profile_listing_instance, 
             # sales=True flag — the relist-queue endpoint (get_old_vehicle_listings) and the
             # extension's publish guard both need status=="sold" to reliably exclude these,
             # since a stale sales flag alone was previously being missed downstream.
-            completed_missing = list(missing_listings.filter(status="completed"))
+            # NEEDS_MANUAL_RECOVERY rows are included: they were live once, and if the
+            # car is gone from Gumtree it must be marked sold here, otherwise the row
+            # stays "needs publishing" forever and the extension keeps it in the queue.
+            completed_missing = list(missing_listings.filter(status__in=["completed", NEEDS_MANUAL_RECOVERY]))
             for listing in completed_missing:
                 mark_listing_sold(listing)
-            logging.info(f"Marked {len(completed_missing)} completed listings as sold (status=sold, sales=True)")
+            logging.info(f"Marked {len(completed_missing)} completed/manual-recovery listings as sold (status=sold, sales=True)")
 
     # Best-effort, read-only, non-blocking: back-fill dealership_suburb/state
     # for Gumtree-only dealers from their just-scraped listings. Never
