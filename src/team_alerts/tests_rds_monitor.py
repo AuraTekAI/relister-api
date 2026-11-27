@@ -90,9 +90,14 @@ class RdsBackupMonitorTests(TestCase):
         email2.assert_not_called()
 
     def test_exactly_one_hour_is_not_an_alert(self):
-        self._instance('ap-southeast-2', 60)
-        self._instance('ap-southeast-4', 1)
-        _, email = self._run()
+        # Freeze the clock: the fixture and the monitor must see the same "now",
+        # otherwise the microseconds between them push the lag just past 60 min.
+        fixed = timezone.now()
+        with mock.patch.object(rm.timezone, 'now', return_value=fixed):
+            self._instance('ap-southeast-2', 60)
+            self._instance('ap-southeast-4', 1)
+            result, email = self._run()
+        self.assertEqual(result['sydney'], 'ok (60m behind)')
         email.assert_not_called()
 
     def test_catching_up_sends_resolved_then_alerts_again(self):

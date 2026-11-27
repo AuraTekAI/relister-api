@@ -16,6 +16,11 @@ Alert when  current == 0,  or  previous > 0 and current < RATIO × previous
 (GUMTREE_DROP_ALERT_RATIO, default 0.5). With no previous good run only the
 zero rule applies and the missing baseline is logged.
 
+Failed fetches: when a dealer/profile has failed GUMTREE_FETCH_FAIL_ALERT_AFTER
+(default 2) times in a row — counted over the GumtreeSyncRun log, any source —
+Kaz gets ONE "[ALERT] Gumtree check failing" email (key gumtree:fetch_failed:…),
+suppressed until a fetch succeeds again, which sends [RESOLVED].
+
 Emails go to KAZ_ONLY through team_alerts.alerting, one alert key per
 (dealer, profile): first drop emails Kaz, a persisting drop is suppressed
 (reminder only after ALERT_REMIND_HOURS), and a normal run sends [RESOLVED].
@@ -69,6 +74,48 @@ def _key(run):
     return f"gumtree:drop:{run.user_id}:{run.seller_profile_id or 'profile'}"
 
 
+def _fail_key(run):
+    return f"gumtree:fetch_failed:{run.user_id}:{run.seller_profile_id or 'profile'}"
+
+
+def _fail_streak_limit():
+    try:
+        return max(1, int(getattr(settings, 'GUMTREE_FETCH_FAIL_ALERT_AFTER', 2)))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _consecutive_failures(run):
+    """How many fetches in a row (any source, up to and including `run`) have
+    failed for this dealer/profile. Stops at the first good run."""
+    from VehicleListing.models import GumtreeSyncRun
+    qs = GumtreeSyncRun.objects.filter(user_id=run.user_id, created_at__lte=run.created_at)
+    if run.seller_profile_id:
+        qs = qs.filter(seller_profile_id=run.seller_profile_id)
+    streak = 0
+    for outcome in qs.order_by('-created_at').values_list('outcome', flat=True)[:50]:
+        if outcome in GOOD_OUTCOMES:
+            break
+        streak += 1
+    return streak
+
+
+def _fail_email(run, dealer, streak):
+    profile = run.seller_profile_id or (run.profile.url if run.profile else 'unknown')
+    subject = f"[ALERT] Gumtree check failing — {dealer}: {streak} failed fetches in a row"
+    body = '\n'.join([
+        f"The Gumtree check for dealer {dealer} has failed {streak} times in a row, so their listings are not being synced.",
+        '',
+        f"Dealer: {dealer}  (id {run.user_id}, {run.user.email})",
+        f"Gumtree profile: {profile}",
+        f"Latest failure: HTTP {run.http_status or 'n/a'} — {run.error_detail or 'no detail'} at {run.created_at:%Y-%m-%d %H:%M} UTC",
+        '',
+        'A 402 means ZenRows is out of credits; other errors usually mean Gumtree is blocking the fetch or the profile URL changed.',
+        'You will not get another email for this dealer until a check succeeds again.',
+    ]) + '\n'
+    return subject, body
+
+
 def _email(run, dealer, previous, reason):
     prev_count = previous.fetched_count if previous else None
     profile = run.seller_profile_id or (run.profile.url if run.profile else 'unknown')
@@ -91,7 +138,7 @@ def monitor_gumtree_listing_counts(since, source='cron'):
     """Evaluate every Gumtree fetch recorded since `since` (the batch start).
     Never raises — a monitoring problem must not fail the Gumtree task."""
     from VehicleListing.models import GumtreeSyncRun
-    summary = {'checked': 0, 'failed_runs': 0, 'alerts': 0, 'suppressed': 0, 'no_baseline': 0}
+    summary = {'checked': 0, 'failed_runs': 0, 'alerts': 0, 'suppressed': 0, 'no_baseline': 0, 'fetch_alerts': 0}
     try:
         runs = GumtreeSyncRun.objects.filter(created_at__gte=since, source=source).select_related('user', 'profile').order_by('created_at')
         latest = {}
@@ -107,7 +154,16 @@ def monitor_gumtree_listing_counts(since, source='cron'):
                     f"gumtree_listing_monitor: {dealer} profile {run.seller_profile_id}: fetch FAILED "
                     f"(HTTP {run.http_status}, {run.error_detail}) — count unknown, not treated as 0."
                 )
+                # Failed twice in a row (no retries exist beyond this per-run attempt)
+                # → one Kaz email per dealer/profile until a fetch succeeds again.
+                streak = _consecutive_failures(run)
+                if streak >= _fail_streak_limit():
+                    logger.error(f"gumtree_listing_monitor: {dealer} profile {run.seller_profile_id}: {streak} failed fetches in a row.")
+                    subject, body = _fail_email(run, dealer, streak)
+                    if raise_alert(_fail_key(run), 'kaz', subject, body) in ('sent', 'reminded', 'escalated'):
+                        summary['fetch_alerts'] += 1
                 continue
+            resolve_alert(_fail_key(run), note=f"Gumtree check for {dealer} succeeded again ({run.fetched_count} listings).")
             previous = _previous_good_run(run)
             prev_count = previous.fetched_count if previous else None
             if previous is None:

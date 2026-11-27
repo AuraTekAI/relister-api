@@ -87,17 +87,21 @@ class ZenRowsUsageMonitorTests(TestCase):
 
     # ── thresholds ──────────────────────────────────────────────────────────
     def test_below_80_sends_nothing(self):
-        _, email = self._run(_usage(50))
+        # 20 of 30 days elapsed at 50% → 75% by renewal: under 80% AND on track,
+        # so neither the threshold nor the run-out projection fires.
+        _, email = self._run(_usage(50, start_days_ago=20))
         email.assert_not_called()
 
     def test_80_percent_warns_team_once(self):
-        _, email = self._run(_usage(82, start_days_ago=25))
+        # 26 of 30 days elapsed: 82% → 95% and 84% → 97% by renewal, so only the
+        # 80% threshold fires (the projection alert is covered separately below).
+        _, email = self._run(_usage(82, start_days_ago=26))
         email.assert_called_once()
         kwargs = email.call_args.kwargs
         self.assertEqual(kwargs['to'], TEAM)
         self.assertTrue(kwargs['subject'].startswith('[WARNING] ZenRows credits at 82%'))
         email.return_value.send.assert_called_once_with(fail_silently=False)
-        _, email2 = self._run(_usage(84, start_days_ago=25))  # still warning → no repeat
+        _, email2 = self._run(_usage(84, start_days_ago=26))  # still warning → no repeat
         email2.assert_not_called()
 
     def test_95_percent_escalates_to_critical_once(self):

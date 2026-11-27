@@ -654,6 +654,9 @@ FAILURE_SPIKE_STATE_FILE = env('FAILURE_SPIKE_STATE_FILE', default=os.path.join(
 # dealer returning 0 listings or fewer than this fraction of their previous run
 # is reported to KAZ_ONLY (failed fetches are skipped, never read as 0).
 GUMTREE_DROP_ALERT_RATIO = env.float('GUMTREE_DROP_ALERT_RATIO', default=0.5)
+# A dealer whose Gumtree fetch fails this many times in a row → one KAZ_ONLY
+# email, nothing more until a fetch succeeds again.
+GUMTREE_FETCH_FAIL_ALERT_AFTER = env.int('GUMTREE_FETCH_FAIL_ALERT_AFTER', default=2)
 
 # These monitors are not tasks.py modules, so tell Celery to import them.
 CELERY_IMPORTS = ('team_alerts.alerting', 'team_alerts.host_monitor', 'team_alerts.schedule_monitor', 'team_alerts.zenrows_monitor', 'team_alerts.failure_monitor', 'team_alerts.rds_monitor')

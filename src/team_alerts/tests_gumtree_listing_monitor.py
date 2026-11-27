@@ -90,6 +90,47 @@ class GumtreeListingMonitorTests(TestCase):
         self.assertEqual(summary['failed_runs'], 1)
         email.assert_not_called()
 
+    # ── failed twice in a row ───────────────────────────────────────────────
+    def test_two_failures_in_a_row_alert_kaz_once_until_success(self):
+        self._run(self.dealer, 40, hours_ago=20)
+        self._run(self.dealer, 0, hours_ago=15, outcome='failed')      # 1st failure → nothing
+        summary, email = self._monitor(since_hours_ago=16)
+        self.assertEqual((summary['failed_runs'], summary['fetch_alerts']), (1, 0))
+        email.assert_not_called()
+        run2 = self._run(self.dealer, 0, hours_ago=10, outcome='failed')  # 2nd in a row → alert
+        GumtreeSyncRun.objects.filter(pk=run2.pk).update(http_status=402, error_detail='count request HTTP 402')
+        summary, email = self._monitor(since_hours_ago=11)
+        self.assertEqual(summary['fetch_alerts'], 1)
+        email.assert_called_once()
+        kwargs = email.call_args.kwargs
+        self.assertEqual(kwargs['to'], KAZ)
+        self.assertEqual(kwargs['subject'], '[ALERT] Gumtree check failing — Motoroo: 2 failed fetches in a row')
+        self.assertIn('HTTP 402', kwargs['body'])
+        email.return_value.send.assert_called_once_with(fail_silently=False)
+        self._run(self.dealer, 0, hours_ago=5, outcome='failed')        # 3rd → suppressed, no repeat
+        summary, email = self._monitor(since_hours_ago=6)
+        self.assertEqual(summary['fetch_alerts'], 0)
+        email.assert_not_called()
+        self._run(self.dealer, 38, hours_ago=0.5)                       # succeeds again → [RESOLVED] only
+        _, email = self._monitor()
+        email.assert_called_once()
+        self.assertTrue(email.call_args.kwargs['subject'].startswith('[RESOLVED] Gumtree check failing — Motoroo'))
+        self._run(self.dealer, 0, hours_ago=0.3, outcome='failed')      # streak restarts at 1 → nothing
+        _, email = self._monitor()
+        email.assert_not_called()
+
+    def test_failure_streak_is_per_dealer_and_profile(self):
+        self._run(self.dealer, 0, hours_ago=10, outcome='failed', seller='111')
+        self._run(self.dealer, 0, hours_ago=10, outcome='failed', seller='333')
+        self._run(self.other, 0, hours_ago=10, outcome='failed', seller='222')
+        self._run(self.dealer, 0, hours_ago=0.5, outcome='failed', seller='111')   # 2nd for 111 only
+        self._run(self.dealer, 12, hours_ago=0.5, seller='333')
+        self._run(self.other, 9, hours_ago=0.5, seller='222')
+        summary, email = self._monitor()
+        self.assertEqual(summary['fetch_alerts'], 1)
+        email.assert_called_once()
+        self.assertIn('Gumtree profile: 111', email.call_args.kwargs['body'])
+
     def test_failed_run_is_never_the_baseline(self):
         self._run(self.dealer, 40, hours_ago=10)
         self._run(self.dealer, 0, hours_ago=5, outcome='failed')
