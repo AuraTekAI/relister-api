@@ -9,11 +9,19 @@ and nothing from the server it monitors.
 |---------|--------------------------------------------------|-------------------------|
 | website | `https://autorelister.com.au/`                   | HTTP 200 within 15 s    |
 | api     | `https://api.autorelister.com.au/api/login/`     | any HTTP status < 500   |
+| redis   | `https://api.autorelister.com.au/api/team-alerts/health/?component=redis` | HTTP 200 (the endpoint PINGs Redis from the web process) |
 
 Behaviour per run: each target's consecutive-failure count is kept in
 `uptime_state.json`. At 2 failures in a row one `[ALERT]` email is sent; nothing
 more is sent while it stays down; a `[RECOVERED]` email is sent when it comes
 back. A failed email send is retried on the next run.
+
+Why Redis is checked from here: Redis is Celery's broker, so the Beat-driven
+infrastructure check can never run while Redis is down. The `health/` endpoint
+runs the PING synchronously inside Django's web process instead, and the redis
+alert is emailed through the **Amazon SES fallback** (`ALERT_FALLBACK_SES_*` in
+`uptime.env`), not Flashpost. If the SES keys are left empty the script logs a
+warning and uses Flashpost so the alert is not lost.
 
 ## Set up (on the testing server or any other machine, NOT production)
 

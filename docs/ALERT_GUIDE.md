@@ -31,7 +31,8 @@ Recipient lists are set in `.env`: `KAZ_ONLY` and `KAZ_AND_TEAM`
 | Email subject starts with | What it means | Who acts |
 |---|---|---|
 | `[ALERT] Relister website is DOWN` / `Relister api is DOWN` | The public site or API failed 2 consecutive checks from outside the server. | Tech team, immediately. |
-| `[ALERT] Relister database is DOWN` / `Relister redis is DOWN` | The backend cannot reach PostgreSQL or Redis (2 consecutive checks). Publishing, syncs and logins fail. | Tech team, immediately. |
+| `[ALERT] Relister database is DOWN` | The backend cannot reach PostgreSQL (2 consecutive checks). Publishing, syncs and logins fail. | Tech team, immediately. |
+| `[ALERT] Relister redis is DOWN` | Redis failed 2 consecutive checks made from outside the server (Celery cannot run without it, so this one is sent by the external uptime cron through Amazon SES). Scheduled tasks, relisting and the other alerts are stopped until it is back. | Tech team, immediately. |
 | `[WARNING] Relister server disk 8x% full` | Disk at 80%+. | Tech team: free space soon. |
 | `[CRITICAL] Relister server disk 9x% full` | Disk at 90%+; the server can stop writing at 100%. | Tech team, immediately. |
 | `[ALERT] Relister server memory low` | Under 300 MB free for 10 minutes. | Tech team: check containers, restart if needed. |

@@ -2,6 +2,9 @@ import logging
 
 from django.utils import timezone
 
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET
+
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
@@ -21,6 +24,37 @@ ALERT_SUBJECTS = {
 }
 
 KNOWN_ALERT_TYPES = set(ALERT_SUBJECTS.keys())
+
+
+@require_GET
+def infrastructure_health(request):
+    """
+    GET /api/team-alerts/health/?component=redis   (no auth — polled by the
+    external uptime cron, monitoring/uptime_check.py)
+
+    Runs the infrastructure checks synchronously in the WEB process, so it
+    works when Redis (Celery's broker) is down and the Beat-driven check
+    cannot run. 200 when every requested component answers, 503 otherwise.
+    The response names the component and the error only — nothing sensitive.
+    """
+    from .tasks import CHECKS
+
+    requested = [c for c in request.GET.get('component', '').split(',') if c.strip()] or list(CHECKS)
+    unknown = [c for c in requested if c not in CHECKS]
+    if unknown:
+        return JsonResponse({'error': f"unknown component(s): {', '.join(unknown)}"}, status=400)
+
+    results, healthy = {}, True
+    for component in requested:
+        try:
+            CHECKS[component]()
+            results[component] = 'ok'
+        except Exception as exc:
+            healthy = False
+            results[component] = f"down: {type(exc).__name__}: {exc}"
+            logger.error(f"infra_health endpoint: {component} check FAILED: {type(exc).__name__}: {exc}")
+    results['checked_at'] = timezone.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+    return JsonResponse(results, status=200 if healthy else 503)
 
 
 def _build_email_body(alert_type, user, active_listings, inactive_listings, old_listings_count):

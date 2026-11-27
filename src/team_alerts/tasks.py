@@ -2,7 +2,9 @@
 Infrastructure health check — runs every 5 minutes via Celery Beat
 (registered in VehicleListing/apps.py as "Infrastructure_Health_Check").
 
-Checks that the database accepts a query and that Redis answers PING. Each
+Checks that the database accepts a query. (Redis is checked from outside —
+see COMPONENTS below — because a Celery task cannot run while its broker is
+down.) Each
 component keeps its own consecutive-failure count in a small JSON state file
 (NOT in the DB or Redis — those are exactly what may be down). After
 HEALTHCHECK_FAILURES_BEFORE_ALERT failures in a row (default 2, i.e. ~10 min of
@@ -23,7 +25,12 @@ from django.utils import timezone
 
 logger = logging.getLogger('relister_views')
 
-COMPONENTS = ('database', 'redis')
+# Only the database is checked from Celery. Redis is Celery's broker: when it is
+# down this task can never run, so the Redis check is driven from the EXTERNAL
+# uptime cron (monitoring/uptime_check.py) through the /api/team-alerts/health/
+# endpoint (views.infrastructure_health), which pings Redis from the web process
+# and whose alert goes out through the SES fallback, not Flashpost.
+COMPONENTS = ('database',)
 
 
 def _state_file():
